@@ -467,7 +467,7 @@ impl Host {
             crate::platform::win32::set_resize_sync_active(hwnd, false);
         }
         l.presented = None;
-        l.native.damage.reset();
+        l.damage.reset();
         l.native.resize_sync.surface_size_before_drag = None;
         if let (Some(surface), Some((gpu, _))) = (l.surface.as_ref(), self.gpu.as_ref()) {
             let configured = configure(surface, gpu, &l.config);

@@ -178,9 +178,7 @@ impl Renderer {
                 crate::pixels::limit_side(max);
                 max
             },
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad: std::sync::OnceLock::new(),
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage: Default::default(),
         })
     }
@@ -338,6 +336,7 @@ impl Renderer {
         // The pinned pipelines go with the frame pipeline: kept for the old format, made on their thread for a new one.
         if let Some(pinned) = self.pinned.take() { self.pinned_extra.push((self.format, pinned)); }
         self.format = format;
+        self.invalidate_damage();
         self.lcd = variant::Lcd::Unbuilt;
         match self.pinned_extra.iter().position(|(f, _)| *f == format) {
             Some(i) => self.pinned = Some(self.pinned_extra.swap_remove(i).1),

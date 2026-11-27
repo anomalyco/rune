@@ -25,7 +25,7 @@ use crate::window::host::stepping::FrameMove;
 use crate::window::host::{CompositorFrame, Host, WindowApp};
 use crate::window::state::{Rest, RestEvent, rest};
 use crate::window::surface::BackoffEvent;
-use crate::window::win32::damage::Damage;
+use crate::window::surface::damage::Damage;
 
 /// Window-neutral presented-frame consumers driven by [`run_drag_frame`].
 ///
@@ -272,7 +272,7 @@ impl Host {
         let mut swap_chain = l.native.resize_sync.swap_chain.take();
         let mut dcomp_detached = l.native.resize_sync.dcomp_detached;
         let mut sync = std::mem::take(&mut l.native.resize_sync);
-        let mut damage = std::mem::take(&mut l.native.damage);
+        let mut damage = std::mem::take(&mut l.damage);
         let mut seam = Win32DragSeam {
             hwnd,
             handover: l.native.mode.handover(),
@@ -314,7 +314,7 @@ impl Host {
         sync.swap_chain = swap_chain;
         sync.dcomp_detached = dcomp_detached;
         l.native.resize_sync = sync;
-        l.native.damage = damage;
+        l.damage = damage;
         l.presented = None;
         sync_platform_core(
             l,

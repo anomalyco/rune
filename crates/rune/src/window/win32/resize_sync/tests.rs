@@ -17,7 +17,7 @@ use crate::machine::{Attempt, Effects, Seq};
 use crate::render::{Gpu, Renderer};
 use crate::window::host::app::TypedWindowApp;
 use crate::window::state::Rest;
-use crate::window::win32::damage::Damage;
+use crate::window::surface::damage::Damage;
 use crate::{AppSpec, Color, Env, FrameOutcome, Runtime, col, el, text};
 
 fn eligible() -> Eligibility {

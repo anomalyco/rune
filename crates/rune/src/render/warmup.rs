@@ -6,7 +6,6 @@ use super::{
     shader_check, upload, variant,
 };
 
-#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 use super::damaged;
 
 /// The `Send` state of a [`Renderer`]: every field except `surfaces` (the lazy native surface
@@ -58,9 +57,7 @@ pub(super) struct WarmRenderer {
     pub(super) fills: std::sync::Mutex<Option<fill::PendingFills>>,
     pub(super) device_key: crate::compose::DeviceKey,
     pub(super) max_texture_dim: u32,
-    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     pub(super) clear_quad: std::sync::OnceLock<wgpu::Buffer>,
-    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     pub(super) damage: std::sync::Mutex<damaged::DamageState>,
 }
 
@@ -119,9 +116,7 @@ impl Renderer {
             fills,
             device_key,
             max_texture_dim,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage,
         } = warm;
         Renderer {
@@ -173,9 +168,7 @@ impl Renderer {
             device_key,
             gpu_host: None,
             max_texture_dim,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage,
         }
     }
@@ -193,8 +186,7 @@ impl Renderer {
         self.image_batches.clear();
         self.count = 0;
         self.effects.clear();
-        #[cfg(target_os = "windows")]
-        { *self.damage.get_mut().unwrap_or_else(|e| e.into_inner()) = Default::default(); }
+        *self.damage.get_mut().unwrap_or_else(|e| e.into_inner()) = Default::default();
         #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
         self.report_pools();
     }
@@ -255,9 +247,7 @@ impl Renderer {
             device_key,
             gpu_host: _,
             max_texture_dim,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage,
         } = self;
         Some(WarmRenderer {
@@ -305,9 +295,7 @@ impl Renderer {
             fills,
             device_key,
             max_texture_dim,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,
-            #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             damage,
         })
     }

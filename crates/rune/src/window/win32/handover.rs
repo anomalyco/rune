@@ -439,7 +439,7 @@ impl Host {
         }
         w.native.slot.reset();
         w.native.dxgi_present.reset();
-        w.native.damage.reset();
+        w.damage.reset();
         self.frame_presented.reset();
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
         // would hold the hand-over frame off.

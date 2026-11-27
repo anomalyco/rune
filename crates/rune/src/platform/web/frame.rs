@@ -67,7 +67,11 @@ impl Running {
         }
         let size = window.canvas().map_or(size, |c| canvas_physical(&c, size, scale));
         self.suspended = size.width == 0 || size.height == 0;
-        if self.suspended { self.last_presented = None; return; }
+        if self.suspended {
+            self.last_presented = None;
+            if let Some(side) = self.draw.gpu_mut() { side.damage.reset(); }
+            return;
+        }
         let next = (size.width.min(max_dim), size.height.min(max_dim));
         let document = self.document;
         if let Some(side) = self.draw.gpu_mut() {
@@ -381,9 +385,11 @@ impl FrameHost for WebFrameHost<'_> {
                         }
                     }
                 }
+                let compositor_draws_own = self.r.app.compositor_draws_own();
+                let rt = self.r.app.rt_mut();
                 let gpu = if draw_gpu {
                     match gpu::acquire_texture(side) {
-                        Ok(frame) => Some(gpu::prepare_gpu_frame(side, rt, frame, gpu::drift_wanted(), false)),
+                        Ok(frame) => Some(gpu::prepare_gpu_frame(side, rt, frame, gpu::drift_wanted(), false, compositor_draws_own)),
                         Err(missed) => {
                             web_sys::console::warn_1(
                                 &format!("rune: the GPU's hand-over frame wasn't drawn ({missed:?})").into(),
@@ -397,7 +403,8 @@ impl FrameHost for WebFrameHost<'_> {
                 RenderPrep::Ready(PreparedWeb::HandingOver { gpu })
             }
             (Draw::Gpu(side), WebDrawable::Gpu(frame)) => {
-                let prepared = gpu::prepare_gpu_frame(side, self.r.app.rt_mut(), frame, false, self.tick);
+                let compositor_draws_own = self.r.app.compositor_draws_own();
+                let prepared = gpu::prepare_gpu_frame(side, self.r.app.rt_mut(), frame, false, self.tick, compositor_draws_own);
                 RenderPrep::Ready(PreparedWeb::Gpu(prepared))
             }
             _ => RenderPrep::Abort,

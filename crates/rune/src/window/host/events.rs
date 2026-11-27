@@ -384,6 +384,7 @@ impl Host {
         if let WindowEvent::Occluded(occluded) = event {
             self.placement_watch.mark_dirty();
             crate::marks::mark(if occluded { "window.covered" } else { "window.uncovered" });
+            if !occluded && let Some(w) = self.win.as_mut() { w.damage.reset(); }
             // Alpha-zero launcher panels remain renderable on explicit invalidation.
             // Their native occlusion transitions must not settle or redraw a reveal.
             if !(self.macos_window.launcher && cfg!(target_os = "macos")) { self.set_cover(Cover::System, occluded); }
@@ -426,6 +427,7 @@ impl Host {
                 // current Core Animation transaction when a drag crosses displays so the new
                 // `contentsScale` and new-scale drawable land together with no flash.
                 if scale_changed {
+                    l.damage.reset();
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         l.resize_surface(gpu, size);
@@ -464,7 +466,10 @@ impl Host {
                 // Restored where no occlusion event says so (Windows): as uncovering does, the
                 // first frame paints the settled state of what changed meanwhile.
                 let restored = !was_live && app.rt().live_visible();
-                if restored { app.rt_mut().settle_all(); }
+                if restored {
+                    l.damage.reset();
+                    app.rt_mut().settle_all();
+                }
                 if size.width == 0 || size.height == 0 {
                     self.secure_input.set(false);
                     l.stop_pacing();
@@ -529,6 +534,7 @@ impl Host {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                l.damage.reset();
                 #[cfg(target_os = "macos")]
                 if let Some(shadow) = &l.native.shadow { shadow.redraw(); }
                 let scale = scale_factor as f32;

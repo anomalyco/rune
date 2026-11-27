@@ -555,6 +555,7 @@ impl Host {
             corners: None,
             timer_frame: TimerFrame::default(),
             loop_frame: LoopFrame::default(),
+            damage: Default::default(),
             presented: None,
             #[cfg(target_os = "windows")]
             covered_draw: CoveredDraw::Current,
@@ -696,6 +697,7 @@ impl Host {
         // A pass made on the device that went with it draws nothing: it goes too.
         w.corners = None;
         w.presented = None;
+        w.damage.reset();
         // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
         #[cfg(target_os = "windows")]
         {
@@ -705,7 +707,6 @@ impl Host {
                 native.materials.on_device_loss(native.mode.handover_mut());
             }
             w.native.slot.reset();
-            w.native.damage.reset();
             self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
@@ -807,8 +808,9 @@ impl Host {
         w.config = config;
         w.surface_ok = true;
         w.alpha = alpha;
+        w.damage.reset();
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.dxgi_present.reset(); w.native.damage.reset(); }
+        { w.native.slot.reset(); w.native.dxgi_present.reset(); }
         #[cfg(target_os = "windows")]
         w.native.mode.rebind();
         #[cfg(target_os = "macos")]
@@ -848,7 +850,7 @@ impl Host {
         // committed tree keeps showing its last frame until the new one commits.
         w.native.slot.reset();
         w.native.dxgi_present.reset();
-        w.native.damage.reset();
+        w.damage.reset();
         drop(w.surface.take());
         self.frame_presented.reset();
         // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
@@ -860,8 +862,8 @@ impl Host {
         w.config = config;
         w.surface_ok = true;
         w.presented = None;
+        w.damage.reset();
         w.native.slot.reset();
-        w.native.damage.reset();
         w.native.mode.rebind();
         Ok(true)
     }
