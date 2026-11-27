@@ -284,13 +284,19 @@ impl ProgressMetrics {
     }
 }
 
-/// A [`Keybind`](crate::Keybind) keycap's height (and minimum width), horizontal padding and
-/// corner radius.
+/// A [`Keybind`](crate::Keybind) keycap's height (and minimum width), horizontal padding,
+/// corner radius, optional border rim, and label text style.
 ///
 /// ```
 /// # use rune_kit::{Keybind, KeybindMetrics, Kit};
 /// let mut k = Kit::neutral(true);
-/// k.metrics.keybind = Some(KeybindMetrics { height: 18.0, padding_x: 6.0, ..KeybindMetrics::kit(&k) });
+/// k.metrics.keybind = Some(KeybindMetrics {
+///     height: 20.0,
+///     padding_x: 6.0,
+///     border_width: 1.0,
+///     label: k.ty.text_xsmall_medium,
+///     ..KeybindMetrics::kit(&k)
+/// });
 /// let _ = Keybind::new(&["⌘", "K"]).build(&k);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -300,12 +306,27 @@ pub struct KeybindMetrics {
     /// Padding left and right of each keycap's label.
     pub padding_x: f32,
     pub radius: f32,
+    /// Keycap rim width on `Neutral` keycaps; `0.0` omits the border. `Ghost` stays unbordered.
+    pub border_width: f32,
+    /// Keycap border colour once [`Self::border_width`] is positive; fully transparent omits it.
+    pub border_color: Color,
+    /// Label text style.
+    pub label: TextStyle,
 }
 
 impl KeybindMetrics {
-    /// The built-in keycap: 14 points tall, 4 points of side padding and `k.radius.xs` corners.
+    /// The built-in keycap: 14 points tall, 4 points of side padding, `k.radius.xs` corners, no
+    /// border (`k.c.border_base` once [`Self::border_width`] is positive), and `k.ty.small_medium`
+    /// on an 11 point line.
     pub fn kit(k: &Kit) -> KeybindMetrics {
-        KeybindMetrics { height: 14.0, padding_x: 4.0, radius: k.radius.xs }
+        KeybindMetrics {
+            height: 14.0,
+            padding_x: 4.0,
+            radius: k.radius.xs,
+            border_width: 0.0,
+            border_color: k.c.border_base,
+            label: TextStyle { line_height: 11.0, ..k.ty.small_medium },
+        }
     }
 }
 
@@ -556,8 +577,8 @@ pub struct Metrics {
     pub progress: Option<ProgressMetrics>,
     /// [`Divider`](crate::Divider) rule thickness in points; else `1.0`.
     pub divider_thickness: Option<f32>,
-    /// [`Keybind`](crate::Keybind) keycap height, side padding and corner radius; else
-    /// [`KeybindMetrics::kit`].
+    /// [`Keybind`](crate::Keybind) keycap height, side padding, corner radius, border and label
+    /// text style; else [`KeybindMetrics::kit`].
     pub keybind: Option<KeybindMetrics>,
     /// Minimum height for non-auto-growing [`TextArea`](crate::TextArea) boxes; else `80.0`.
     pub text_area_min_height: Option<f32>,
@@ -627,7 +648,14 @@ impl Kit {
     }
     pub(crate) fn keybind_metrics(&self) -> KeybindMetrics {
         let m = self.metrics.keybind.unwrap_or_else(|| KeybindMetrics::kit(self));
-        KeybindMetrics { height: non_neg(m.height), padding_x: non_neg(m.padding_x), radius: non_neg(m.radius) }
+        KeybindMetrics {
+            height: non_neg(m.height),
+            padding_x: non_neg(m.padding_x),
+            radius: non_neg(m.radius),
+            border_width: non_neg(m.border_width),
+            border_color: m.border_color,
+            label: m.label,
+        }
     }
     pub(crate) fn text_area_min_height(&self) -> f32 {
         non_neg(self.metrics.text_area_min_height.unwrap_or(80.0))
