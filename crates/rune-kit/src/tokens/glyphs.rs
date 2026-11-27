@@ -1,6 +1,6 @@
 //! The small built-in glyphs components draw (check marks, chevrons, close, stars). Geometric
 //! shapes, not an icon catalog; a theme may replace any of them through `Kit::glyph`.
-//! `MIC`, `KEYBOARD`, `EYEDROPPER`, `CURSOR_TEXT`, `ARROW_RIGHT`, `SPARKLE`, `STAR` and `STAR_FILLED` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
+//! `MIC`, `KEYBOARD`, `EYEDROPPER`, `CURSOR_TEXT`, `ARROW_RIGHT`, `SPARKLE`, `STAR`, `STAR_FILLED`, `MINUS` and `PLUS` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
 
 use rune::Icon;
 
@@ -124,6 +124,18 @@ pub static STAR_FILLED: Icon = Icon {
     name: "kit-star-filled",
     view: 16.0,
     body: r#"<path d="M8 2.1L9.7 6.25L14.18 6.59L10.76 9.5L11.82 13.86L8 11.5L4.18 13.86L5.24 9.5L1.82 6.59L6.3 6.25Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>"#,
+};
+/// A minus sign. Not a `Glyphs` slot: `icon(&glyphs::MINUS, 16.0)`.
+pub static MINUS: Icon = Icon {
+    name: "kit-minus",
+    view: 16.0,
+    body: r#"<path d="M3.5 8H12.5" stroke="currentColor" stroke-linecap="round"/>"#,
+};
+/// A plus sign. Not a `Glyphs` slot: `icon(&glyphs::PLUS, 16.0)`.
+pub static PLUS: Icon = Icon {
+    name: "kit-plus",
+    view: 16.0,
+    body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-linecap="round"/>"#,
 };
 
 const PAGE: &str = r#"<path d="M3.5 1.5H9.5L12.5 4.5V14.5H3.5V1.5Z" stroke="currentColor" stroke-linejoin="round"/><path d="M9.5 1.5V4.5H12.5" stroke="currentColor" stroke-linejoin="round"/>"#;

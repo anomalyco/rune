@@ -69,6 +69,8 @@ pub use controls::checkbox::Checkbox;
 pub use controls::color_picker::ColorPicker;
 pub use controls::color_picker::Hsv;
 pub use controls::field::Field;
+pub use controls::number_field::NumberField;
+pub use controls::number_field::NumberFieldState;
 pub use controls::radio::RadioGroup;
 pub use controls::radio::RadioItem;
 pub use controls::radio::RadioSurface;
