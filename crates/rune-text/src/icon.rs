@@ -8,6 +8,7 @@ pub(crate) mod anim;
 mod area;
 pub(crate) mod color;
 mod convex;
+mod dash;
 mod view_box;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -246,8 +247,8 @@ struct Scope<'a> {
 }
 
 /// Paint attributes SVG passes from a group to the elements inside it.
-const INHERITED: [&str; 9] = [
-    "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "fill-rule", "fill-opacity", "stroke-opacity",
+const INHERITED: [&str; 11] = [
+    "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "fill-rule", "fill-opacity", "stroke-opacity", "stroke-dasharray", "stroke-dashoffset",
 ];
 
 /// `icon`'s coverage at `px` × `px` device pixels, row-major, as the glyph atlas stores it.
@@ -330,6 +331,7 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
     // Each open group with an `opacity`: what it holds so far, and that opacity.
     let mut layers: Vec<(Vec<u8>, f32)> = Vec::new();
     let mut buf = vec![0u8; (px * px) as usize];
+    let vb_diag = dash::view_box_diagonal(vb);
     let root = Scope { ctm: view_box::transform(vb, size), paints: true, group: None, layer: false };
     let mut scopes: Vec<Scope> = Vec::new();
     let mut elements = 0usize;
@@ -406,8 +408,27 @@ fn icon_coverage_at(icon: &Icon, px: u32, size: f32, origin: Point) -> Vec<u8> {
                 _ => Join::Miter,
             };
             let miter_limit = get("stroke-miterlimit").and_then(|v| v.parse().ok()).unwrap_or(4.0);
+            let dash_array = attr(el, "stroke-dasharray")
+                .and_then(|v| dash::parse_dash_array(v, vb_diag, false))
+                .or_else(|| {
+                    scopes.iter().rev().filter_map(|sc| sc.group).find_map(|g| {
+                        attr(g, "stroke-dasharray").and_then(|v| dash::parse_dash_array(v, vb_diag, false))
+                    })
+                });
+            let dash = dash_array.filter(|arr| !arr.is_none()).map(|array| {
+                let offset = attr(el, "stroke-dashoffset")
+                    .and_then(|v| dash::parse_dash_len(v, vb_diag, true))
+                    .or_else(|| {
+                        scopes.iter().rev().filter_map(|sc| sc.group).find_map(|g| {
+                            attr(g, "stroke-dashoffset").and_then(|v| dash::parse_dash_len(v, vb_diag, true))
+                        })
+                    })
+                    .unwrap_or(0.0);
+                let path_length = attr(el, "pathLength").and_then(dash::parse_path_length);
+                dash::StrokeDashSpec { array, offset, path_length }
+            });
             // The transform scales the width with the geometry.
-            let pen = area::Pen { width: w, cap, join, miter_limit };
+            let pen = area::Pen { width: w, cap, join, miter_limit, dash };
             paint_shape(&shape, ctm, origin, px, Some(&pen), Fill::NonZero, whole * opacity(get("stroke-opacity")), &mut buf, into);
         }
     }
@@ -506,5 +527,7 @@ fn numbers(s: &str) -> Vec<f32> {
     out
 }
 
+#[cfg(test)]
+mod dash_tests;
 #[cfg(test)]
 mod tests;

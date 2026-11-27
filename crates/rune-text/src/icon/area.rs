@@ -37,12 +37,13 @@ pub(super) enum Shape<'a> {
     Rounded { lo: Point, hi: Point, r: f32 },
 }
 
-/// How a stroke is drawn: its width in user units, caps, joins and miter limit.
+/// How a stroke is drawn: its width in user units, caps, joins, miter limit and optional dash.
 pub(super) struct Pen {
     pub width: f32,
     pub cap: Cap,
     pub join: Join,
     pub miter_limit: f32,
+    pub dash: Option<super::dash::StrokeDashSpec>,
 }
 
 /// The op Chromium draws one element's fill (no `pen`) or stroke with, in device pixels.
@@ -77,6 +78,9 @@ pub(super) struct Round {
 
 /// The op for `shape` under `ctm`: filled with no `pen`, else stroked with it.
 pub(super) fn op(shape: &Shape<'_>, ctm: Transform, pen: Option<&Pen>) -> Op {
+    if pen.is_some_and(|p| p.dash.is_some()) {
+        return Op::Path;
+    }
     let scale = (ctm.xx * ctm.yy - ctm.xy * ctm.yx).abs().sqrt();
     let upright = ctm.xy == 0.0 && ctm.yx == 0.0 && ctm.xx.abs() == ctm.yy.abs();
     let hw = pen.map_or(0.0, |p| p.width * scale * 0.5);
@@ -294,7 +298,10 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
     if !res.is_finite() || res <= 0.0 || res > 256.0 {
         return;
     }
-    let Some(user) = skia_path(shape, 0.25 / res) else { return };
+    // Keep conics for undashed strokes (Skia strokes conics directly), but flatten conics into
+    // accurate quads when dashing because `tiny_skia_path::Path::dash` ignores conic weights.
+    let keep_conics = pen.is_none_or(|p| p.dash.is_none());
+    let Some(user) = skia_path(shape, 0.25 / res, keep_conics) else { return };
     let shape = match pen {
         Some(p) => {
             let stroke = tiny_skia_path::Stroke {
@@ -312,7 +319,14 @@ pub(super) fn render_aaa(shape: &Shape<'_>, pen: Option<&Pen>, fill: Fill, ctm: 
                 },
                 dash: None,
             };
-            user.stroke(&stroke, res)
+            match &p.dash {
+                Some(spec) => match super::dash::apply_dash(&user, spec, p.cap, res) {
+                    super::dash::DashOutcome::Empty => return,
+                    super::dash::DashOutcome::Solid => user.stroke(&stroke, res),
+                    super::dash::DashOutcome::Dashed(dashed) => dashed.stroke(&stroke, res),
+                },
+                None => user.stroke(&stroke, res),
+            }
         }
         None => Some(user),
     };
@@ -402,13 +416,13 @@ fn at(ctm: Transform, p: V) -> Point {
 
 /// `shape` as Skia's path type, its conics cut into quads `tolerance` user units from them at
 /// most: an oval as `SkPath::addOval` builds it (four conics), a round rect as `addRRect` does.
-fn skia_path(shape: &Shape<'_>, tolerance: f32) -> Option<tiny_skia_path::Path> {
+fn skia_path(shape: &Shape<'_>, tolerance: f32, keep_conics: bool) -> Option<tiny_skia_path::Path> {
     let mut b = tiny_skia_path::PathBuilder::new();
     b.set_conic_tolerance(tolerance);
     match shape {
         Shape::Path(path) => {
-            // Conics stay conics, for Skia's stroker to stroke as conics.
-            b.set_keep_conics(true);
+            // Conics stay conics for Skia's stroker unless dashing needs quad-flattened arcs.
+            b.set_keep_conics(keep_conics);
             for el in path.iter() {
                 match *el {
                     El::Move(p) => b.move_to(p.x, p.y),

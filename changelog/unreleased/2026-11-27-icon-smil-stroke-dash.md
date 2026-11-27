@@ -1,0 +1,1 @@
+- Support `stroke-dasharray`, `stroke-dashoffset`, and `pathLength` on monochrome SVG icons, including SMIL `<animate>` and `<set>` animations for progressive pencil-draw strokes.

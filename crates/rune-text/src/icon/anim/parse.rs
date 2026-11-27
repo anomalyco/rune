@@ -8,6 +8,7 @@
 use swash::zeno::{Cap, Fill, Join, Transform};
 
 use super::super::convex;
+use super::super::dash::{self, DashArray, MAX_DASH_VAL};
 
 /// Shared defence-in-depth caps (matching `opencode-plugin-runtime::svg`).
 pub const MAX_SVG_BYTES: usize = 32 * 1024;
@@ -58,6 +59,8 @@ pub(super) enum AttrKind {
     FillOpacity,
     StrokeOpacity,
     StrokeWidth,
+    StrokeDashoffset,
+    StrokeDasharray,
     Transform(TransformKind),
 }
 
@@ -91,6 +94,21 @@ impl KeyVal {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum TrackValues {
+    Scalar(Vec<KeyVal>),
+    Dash(Vec<DashArray>),
+}
+
+impl TrackValues {
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Self::Scalar(v) => v.len(),
+            Self::Dash(v) => v.len(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct Track {
     pub(super) target: u16,
     pub(super) attr: AttrKind,
@@ -103,7 +121,7 @@ pub(super) struct Track {
     pub(super) additive_sum: bool,
     pub(super) is_set: bool,
     pub(super) calc_mode: CalcMode,
-    pub(super) values: Vec<KeyVal>,
+    pub(super) values: TrackValues,
     /// Normalized `[0, 1]` keyTimes, always `values.len()` entries when `values.len() >= 2`.
     pub(super) key_times: Vec<f32>,
     /// Spline control points `(x1, y1, x2, y2)`, always `values.len() - 1` entries when `Spline`.
@@ -122,10 +140,12 @@ pub(super) struct PaintProps {
     pub(super) miter_limit: Option<f32>,
     pub(super) fill_opacity: Option<f32>,
     pub(super) stroke_opacity: Option<f32>,
+    pub(super) stroke_dasharray: Option<DashArray>,
+    pub(super) stroke_dashoffset: Option<f32>,
 }
 
 impl PaintProps {
-    fn from_attrs(attrs: &[(&str, &str)]) -> Self {
+    fn from_attrs(attrs: &[(&str, &str)], vb_diag: f32) -> Self {
         let get = |k: &str| find_attr(attrs, k);
         Self {
             fill: get("fill").map(|v| v.trim() != "none"),
@@ -145,6 +165,8 @@ impl PaintProps {
             miter_limit: get("stroke-miterlimit").and_then(parse_finite).map(|v| v.clamp(1.0, 100.0)),
             fill_opacity: get("fill-opacity").and_then(parse_opacity_opt),
             stroke_opacity: get("stroke-opacity").and_then(parse_opacity_opt),
+            stroke_dasharray: get("stroke-dasharray").and_then(|v| dash::parse_dash_array(v, vb_diag, false)),
+            stroke_dashoffset: get("stroke-dashoffset").and_then(|v| dash::parse_dash_len(v, vb_diag, true)),
         }
     }
 }
@@ -176,6 +198,7 @@ pub(super) enum Op {
         opacity: f32,
         display_none: bool,
         paint: PaintProps,
+        path_length: Option<f32>,
     },
 }
 
@@ -227,6 +250,7 @@ fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
         return None;
     }
 
+    let vb_diag = dash::view_box_diagonal(view_box);
     let mut scanner = XmlScanner::new(body);
     let mut ops: Vec<Op> = Vec::new();
     let mut tracks: Vec<Track> = Vec::new();
@@ -279,7 +303,7 @@ fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
                                 Some(raw) => parse_transform_bounded(raw)?,
                                 None => Transform::IDENTITY,
                             };
-                            let paint = PaintProps::from_attrs(&attrs);
+                            let paint = PaintProps::from_attrs(&attrs, vb_diag);
                             if !self_closing {
                                 ops.push(Op::PushGroup { node_id, transform: tr, opacity, display_none, paint, has_opacity_anim: false });
                                 stack.push(StackEntry {
@@ -309,8 +333,9 @@ fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
                                 Some(raw) => parse_transform_bounded(raw)?,
                                 None => Transform::IDENTITY,
                             };
-                            let paint = PaintProps::from_attrs(&attrs);
-                            ops.push(Op::DrawShape { node_id, geom: geom.clone(), transform: tr, opacity, display_none, paint });
+                            let paint = PaintProps::from_attrs(&attrs, vb_diag);
+                            let path_length = find_attr(&attrs, "pathLength").and_then(dash::parse_path_length);
+                            ops.push(Op::DrawShape { node_id, geom: geom.clone(), transform: tr, opacity, display_none, paint, path_length });
                             if !self_closing {
                                 stack.push(StackEntry {
                                     tag,
@@ -328,7 +353,7 @@ fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
                             if let Some(parent) = stack.last()
                                 && let Some(target) = parent.node_id
                                 && tracks.len() < MAX_ANIMATIONS
-                                && let Some(track) = parse_track(tag, &attrs, target, &stack)
+                                && let Some(track) = parse_track(tag, &attrs, target, &stack, vb_diag)
                             {
                                 if track.attr == AttrKind::Opacity && parent.pushed_group {
                                     // A group whose opacity is animated may drop below 1.0 at runtime:
@@ -466,6 +491,8 @@ fn base_attr_value(stack: &[StackEntry<'_>], attr: AttrKind) -> Option<f32> {
         AttrKind::FillOpacity => Some(inherited(|p| p.fill_opacity, 1.0)),
         AttrKind::StrokeOpacity => Some(inherited(|p| p.stroke_opacity, 1.0)),
         AttrKind::StrokeWidth => Some(inherited(|p| p.stroke_width, 1.0)),
+        AttrKind::StrokeDashoffset => Some(inherited(|p| p.stroke_dashoffset, 0.0)),
+        AttrKind::StrokeDasharray => None,
         AttrKind::R => match parent.base_geom {
             Some(BaseGeom::Circle { r, .. }) => Some(r),
             _ => None,
@@ -524,7 +551,67 @@ fn base_attr_value(stack: &[StackEntry<'_>], attr: AttrKind) -> Option<f32> {
     }
 }
 
-fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEntry<'_>]) -> Option<Track> {
+fn base_dash_array(stack: &[StackEntry<'_>]) -> DashArray {
+    stack.iter().rev().filter_map(|e| e.base_paint).find_map(|p| p.stroke_dasharray).unwrap_or(DashArray::NONE)
+}
+
+fn parse_dash_track_values(
+    attrs: &[(&str, &str)],
+    is_set: bool,
+    additive_sum: bool,
+    stack: &[StackEntry<'_>],
+    vb_diag: f32,
+) -> Option<(Vec<DashArray>, bool)> {
+    let mut values = Vec::new();
+    let mut extra_additive = false;
+    if is_set {
+        values.push(dash::parse_dash_array(find_attr(attrs, "to")?, vb_diag, false)?);
+    } else if let Some(raw_vals) = find_attr(attrs, "values") {
+        let mut raw_parts = 0usize;
+        for part in raw_vals.split(';') {
+            raw_parts += 1;
+            if raw_parts > MAX_KEYFRAMES + 1 {
+                return None;
+            }
+            let t = part.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if values.len() >= MAX_KEYFRAMES {
+                return None;
+            }
+            values.push(dash::parse_dash_array(t, vb_diag, additive_sum)?);
+        }
+    } else {
+        match (find_attr(attrs, "from"), find_attr(attrs, "to"), find_attr(attrs, "by")) {
+            (Some(f), Some(t), _) => {
+                values.push(dash::parse_dash_array(f, vb_diag, additive_sum)?);
+                values.push(dash::parse_dash_array(t, vb_diag, additive_sum)?);
+            }
+            (Some(f), None, Some(b)) => {
+                let fv = dash::parse_dash_array(f, vb_diag, additive_sum)?;
+                let bv = dash::parse_dash_array(b, vb_diag, true)?;
+                let tv = dash::add_dash_array(fv, bv, !additive_sum)?;
+                values.push(fv);
+                values.push(tv);
+            }
+            (None, Some(t), _) => {
+                values.push(base_dash_array(stack));
+                values.push(dash::parse_dash_array(t, vb_diag, false)?);
+            }
+            (None, None, Some(b)) => {
+                let bv = dash::parse_dash_array(b, vb_diag, true)?;
+                values.push(DashArray::zeros(bv.len));
+                values.push(bv);
+                extra_additive = true;
+            }
+            _ => return None,
+        }
+    }
+    Some((values, extra_additive))
+}
+
+fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEntry<'_>], vb_diag: f32) -> Option<Track> {
     let parent = stack.last()?;
     let attr_name = find_attr(attrs, "attributeName")?.trim();
     let is_set = tag == "set";
@@ -560,6 +647,8 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEnt
             "fill-opacity" => AttrKind::FillOpacity,
             "stroke-opacity" => AttrKind::StrokeOpacity,
             "stroke-width" => AttrKind::StrokeWidth,
+            "stroke-dashoffset" => AttrKind::StrokeDashoffset,
+            "stroke-dasharray" => AttrKind::StrokeDasharray,
             _ => return None,
         }
     };
@@ -618,76 +707,83 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEnt
     let freeze = find_attr(attrs, "fill").map(str::trim) == Some("freeze");
     let additive_sum = !is_set && find_attr(attrs, "additive").map(str::trim) == Some("sum");
 
-    let mut values = Vec::new();
-    let mut extra_additive = false;
-    if is_set {
-        let v = parse_key_val(find_attr(attrs, "to")?, attr, false)?;
-        values.push(v);
-    } else if let Some(raw_vals) = find_attr(attrs, "values") {
-        let mut raw_parts = 0usize;
-        for part in raw_vals.split(';') {
-            raw_parts += 1;
-            if raw_parts > MAX_KEYFRAMES + 1 {
-                return None;
-            }
-            let t = part.trim();
-            if t.is_empty() {
-                continue;
-            }
-            if values.len() >= MAX_KEYFRAMES {
-                return None;
-            }
-            values.push(parse_key_val(t, attr, additive_sum)?);
-        }
+    let (values, extra_additive) = if attr == AttrKind::StrokeDasharray {
+        let (dash_vals, extra) = parse_dash_track_values(attrs, is_set, additive_sum, stack, vb_diag)?;
+        (TrackValues::Dash(dash_vals), extra)
     } else {
-        let from_raw = find_attr(attrs, "from");
-        let to_raw = find_attr(attrs, "to");
-        let by_raw = find_attr(attrs, "by");
-        match (from_raw, to_raw, by_raw) {
-            (Some(f), Some(t), _) => {
-                values.push(parse_key_val(f, attr, additive_sum)?);
-                values.push(parse_key_val(t, attr, additive_sum)?);
+        let mut scalar_vals = Vec::new();
+        let mut extra_additive = false;
+        if is_set {
+            let v = parse_key_val(find_attr(attrs, "to")?, attr, false, vb_diag)?;
+            scalar_vals.push(v);
+        } else if let Some(raw_vals) = find_attr(attrs, "values") {
+            let mut raw_parts = 0usize;
+            for part in raw_vals.split(';') {
+                raw_parts += 1;
+                if raw_parts > MAX_KEYFRAMES + 1 {
+                    return None;
+                }
+                let t = part.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                if scalar_vals.len() >= MAX_KEYFRAMES {
+                    return None;
+                }
+                scalar_vals.push(parse_key_val(t, attr, additive_sum, vb_diag)?);
             }
-            (Some(f), None, Some(b)) => {
-                let fv = parse_key_val(f, attr, additive_sum)?;
-                let bv = parse_key_val(b, attr, true)?;
-                let len = fv.len.max(bv.len);
-                let tv = KeyVal {
-                    v: [fv.v[0] + bv.v[0], fv.v[1] + bv.v[1], fv.v[2] + bv.v[2]],
-                    len,
-                };
-                values.push(fv);
-                values.push(clamp_key_val(tv, attr, additive_sum));
-            }
-            (None, Some(t), _) => {
-                let base = default_base_key_val(stack, attr)?;
-                values.push(base);
-                values.push(parse_key_val(t, attr, false)?);
-                // On a transform with an existing static base transform, `to`-only interpolates
-                // relative to the underlying transform rather than discarding it.
-                if matches!(attr, AttrKind::Transform(_)) && parent.has_transform {
+        } else {
+            let from_raw = find_attr(attrs, "from");
+            let to_raw = find_attr(attrs, "to");
+            let by_raw = find_attr(attrs, "by");
+            match (from_raw, to_raw, by_raw) {
+                (Some(f), Some(t), _) => {
+                    scalar_vals.push(parse_key_val(f, attr, additive_sum, vb_diag)?);
+                    scalar_vals.push(parse_key_val(t, attr, additive_sum, vb_diag)?);
+                }
+                (Some(f), None, Some(b)) => {
+                    let fv = parse_key_val(f, attr, additive_sum, vb_diag)?;
+                    let bv = parse_key_val(b, attr, true, vb_diag)?;
+                    let len = fv.len.max(bv.len);
+                    let tv = KeyVal {
+                        v: [fv.v[0] + bv.v[0], fv.v[1] + bv.v[1], fv.v[2] + bv.v[2]],
+                        len,
+                    };
+                    scalar_vals.push(fv);
+                    scalar_vals.push(clamp_key_val(tv, attr, additive_sum));
+                }
+                (None, Some(t), _) => {
+                    let base = default_base_key_val(stack, attr)?;
+                    scalar_vals.push(base);
+                    scalar_vals.push(parse_key_val(t, attr, false, vb_diag)?);
+                    // On a transform with an existing static base transform, `to`-only interpolates
+                    // relative to the underlying transform rather than discarding it.
+                    if matches!(attr, AttrKind::Transform(_)) && parent.has_transform {
+                        extra_additive = true;
+                    }
+                }
+                (None, None, Some(b)) => {
+                    // SMIL `by`-only animation is implicitly additive (`additive="sum"`):
+                    // for `scale`, identity is `(1, 1)` so `by` interpolates `(1, 1) -> (1 + bx, 1 + by)`;
+                    // for all other attributes, identity is `0` so `by` interpolates `0 -> by` (signed!).
+                    let bv = parse_key_val(b, attr, true, vb_diag)?;
+                    if matches!(attr, AttrKind::Transform(TransformKind::Scale)) {
+                        scalar_vals.push(KeyVal { v: [1.0, 1.0, 0.0], len: 2 });
+                        scalar_vals.push(clamp_key_val(KeyVal { v: [1.0 + bv.v[0], 1.0 + bv.v[1], 0.0], len: 2 }, attr, false));
+                    } else {
+                        scalar_vals.push(KeyVal { v: [0.0; 3], len: bv.len });
+                        scalar_vals.push(bv);
+                    }
                     extra_additive = true;
                 }
+                _ => return None,
             }
-            (None, None, Some(b)) => {
-                // SMIL `by`-only animation is implicitly additive (`additive="sum"`):
-                // for `scale`, identity is `(1, 1)` so `by` interpolates `(1, 1) -> (1 + bx, 1 + by)`;
-                // for all other attributes, identity is `0` so `by` interpolates `0 -> by` (signed!).
-                let bv = parse_key_val(b, attr, true)?;
-                if matches!(attr, AttrKind::Transform(TransformKind::Scale)) {
-                    values.push(KeyVal { v: [1.0, 1.0, 0.0], len: 2 });
-                    values.push(clamp_key_val(KeyVal { v: [1.0 + bv.v[0], 1.0 + bv.v[1], 0.0], len: 2 }, attr, false));
-                } else {
-                    values.push(KeyVal { v: [0.0; 3], len: bv.len });
-                    values.push(bv);
-                }
-                extra_additive = true;
-            }
-            _ => return None,
         }
-    }
+        (TrackValues::Scalar(scalar_vals), extra_additive)
+    };
 
-    if values.is_empty() || (!is_set && values.len() < 2) {
+    let val_count = values.len();
+    if val_count == 0 || (!is_set && val_count < 2) {
         return None;
     }
 
@@ -703,7 +799,7 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEnt
         }
     };
 
-    let (key_times, key_splines) = if is_set || values.len() < 2 {
+    let (key_times, key_splines) = if is_set || val_count < 2 {
         (Vec::new(), Vec::new())
     } else if calc_mode == CalcMode::Paced {
         // SMIL 3.0: `calcMode="paced"` ignores `keyTimes`/`keySplines` and paces at constant
@@ -711,13 +807,13 @@ fn parse_track(tag: &str, attrs: &[(&str, &str)], target: u16, stack: &[StackEnt
         (paced_key_times(&values), Vec::new())
     } else {
         let kt = match find_attr(attrs, "keyTimes") {
-            Some(raw) => parse_key_times(raw, values.len(), calc_mode)?,
-            None => uniform_key_times(values.len(), calc_mode),
+            Some(raw) => parse_key_times(raw, val_count, calc_mode)?,
+            None => uniform_key_times(val_count, calc_mode),
         };
         let ks = if calc_mode == CalcMode::Spline {
             match find_attr(attrs, "keySplines") {
-                Some(raw) => parse_key_splines(raw, values.len() - 1)?,
-                None => vec![[0.0, 0.0, 1.0, 1.0]; values.len() - 1],
+                Some(raw) => parse_key_splines(raw, val_count - 1)?,
+                None => vec![[0.0, 0.0, 1.0, 1.0]; val_count - 1],
             }
         } else {
             Vec::new()
@@ -760,24 +856,39 @@ fn uniform_key_times(count: usize, mode: CalcMode) -> Vec<f32> {
     }
 }
 
-fn paced_key_times(values: &[KeyVal]) -> Vec<f32> {
-    let mut dists = Vec::with_capacity(values.len());
+fn paced_key_times(values: &TrackValues) -> Vec<f32> {
+    let n = values.len();
+    let mut dists = Vec::with_capacity(n);
     dists.push(0.0f32);
     let mut total = 0.0f32;
-    for pair in values.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let len = a.len.max(b.len) as usize;
-        let sq: f32 = (0..len).map(|i| { let d = b.v[i] - a.v[i]; d * d }).sum();
-        total += sq.sqrt();
-        dists.push(total);
+    match values {
+        TrackValues::Scalar(vals) => {
+            for pair in vals.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let len = a.len.max(b.len) as usize;
+                let sq: f32 = (0..len).map(|i| { let d = b.v[i] - a.v[i]; d * d }).sum();
+                total += sq.sqrt();
+                dists.push(total);
+            }
+        }
+        TrackValues::Dash(vals) => {
+            for pair in vals.windows(2) {
+                total += dash::dash_distance(pair[0], pair[1]);
+                dists.push(total);
+            }
+        }
     }
     if total <= 1e-6 || !total.is_finite() {
-        return uniform_key_times(values.len(), CalcMode::Linear);
+        return uniform_key_times(n, CalcMode::Linear);
     }
     dists.iter().map(|&d| (d / total).clamp(0.0, 1.0)).collect()
 }
 
-fn parse_key_val(raw: &str, attr: AttrKind, is_delta: bool) -> Option<KeyVal> {
+fn parse_key_val(raw: &str, attr: AttrKind, is_delta: bool, vb_diag: f32) -> Option<KeyVal> {
+    if attr == AttrKind::StrokeDashoffset {
+        let v = dash::parse_dash_len(raw, vb_diag, true)?;
+        return Some(KeyVal::scalar(v));
+    }
     let nums = parse_small_numbers::<3>(raw)?;
     if nums.is_empty() {
         return None;
@@ -804,6 +915,10 @@ fn clamp_key_val(mut kv: KeyVal, attr: AttrKind, is_delta: bool) -> KeyVal {
         AttrKind::StrokeWidth => {
             kv.v[0] = if is_delta { kv.v[0].clamp(-MAX_STROKE_WIDTH, MAX_STROKE_WIDTH) } else { kv.v[0].clamp(0.0, MAX_STROKE_WIDTH) };
         }
+        AttrKind::StrokeDashoffset => {
+            kv.v[0] = kv.v[0].clamp(-MAX_DASH_VAL, MAX_DASH_VAL);
+        }
+        AttrKind::StrokeDasharray => {}
         AttrKind::R | AttrKind::Rx | AttrKind::Ry | AttrKind::Width | AttrKind::Height => {
             kv.v[0] = if is_delta { kv.v[0].clamp(-MAX_COORD, MAX_COORD) } else { kv.v[0].clamp(0.0, MAX_COORD) };
         }
