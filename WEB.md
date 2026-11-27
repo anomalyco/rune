@@ -122,11 +122,11 @@ App::new(spec).canvas_id("chart").fit_content_height().try_run()?;
 App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?;
 ```
 
-Inline, the canvas is as wide as its parent and as tall as `AppSpec::size` (or its content with
-`fit_content_height`, when vertical wheel and touch pans scroll the page); safe-area insets
-are zero and the title doesn't touch `document.title`. With `full_viewport` the canvas is fixed to
-the visual viewport like Rune's own, so an ancestor with a `transform` or `filter` would
-become its containing block; mount it outside one.
+Inline, the canvas is as wide as its parent and as tall as `AppSpec::size` unless CSS sets its
+height (or as tall as its content with `fit_content_height`, when vertical wheel and touch pans
+scroll the page); safe-area insets are zero and the title doesn't touch `document.title`. With
+`full_viewport` the canvas is fixed to the visual viewport like Rune's own, so an ancestor with a
+`transform` or `filter` would become its containing block; mount it outside one.
 
 `AppHandle::quit` unmounts the app when its route goes away: the loop stops, the GPU device is
 destroyed, Rune's listeners come off the page, and the body style and title it changed go back.

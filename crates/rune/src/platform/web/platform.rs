@@ -28,6 +28,10 @@ extern "C" {
     /// Sets the canvas's CSS `cursor`, or clears it when `css` is empty.
     #[wasm_bindgen(js_name = setCursor)]
     pub(crate) fn set_cursor(canvas: &web_sys::HtmlCanvasElement, css: &str);
+    /// Styles an inline `App::canvas_id` canvas to its parent's width and (when `fit_height` is
+    /// false and CSS gave the canvas no height) `spec_height` from `AppSpec::size`.
+    #[wasm_bindgen(js_name = styleInlineCanvas)]
+    pub(super) fn style_inline_canvas(canvas: &web_sys::HtmlCanvasElement, spec_height: f32, fit_height: bool);
     #[wasm_bindgen(js_name = nextIdle)]
     pub(crate) fn next_idle(timeout: u32) -> js_sys::Promise;
     pub(super) fn viewport(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool) -> js_sys::Function;
