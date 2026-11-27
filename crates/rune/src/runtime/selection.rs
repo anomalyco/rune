@@ -13,3 +13,6 @@ pub(super) mod select_all;
 pub(crate) mod selectable;
 pub(super) mod text_marks;
 pub(super) mod visibility;
+
+#[cfg(test)]
+mod selection_extend_tests;
