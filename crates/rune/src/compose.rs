@@ -73,6 +73,13 @@ pub trait Compositor<S: 'static>: 'static {
     /// True while something the compositor draws moves on its own: the window keeps its display
     /// link running. False lets it go idle (no frames at rest) and rest: a due `wake_after`
     /// runs `poll` alone and draws only when that poll changed something.
+    ///
+    /// For exactly one more frame (a render that ran out of room and draws again), return true
+    /// after that render and false after the next: the link draws that frame, then coasts and
+    /// stops as after any motion. For a frame once GPU work finishes (a readback), don't keep this
+    /// true while waiting: wait on a worker with a [`GpuHandle`] (`Queue::on_submitted_work_done`
+    /// and `Device::poll`), then wake the window once with the app's `Waker` (`AppSpec::setup`)
+    /// or `AppHandle::wake`, so it stays idle meanwhile.
     fn animating(&self) -> bool {
         false
     }
