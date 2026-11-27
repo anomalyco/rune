@@ -1,0 +1,1 @@
+- Added `PillStyle::pad_x(points)` and `PillStyle::margin_x(points)` (`const fn`, keeping `PillStyle: Copy`) to override a pill chip's horizontal padding and outer margin in both shaping and painting; unset fields keep the existing font-size defaults.

@@ -204,7 +204,7 @@ pub(crate) type PillSecondaryFn = PillPressFn;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
 /// [`El::pill_colors`] and [`El::pill_icon`], then the field's defaults. Build one with
-/// `PillStyle::new().bg(..).ring(..).radius(..)`.
+/// `PillStyle::new().bg(..).ring(..).radius(..).pad_x(..).margin_x(..)`.
 ///
 /// For a full-colour leading logo ([`Pixels`](crate::Pixels)) without giving up `Copy` or
 /// `const` construction on `PillStyle`, attach [`El::pill_image`] on a `text_input` or
@@ -216,11 +216,13 @@ pub struct PillStyle {
     pub(crate) icon: Option<&'static crate::Icon>,
     pub(crate) ring: Option<(Color, f32)>,
     pub(crate) radius: Option<f32>,
+    pub(crate) pad_x: Option<f32>,
+    pub(crate) margin_x: Option<f32>,
 }
 
 impl PillStyle {
     pub const fn new() -> Self {
-        Self { bg: None, fg: None, icon: None, ring: None, radius: None }
+        Self { bg: None, fg: None, icon: None, ring: None, radius: None, pad_x: None, margin_x: None }
     }
     /// The chip's colour.
     pub const fn bg(mut self, bg: Color) -> Self {
@@ -264,6 +266,32 @@ impl PillStyle {
     /// ```
     pub const fn radius(mut self, points: f32) -> Self {
         self.radius = Some(if points.is_finite() && points > 0.0 { points } else { 0.0 });
+        self
+    }
+    /// Horizontal padding inside the chip in points on each side of its label (and before any
+    /// leading icon or image). Unset, defaults to `(font_size * 0.36).max(3.0)`. Non-finite or
+    /// negative values become `0.0`.
+    ///
+    /// ```
+    /// use rune::PillStyle;
+    ///
+    /// const TIGHT: PillStyle = PillStyle::new().pad_x(2.0).margin_x(0.0);
+    /// ```
+    pub const fn pad_x(mut self, points: f32) -> Self {
+        self.pad_x = Some(if points.is_finite() && points > 0.0 { points } else { 0.0 });
+        self
+    }
+    /// Horizontal outer margin outside the chip in points on each side, separating the chip from
+    /// surrounding text. Unset, defaults to `(font_size * 0.12).max(1.5)`. Non-finite or negative
+    /// values become `0.0`.
+    ///
+    /// ```
+    /// use rune::PillStyle;
+    ///
+    /// const FLUSH: PillStyle = PillStyle::new().margin_x(0.0);
+    /// ```
+    pub const fn margin_x(mut self, points: f32) -> Self {
+        self.margin_x = Some(if points.is_finite() && points > 0.0 { points } else { 0.0 });
         self
     }
 }

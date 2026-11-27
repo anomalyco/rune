@@ -447,8 +447,10 @@ fn collect_misplaced_pills(
             } else if prefix_w > 0.0 {
                 // Keep non-whitespace prefix (such as `(` before a link) attached to the box.
                 Some(LineCap::Width(logical_x - (prefix_w * 0.5).min(0.5)))
-            } else {
+            } else if boxes[first].width > 0.0 {
                 Some(LineCap::Width(logical_x + boxes[first].width * 0.5))
+            } else {
+                Some(LineCap::Width((logical_x - 0.5).max(0.0)))
             };
             if let Some(cap_val) = fix {
                 let cap = (key, cap_val);

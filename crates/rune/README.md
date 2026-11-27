@@ -2344,7 +2344,7 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   `edit.replace_with_pill(range, id, label)` to swap a typed `@query` for one (one undo step;
   wrap multi-part edits like `replace_with_pill` + `insert(" ")` in `edit.undo_group(|e| ..)`).
   `edit.pills()` lists `(range, id)` for each. The field draws each pill as a rounded chip
-  (`.pill_style(|id| PillStyle::new().bg(..).fg(..).icon(..).ring(color, width).radius(points))`,
+  (`.pill_style(|id| PillStyle::new().bg(..).fg(..).icon(..).ring(color, width).radius(points).pad_x(points).margin_x(points))`,
   `.pill_image(|id| ...)` for a full-colour `Pixels` logo in the leading slot, or `.pill_colors(bg, fg)`
   and `.pill_icon(|id| ...)`), and a chip never splits across lines (static text supports the same
   `PillStyle` via `.pill(range, style)`, `.pills(..)` and `.pill_with_image(range, style, pixels)`).
