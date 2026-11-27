@@ -106,6 +106,7 @@ impl Running {
 
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
         let rt = self.app.rt_mut();
+        super::file_dialog::flush(rt, &self.input.handle);
         crate::haptics::flush_live(rt, false);
         let _ = rt.host.window_color_scheme.take();
         let _ = rt.host.window_backdrop_request.take();
@@ -352,7 +353,6 @@ impl FrameHost for WebFrameHost<'_> {
                 None => {}
             }
         }
-        self.r.app.rt_mut().refuse_file_dialog("native file dialogs are unsupported on web");
         if !self.tick { self.r.sync_input(false); }
         let rt = self.r.app.rt();
         self.r.cursor.apply(self.window, rt.cursor(), rt.pointer().is_some());

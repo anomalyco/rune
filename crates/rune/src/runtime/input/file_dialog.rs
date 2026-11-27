@@ -1,5 +1,5 @@
 use super::*;
-use crate::file_dialog::{DialogAnswer, DialogOutcome, DialogState, FileDialogError, FileDialogKind, FileDialogOptions, Pending, Request};
+use crate::file_dialog::{DialogAnswer, DialogOutcome, DialogState, FileDialogError, FileDialogKind, FileDialogOptions, FileHandle, Pending, Request};
 
 impl RuntimeCore {
     /// The file dialog showing, or about to show, from [`Tx::open_file`], [`Tx::open_files`],
@@ -17,6 +17,13 @@ impl RuntimeCore {
     /// ```
     pub fn file_dialog_multiple(&self) -> bool {
         self.host.file_dialog.pending().is_some_and(|d| d.multiple)
+    }
+
+    /// True when the pending file dialog accepts platform-neutral [`FileHandle`]s
+    /// ([`Tx::pick_file`], [`Tx::pick_files`], [`Tx::pick_save_file`]), so a host may answer
+    /// it with documents that have no local filesystem path.
+    pub fn file_dialog_handles(&self) -> bool {
+        self.host.file_dialog.pending().is_some_and(|d| d.handles)
     }
 
     /// Answers the file dialog showing as if the user chose `path`, or cancelled with `None`.
@@ -44,6 +51,26 @@ impl RuntimeCore {
         Ok(())
     }
 
+    /// Answers the pending file dialog with a single [`FileHandle`], or cancels with `None`.
+    /// Returns an error if no dialog is open, or if the dialog requires local paths and the
+    /// handle has `path().is_none()`.
+    pub fn resolve_file_dialog_handle(&mut self, handle: Option<FileHandle>) -> Result<(), FileDialogError> {
+        self.resolve_file_dialog_handles(handle.map(|h| vec![h]))
+    }
+
+    /// Answers the pending file dialog with one or more [`FileHandle`]s, or cancels with `None`.
+    /// Returns an error if no dialog is open, or if the dialog requires local paths (`open_file`,
+    /// `open_files`, `save_file`, `open_folder`) and any supplied handle has `path().is_none()`.
+    pub fn resolve_file_dialog_handles(&mut self, handles: Option<Vec<FileHandle>>) -> Result<(), FileDialogError> {
+        let pending = self.host.file_dialog.pending().ok_or_else(|| FileDialogError("no file dialog is open".into()))?;
+        if !pending.handles && let Some(list) = &handles && list.iter().any(|h| h.path().is_none()) {
+            return Err(FileDialogError("this file dialog requires local filesystem paths".into()));
+        }
+        let id = pending.id;
+        self.answer_file_dialog(id, Ok(DialogAnswer::Handles(handles)));
+        Ok(())
+    }
+
     /// Takes a handler's request. One dialog at a time: a request while one is open is
     /// answered with an error rather than queued, so a double click opens one dialog.
     pub(crate) fn request_file_dialog(&mut self, request: Request) {
@@ -65,6 +92,7 @@ impl RuntimeCore {
             id,
             kind: request.kind,
             multiple: request.multiple,
+            handles: request.handles,
             options: request.options,
         });
     }

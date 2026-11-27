@@ -11,6 +11,7 @@ use gpu::Draw;
 
 mod app;
 mod cpu_canvas;
+mod file_dialog;
 mod frame;
 mod full_faces;
 mod gpu;

@@ -8,7 +8,7 @@ use super::*;
 #[cfg(test)]
 #[cfg(test)]
 use crate::file_dialog::DialogOutcome;
-use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions};
+use crate::file_dialog::{FileDialogError, FileDialogKind, FileDialogOptions, FileHandle};
 #[cfg(any(test, target_arch = "wasm32"))]
 use crate::popup_menu::Show;
 use crate::popup_menu::{PopupMenu, PopupMenuError};
@@ -504,6 +504,10 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn file_dialog_multiple(&self) -> bool { self.core().file_dialog_multiple() }
+    /// True when the pending file dialog accepts platform-neutral [`FileHandle`]s
+    /// ([`Tx::pick_file`], [`Tx::pick_files`], [`Tx::pick_save_file`]).
+    #[inline(always)]
+    pub fn file_dialog_handles(&self) -> bool { self.core().file_dialog_handles() }
     #[inline(always)]
     pub fn resolve_file_dialog(&mut self, path: Option<PathBuf>) -> Result<(), FileDialogError> {
         self.core_mut().resolve_file_dialog(path)
@@ -521,6 +525,16 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn resolve_file_dialog_files(&mut self, paths: Option<Vec<PathBuf>>) -> Result<(), FileDialogError> {
         self.core_mut().resolve_file_dialog_files(paths)
+    }
+    /// Answers the pending file dialog with a single [`FileHandle`], or cancels with `None`.
+    #[inline(always)]
+    pub fn resolve_file_dialog_handle(&mut self, handle: Option<FileHandle>) -> Result<(), FileDialogError> {
+        self.core_mut().resolve_file_dialog_handle(handle)
+    }
+    /// Answers the pending file dialog with one or more [`FileHandle`]s, or cancels with `None`.
+    #[inline(always)]
+    pub fn resolve_file_dialog_handles(&mut self, handles: Option<Vec<FileHandle>>) -> Result<(), FileDialogError> {
+        self.core_mut().resolve_file_dialog_handles(handles)
     }
     #[cfg(test)]
     #[inline(always)]

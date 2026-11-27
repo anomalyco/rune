@@ -23,6 +23,15 @@ use crate::Tx;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::Waker;
 
+mod handle;
+#[cfg(test)]
+mod handle_tests;
+pub use handle::{FileHandle, FileHandleProvider};
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn claim_web_picked_file(id: u32) -> bool {
+    handle::js::claim_picked_file(id)
+}
+
 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
 mod portal;
 #[cfg(any(all(feature = "native-file-dialog", target_os = "linux"), all(test, unix)))]
@@ -66,6 +75,7 @@ struct ScriptedEntry {
     kind: FileDialogKind,
     multiple: bool,
     paths: Option<Vec<PathBuf>>,
+    handles: Option<Vec<FileHandle>>,
 }
 
 #[derive(Clone)]
@@ -96,6 +106,20 @@ impl FileDialogs {
             kind: r.kind,
             multiple: false,
             paths: r.path.map(|p| vec![p]),
+            handles: None,
+        }).collect();
+        Self(Backend::Scripted(Arc::new(Mutex::new(entries))))
+    }
+    /// Headless fixture for handle-based dialogs ([`FileDialogs::pick_file`],
+    /// [`FileDialogs::pick_files`], [`FileDialogs::pick_save_file`]). Each entry carries the
+    /// expected dialog kind, whether it expects multi-select, and the handles to return (or
+    /// `None` for cancellation).
+    pub fn scripted_handles(responses: impl IntoIterator<Item = (FileDialogKind, bool, Option<Vec<FileHandle>>)>) -> Self {
+        let entries = responses.into_iter().map(|(kind, multiple, handles)| ScriptedEntry {
+            kind,
+            multiple,
+            paths: None,
+            handles,
         }).collect();
         Self(Backend::Scripted(Arc::new(Mutex::new(entries))))
     }
@@ -116,6 +140,7 @@ impl FileDialogs {
             kind: FileDialogKind::Open,
             multiple: true,
             paths,
+            handles: None,
         }).collect();
         Self(Backend::Scripted(Arc::new(Mutex::new(entries))))
     }
@@ -157,6 +182,55 @@ impl FileDialogs {
     }
     pub async fn open_folder(&self, options: FileDialogOptions) -> FileDialogResult {
         self.show(FileDialogKind::Folder, options).await
+    }
+    /// Show an Open dialog that returns a platform-neutral [`FileHandle`], or `Ok(None)` when
+    /// cancelled.
+    pub async fn pick_file(&self, options: FileDialogOptions) -> FileHandleResult {
+        self.show_handles(FileDialogKind::Open, false, options)
+            .await
+            .map(|list| list.and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) }))
+    }
+    /// Show a multi-select Open dialog that returns platform-neutral [`FileHandle`]s, or
+    /// `Ok(None)` when cancelled.
+    pub async fn pick_files(&self, options: FileDialogOptions) -> FileHandlesResult {
+        self.show_handles(FileDialogKind::Open, true, options).await
+    }
+    /// Show a Save dialog that returns a writable [`FileHandle`], or `Ok(None)` when cancelled.
+    pub async fn pick_save_file(&self, options: FileDialogOptions) -> FileHandleResult {
+        self.show_handles(FileDialogKind::Save, false, options)
+            .await
+            .map(|list| list.and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) }))
+    }
+    async fn show_handles(&self, kind: FileDialogKind, multiple: bool, options: FileDialogOptions) -> FileHandlesResult {
+        match &self.0 {
+            Backend::Scripted(responses) => {
+                let mut responses = responses.lock().unwrap_or_else(|e| e.into_inner());
+                let response = responses.front().ok_or_else(|| FileDialogError("file dialog fixture exhausted".into()))?;
+                if response.multiple != multiple || response.kind != kind {
+                    return Err(FileDialogError(format!(
+                        "expected {}{:?} dialog, received {}{kind:?}",
+                        if response.multiple { "multi-file " } else { "" },
+                        response.kind,
+                        if multiple { "multi-file " } else { "" },
+                    )));
+                }
+                let _ = options;
+                let entry = responses.pop_front().unwrap();
+                if let Some(handles) = entry.handles {
+                    Ok(Some(handles))
+                } else {
+                    Ok(entry.paths.map(|list| list.into_iter().map(FileHandle::from_path).collect()))
+                }
+            }
+            #[cfg(feature = "native-file-dialog")]
+            Backend::Native => {
+                if multiple && kind == FileDialogKind::Open {
+                    native_files(options).await.map(|o| o.map(|v| v.into_iter().map(FileHandle::from_path).collect()))
+                } else {
+                    native(kind, options).await.map(|o| o.map(|p| vec![FileHandle::from_path(p)]))
+                }
+            }
+        }
     }
     async fn show(&self, kind: FileDialogKind, options: FileDialogOptions) -> FileDialogResult {
         match &self.0 {
@@ -234,11 +308,21 @@ pub type FileDialogResult = Result<Option<PathBuf>, FileDialogError>;
 /// ```
 pub type FileDialogFilesResult = Result<Option<Vec<PathBuf>>, FileDialogError>;
 
+/// What a [`Tx::pick_file`], [`Tx::pick_save_file`], [`FileDialogs::pick_file`] or
+/// [`FileDialogs::pick_save_file`] call delivers: the chosen handle, `Ok(None)` when the user
+/// cancels, or why no dialog could show.
+pub type FileHandleResult = Result<Option<FileHandle>, FileDialogError>;
+
+/// What a [`Tx::pick_files`] or [`FileDialogs::pick_files`] call delivers: the chosen handles,
+/// `Ok(None)` when the user cancels, or why no dialog could show.
+pub type FileHandlesResult = Result<Option<Vec<FileHandle>>, FileDialogError>;
+
 /// Internal dialog answer carried from a host or headless resolver to the pending callback.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) enum DialogAnswer {
     Single(Option<PathBuf>),
     Many(Option<Vec<PathBuf>>),
+    Handles(Option<Vec<FileHandle>>),
 }
 
 impl DialogAnswer {
@@ -246,6 +330,7 @@ impl DialogAnswer {
         match self {
             Self::Single(path) => path,
             Self::Many(paths) => paths.and_then(|mut list| if list.is_empty() { None } else { Some(list.remove(0)) }),
+            Self::Handles(handles) => handles.and_then(|list| list.into_iter().find_map(|h| h.path().map(std::path::Path::to_path_buf))),
         }
     }
 
@@ -253,6 +338,23 @@ impl DialogAnswer {
         match self {
             Self::Single(path) => path.map(|p| vec![p]),
             Self::Many(paths) => paths,
+            Self::Handles(handles) => handles.map(|list| list.into_iter().filter_map(|h| h.path().map(std::path::Path::to_path_buf)).collect()),
+        }
+    }
+
+    pub(crate) fn into_handle(self) -> Option<FileHandle> {
+        match self {
+            Self::Single(path) => path.map(FileHandle::from_path),
+            Self::Many(paths) => paths.and_then(|mut list| if list.is_empty() { None } else { Some(FileHandle::from_path(list.remove(0))) }),
+            Self::Handles(handles) => handles.and_then(|mut list| if list.is_empty() { None } else { Some(list.remove(0)) }),
+        }
+    }
+
+    pub(crate) fn into_handles(self) -> Option<Vec<FileHandle>> {
+        match self {
+            Self::Single(path) => path.map(|p| vec![FileHandle::from_path(p)]),
+            Self::Many(paths) => paths.map(|list| list.into_iter().map(FileHandle::from_path).collect()),
+            Self::Handles(handles) => handles,
         }
     }
 
@@ -260,6 +362,7 @@ impl DialogAnswer {
         match self {
             Self::Single(path) => path.is_some(),
             Self::Many(paths) => paths.is_some(),
+            Self::Handles(handles) => handles.is_some(),
         }
     }
 }
@@ -271,6 +374,7 @@ pub(crate) type AnswerFn = Box<dyn FnOnce(crate::states::States<'_>, DialogOutco
 pub(crate) struct Request {
     pub kind: FileDialogKind,
     pub multiple: bool,
+    pub handles: bool,
     pub options: FileDialogOptions,
     pub on_answer: AnswerFn,
 }
@@ -295,6 +399,7 @@ pub(crate) struct Pending {
     pub id: u64,
     pub kind: FileDialogKind,
     pub multiple: bool,
+    pub handles: bool,
     pub options: FileDialogOptions,
 }
 
@@ -350,6 +455,7 @@ impl Pending {
         let filters: Vec<_> = o.filters.iter().map(|(name, ext)| serde_json::json!({ "name": name, "extensions": ext })).collect();
         let mut v = serde_json::json!({ "kind": self.kind.name(), "title": o.title, "filters": filters });
         if self.multiple { v["multiple"] = true.into(); }
+        if self.handles { v["handles"] = true.into(); }
         if let Some(dir) = &o.directory { v["directory"] = dir.display().to_string().into(); }
         if let Some(name) = &o.file_name { v["fileName"] = name.clone().into(); }
         v
@@ -416,6 +522,7 @@ impl Tx {
         self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
             kind: FileDialogKind::Open,
             multiple: true,
+            handles: false,
             options,
             on_answer,
         })))));
@@ -433,6 +540,7 @@ impl Tx {
         self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
             kind: FileDialogKind::Save,
             multiple: false,
+            handles: false,
             options,
             on_answer,
         })))));
@@ -445,6 +553,47 @@ impl Tx {
         self.file_dialog(FileDialogKind::Folder, options, on_answer);
     }
 
+    /// Show an Open dialog that delivers a platform-neutral [`FileHandle`] instead of a
+    /// `PathBuf`, so the same code works on desktop hosts, web (`<input type="file">`), and
+    /// document-provider platforms such as Android SAF without copying into app cache.
+    pub fn pick_file<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileHandleResult, &mut Tx) + 'static) {
+        self.file_handle_dialog(FileDialogKind::Open, options, on_answer);
+    }
+
+    /// [`Tx::pick_file`] with multiple selection enabled: `on_answer` receives
+    /// `Ok(Some(handles))` with every chosen file, `Ok(None)` on cancellation, or an error.
+    pub fn pick_files<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileHandlesResult, &mut Tx) + 'static) {
+        let on_answer: AnswerFn = Box::new(move |s, result, tx| {
+            if let Some(s) = s.cast::<S>() { on_answer(s, result.map(DialogAnswer::into_handles), tx); }
+        });
+        self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
+            kind: FileDialogKind::Open,
+            multiple: true,
+            handles: true,
+            options,
+            on_answer,
+        })))));
+    }
+
+    /// [`Tx::pick_file`] for a Save dialog: delivers a writable [`FileHandle`] whose writer
+    /// replaces the file's contents.
+    pub fn pick_save_file<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileHandleResult, &mut Tx) + 'static) {
+        self.file_handle_dialog(FileDialogKind::Save, options, on_answer);
+    }
+
+    fn file_handle_dialog<S: 'static>(&mut self, kind: FileDialogKind, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileHandleResult, &mut Tx) + 'static) {
+        let on_answer: AnswerFn = Box::new(move |s, result, tx| {
+            if let Some(s) = s.cast::<S>() { on_answer(s, result.map(DialogAnswer::into_handle), tx); }
+        });
+        self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
+            kind,
+            multiple: false,
+            handles: true,
+            options,
+            on_answer,
+        })))));
+    }
+
     fn file_dialog<S: 'static>(&mut self, kind: FileDialogKind, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileDialogResult, &mut Tx) + 'static) {
         let on_answer: AnswerFn = Box::new(move |s, result, tx| {
             // None once the playground has dropped the stage that asked.
@@ -453,6 +602,7 @@ impl Tx {
         self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
             kind,
             multiple: false,
+            handles: false,
             options,
             on_answer,
         })))));
