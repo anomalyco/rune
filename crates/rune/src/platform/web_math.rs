@@ -4,6 +4,7 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 pub(crate) mod handover_machine;
+pub(crate) mod platform_events;
 
 /// The canvas's size in device pixels. `css` is the canvas's CSS box and `reported` what winit
 /// reported for it. A canvas reports pixels, but an emulated device scale reports CSS pixels, so

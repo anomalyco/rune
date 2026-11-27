@@ -37,8 +37,7 @@ pub(crate) fn safe_area() -> [f32; 4] { INSETS.get() }
 /// The largest viewport's height in CSS points, or 0 before the browser has reported one.
 pub(crate) fn large_viewport() -> f32 { LARGE_VIEWPORT.get() }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PrimaryPointer { Hover, NoHover, Touch }
+use web_math::platform_events::PrimaryPointer;
 
 pub(crate) fn hover_none() -> bool { PRIMARY_POINTER.get() != PrimaryPointer::Hover }
 pub(crate) fn touch_controls() -> bool { PRIMARY_POINTER.get() == PrimaryPointer::Touch }

@@ -299,9 +299,76 @@ impl Running {
         true
     }
 
+    fn apply_viewport(&mut self, event: &serde_json::Value, window: &Arc<Window>) -> bool {
+        let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
+        let h = event["h"].as_f64().unwrap_or(0.0).max(0.0) as f32;
+        let visual = web_math::platform_events::parse_visual_viewport(&event["visual"]);
+        let visual_y = visual
+            .filter(|&[top, bottom, layout_h]| top > 1.0 || layout_h - bottom > 1.0)
+            .map(|[top, bottom, _]| (top, bottom));
+        let visual_moved = self.input.visual_viewport != visual;
+        if visual_moved {
+            self.input.visual_viewport = visual;
+            self.app.rt_mut().set_visual_viewport_y(visual_y);
+        }
+        // A phone reports the visual viewport on every scroll frame as its toolbar moves;
+        // skip work unless safe area, largest viewport, or visual keyboard band moved.
+        let moved = LARGE_VIEWPORT.replace(h) != h;
+        let insets_moved = INSETS.replace(insets) != insets;
+        if !insets_moved && !moved {
+            if !visual_moved { return false; }
+            if self.app.rt().web_has_editable_focus() {
+                if visual_y.is_some() { self.app.rt_mut().request_caret_follow(); }
+                return true;
+            }
+            self.input.visual_viewport_sent = visual;
+            let [top, bottom, layout_h] = visual.unwrap_or([0.0; 3]);
+            sync_visual_viewport(&self.input.handle, top, bottom, layout_h);
+            return false;
+        }
+        if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
+        self.app.rt_mut().invalidate();
+        true
+    }
+
+    fn apply_primary_pointer(&mut self, event: &serde_json::Value) -> bool {
+        let pointer = web_math::platform_events::parse_primary_pointer(event);
+        if PRIMARY_POINTER.replace(pointer) == pointer { return false; }
+        self.app.rt_mut().invalidate();
+        true
+    }
+
+    fn finish_focus(&mut self, focus: web_math::platform_events::FocusChange, window: &Arc<Window>) {
+        if !focus.focused {
+            self.input.mods = ModifiersState::empty();
+            self.input.control_click = false;
+            if focus.changed {
+                self.cursor.apply(window, crate::el::Cursor::Default, false);
+            }
+        }
+    }
+
+    fn commit_dom_frame(&mut self, window: &Arc<Window>, activate: bool) {
+        self.app.frame(0.0);
+        self.apply_frame_requests(window);
+        self.clipboard.flush_core(self.app.rt_mut());
+        self.sync_input(activate);
+    }
+
+    fn commit_hidden(&mut self, window: &Arc<Window>) {
+        crate::input::host_events::hide_reset(self.app.rt_mut(), &mut self.input.mods, &mut self.input.control_click);
+        hide_menu(&self.input.handle);
+        self.app.resolve_popup(None).ok();
+        self.cursor.apply(window, crate::el::Cursor::Default, false);
+        // Commit cancellation, FocusLost, FinishIme and poll now: browsers pause rAF while hidden.
+        self.commit_dom_frame(window, false);
+        self.app.rt_mut().rest();
+    }
+
     /// Handles one DOM event. Returns whether a frame must be drawn: a page's scroll only draws
     /// when it moves the band (the browser's compositor scrolls the pixels Rune already drew).
     pub(super) fn input_event(&mut self, event: &mut serde_json::Value, window: &Arc<Window>) -> bool {
+        use web_math::platform_events::{self as pe, InitAction, VisibilityAction};
         if event["kind"].as_str() == Some("mods") {
             let next = crate::input::host_events::modifiers_from_flags(
                 event["shift"].as_bool().unwrap_or(false),
@@ -315,19 +382,12 @@ impl Running {
         }
         if event["kind"].as_str() == Some("pointer_cancel") {
             let lost_capture = event["lost_capture"].as_bool().unwrap_or(false);
-            if !crate::input::host_events::pointer_cancel(
-                self.app.rt_mut(),
-                &mut self.input.control_click,
-                lost_capture,
-            ) {
+            if !crate::input::host_events::pointer_cancel(self.app.rt_mut(), &mut self.input.control_click, lost_capture) {
                 return false;
             }
             self.full_redraw = true;
             self.cursor.apply(window, crate::el::Cursor::Default, false);
-            self.app.frame(0.0);
-            self.apply_frame_requests(window);
-            self.clipboard.flush_core(self.app.rt_mut());
-            self.sync_input(false);
+            self.commit_dom_frame(window, false);
             return true;
         }
         match event["kind"].as_str() {
@@ -351,10 +411,7 @@ impl Running {
                 let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
                 if !self.app.confirm_touch_hold(attempt) { return false; }
                 self.full_redraw = true;
-                self.app.frame(0.0);
-                self.apply_frame_requests(window);
-                self.clipboard.flush_core(self.app.rt_mut());
-                self.sync_input(false);
+                self.commit_dom_frame(window, false);
                 return true;
             }
             Some("touch_hold") => {
@@ -366,10 +423,7 @@ impl Running {
                     crate::input::time::record_last(now);
                 }
                 self.full_redraw = true;
-                self.app.frame(0.0);
-                self.apply_frame_requests(window);
-                self.clipboard.flush_core(self.app.rt_mut());
-                self.sync_input(false);
+                self.commit_dom_frame(window, false);
                 return true;
             }
             _ => {}
@@ -383,116 +437,44 @@ impl Running {
         let _input = event["kind"].as_str().is_some_and(crate::input::time::is_web_dom_input)
             .then(crate::input::time::arrived_now);
         match event["kind"].as_str() {
-            Some("viewport") => {
-                let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
-                let h = event["h"].as_f64().unwrap_or(0.0).max(0.0) as f32;
-                let visual = event["visual"].as_array().and_then(|v| {
-                    let (top, bottom, layout_h) = (v.first()?.as_f64()? as f32, v.get(1)?.as_f64()? as f32, v.get(2)?.as_f64()? as f32);
-                    (layout_h > 0.0 && bottom > top).then_some([top, bottom, layout_h])
-                });
-                let visual_y = visual
-                    .filter(|&[top, bottom, layout_h]| top > 1.0 || layout_h - bottom > 1.0)
-                    .map(|[top, bottom, _]| (top, bottom));
-                let visual_moved = self.input.visual_viewport != visual;
-                if visual_moved {
-                    self.input.visual_viewport = visual;
-                    self.app.rt_mut().set_visual_viewport_y(visual_y);
-                }
-                // A phone reports the visual viewport on every scroll frame as its toolbar moves;
-                // skip work unless safe area, largest viewport, or visual keyboard band moved.
-                let moved = LARGE_VIEWPORT.replace(h) != h;
-                let insets_moved = INSETS.replace(insets) != insets;
-                if !insets_moved && !moved {
-                    if !visual_moved { return false; }
-                    if self.app.rt().web_has_editable_focus() {
-                        if visual_y.is_some() { self.app.rt_mut().request_caret_follow(); }
-                    } else {
-                        self.input.visual_viewport_sent = visual;
-                        let [top, bottom, layout_h] = visual.unwrap_or([0.0; 3]);
-                        sync_visual_viewport(&self.input.handle, top, bottom, layout_h);
-                        return false;
-                    }
-                } else {
-                    if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
-                    self.app.rt_mut().invalidate();
+            // Startup snapshot combining viewport, motion, primary pointer, contrast, focus and
+            // visibility so cold boot runs at most one synchronous `app.frame(0.0)` pass.
+            Some("init") => {
+                let viewport_changed = self.apply_viewport(event, window);
+                let pointer_changed = self.apply_primary_pointer(event);
+                let init = self.app.apply_init(&self.shared, event, viewport_changed, pointer_changed);
+                self.finish_focus(init.focus, window);
+                if init.clear_presented { self.last_presented = None; }
+                match init.action {
+                    InitAction::CommitHidden => { self.commit_hidden(window); return false; }
+                    InitAction::CommitFrame => {}
+                    InitAction::NoOp => return false,
                 }
             }
+            Some("viewport") => if !self.apply_viewport(event, window) { return false; },
             Some("dpr") => {
                 let size = window.inner_size();
                 let scale = event["scale"].as_f64().unwrap_or_else(|| window.scale_factor()).max(0.5) as f32;
                 self.resize_surface(window, size, scale);
             }
-            Some("motion") => self.app.rt_mut().set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false)),
-            Some("languages") => {
-                let langs = event["languages"].as_array().map(|list| {
-                    list.iter().filter_map(|v| v.as_str()).map(str::to_owned).collect::<Vec<_>>()
-                }).unwrap_or_default();
-                self.app.rt_mut().set_languages(langs);
-            }
+            Some("motion") => if !pe::apply_motion(self.app.rt_mut(), event) { return false; },
+            Some("languages") => if !pe::apply_languages(self.app.rt_mut(), event) { return false; },
             // The primary pointer can or can't hover (a mouse or a touch screen), read by views
             // through `Cx::hover_none`.
-            Some("primary_pointer") => {
-                let pointer = match (event["hover"].as_bool(), event["coarse"].as_bool()) {
-                    (Some(false), Some(true)) => PrimaryPointer::Touch,
-                    (Some(false), _) => PrimaryPointer::NoHover,
-                    _ => PrimaryPointer::Hover,
-                };
-                if PRIMARY_POINTER.replace(pointer) == pointer { return false; }
-                self.app.rt_mut().invalidate();
-            }
-            // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes:
-            // Canvas, CanvasText, Highlight, HighlightText, GrayText, ButtonFace, ButtonText, LinkText.
-            Some("contrast") => {
-                let colors: Option<Vec<crate::Color>> = event["colors"].as_array().map(|list| list.iter().map(|c| {
-                    let d = |i: usize| crate::color::srgb_decode(c[i].as_f64().unwrap_or(0.0) as f32 / 255.0);
-                    crate::Color { r: d(0), g: d(1), b: d(2), a: 1.0 }
-                }).collect());
-                let contrast = colors.filter(|c| c.len() == 8).map(|c| crate::SystemContrast {
-                    window: c[0], text: c[1], highlight: c[2], highlight_text: c[3], disabled: c[4], button: c[5], button_text: c[6], link: c[7],
-                });
-                self.app.rt_mut().set_system_contrast(contrast);
-            }
+            Some("primary_pointer") => if !self.apply_primary_pointer(event) { return false; },
+            // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes.
+            Some("contrast") => if !pe::apply_contrast(self.app.rt_mut(), event) { return false; },
             Some("focus") => {
-                let focused = event["focused"].as_bool().unwrap_or(false);
-                self.app.window_focus(focused);
-                if !focused {
-                    self.input.mods = ModifiersState::empty();
-                    self.input.control_click = false;
-                    self.cursor.apply(window, crate::el::Cursor::Default, false);
-                }
+                let focus = self.app.apply_focus(event);
+                self.finish_focus(focus, window);
+                if !focus.changed { return false; }
             }
-            Some("visibility") => {
-                let visible = event["visible"].as_bool().unwrap_or(false);
-                let was_visible = self.shared.is_visible();
-                self.last_presented = None;
-                self.shared.set_visible(visible);
-                self.app.set_live_visible(visible);
-                if !visible {
-                    crate::input::host_events::hide_reset(
-                        self.app.rt_mut(),
-                        &mut self.input.mods,
-                        &mut self.input.control_click,
-                    );
-                    hide_menu(&self.input.handle);
-                    self.app.resolve_popup(None).ok();
-                    self.cursor.apply(window, crate::el::Cursor::Default, false);
-                    // Commit cancellation, FocusLost, FinishIme and poll now: browsers pause rAF
-                    // while the tab is hidden.
-                    self.app.frame(0.0);
-                    self.apply_frame_requests(window);
-                    self.clipboard.flush_core(self.app.rt_mut());
-                    self.sync_input(false);
-                    self.app.rt_mut().rest();
-                    return false;
-                }
-                if !was_visible {
-                    self.app.rt_mut().settle_all();
-                }
-                if event["focused"].as_bool().unwrap_or(false) {
-                    self.app.window_focus(true);
-                }
-                return true;
-            }
+            Some("visibility") => match self.app.apply_visibility(&self.shared, event) {
+                VisibilityAction::NoOp => return false,
+                VisibilityAction::Redraw => return true,
+                VisibilityAction::Hide => { self.last_presented = None; self.commit_hidden(window); return false; }
+                VisibilityAction::Show => { self.last_presented = None; return true; }
+            },
             Some("leave") => {
                 if self.app.rt().touching() || self.app.rt().pointer_locked() { return false; }
                 self.app.rt_mut().pointer_leave();

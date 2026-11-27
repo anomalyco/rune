@@ -132,7 +132,9 @@ test('viewport keeps GPU and CPU canvases at layout-viewport CSS bounds while re
     assert.equal(over.style.height, '100%');
     assert.equal(cpu.style.width, '100%');
     assert.equal(cpu.style.height, '100%');
-    assert.deepEqual(events.find(e => e.kind === 'viewport')?.visual, [0, 699, 699]);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].kind, 'init');
+    assert.deepEqual(events[0].visual, [0, 699, 699]);
 
     // Keyboard presentation on iOS Safari shrinks visualViewport (699 -> 389 -> 362) while leaving
     // the layout viewport untouched: neither canvas CSS box may shrink or shift.
@@ -415,4 +417,92 @@ test('setCursor applies CSS cursor keywords for one-way resize, alias, and copy 
     }
     platform.setCursor(canvas, '');
     assert.equal(canvas.style.cursor, '');
+});
+
+test('viewport startup microtask emits one combined init snapshot, respects dispose, and keeps live events separate', async () => {
+    const { doc, win, body } = installDom({ width: 390, height: 844 });
+    const queries = new Map();
+    Object.defineProperty(globalThis, 'matchMedia', {
+        value: (query) => {
+            const target = Object.assign(new FakeEventTarget(), {
+                matches: query === '(prefers-reduced-motion: reduce)'
+                    || query === '(hover: none)'
+                    || query === '(pointer: coarse)'
+                    || query === '(forced-colors: active)',
+            });
+            queries.set(query, target);
+            return target;
+        },
+        configurable: true,
+    });
+    const palette = {
+        Canvas: 'rgb(1, 2, 3)',
+        CanvasText: 'rgb(4, 5, 6)',
+        Highlight: 'rgb(7, 8, 9)',
+        HighlightText: 'rgb(10, 11, 12)',
+        GrayText: 'rgb(13, 14, 15)',
+        ButtonFace: 'rgb(16, 17, 18)',
+        ButtonText: 'rgb(19, 20, 21)',
+        LinkText: 'rgb(22, 23, 24)',
+    };
+    Object.defineProperty(globalThis, 'getComputedStyle', {
+        value: (el) => ({
+            paddingTop: '12',
+            paddingRight: '0',
+            paddingBottom: '34',
+            paddingLeft: '0',
+            color: palette[el.style.color] ?? 'rgb(0, 0, 0)',
+        }),
+        configurable: true,
+    });
+    doc.hidden = true;
+    doc.hasFocus = () => false;
+
+    const canvas = doc.createElement('canvas');
+    body.append(canvas);
+    const events = [];
+    const dispose = platform.viewport(canvas, msg => events.push(JSON.parse(msg)), false);
+    assert.equal(events.length, 0, 'startup snapshot must defer until the microtask');
+    await Promise.resolve();
+
+    assert.deepEqual(events, [{
+        kind: 'init',
+        h: 844,
+        insets: [12, 0, 34, 0],
+        visual: [0, 844, 844],
+        reduced: true,
+        hover: false,
+        coarse: true,
+        colors: [
+            [1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12],
+            [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24],
+        ],
+        focused: false,
+        visible: false,
+    }]);
+
+    // Ongoing listener events continue to emit their individual kinds.
+    events.length = 0;
+    queries.get('(prefers-reduced-motion: reduce)').matches = false;
+    queries.get('(prefers-reduced-motion: reduce)').dispatchEvent({ type: 'change' });
+    queries.get('(forced-colors: active)').matches = false;
+    queries.get('(forced-colors: active)').dispatchEvent({ type: 'change' });
+    doc.hidden = false;
+    doc.hasFocus = () => true;
+    win.dispatchEvent({ type: 'focus' });
+    doc.dispatchEvent({ type: 'visibilitychange' });
+    assert.deepEqual(events, [
+        { kind: 'motion', reduced: false },
+        { kind: 'contrast', colors: null },
+        { kind: 'focus', focused: true },
+        { kind: 'visibility', visible: true, focused: true },
+    ]);
+    dispose();
+
+    // Disposing before the startup microtask fires suppresses the init callback.
+    const canceled = [];
+    const disposeEarly = platform.viewport(canvas, msg => canceled.push(JSON.parse(msg)), false);
+    disposeEarly();
+    await Promise.resolve();
+    assert.deepEqual(canceled, []);
 });

@@ -473,7 +473,7 @@ pub(crate) fn script_input(
     (x, y): (f32, f32),
 ) -> bool {
     match kind {
-        Kind::Focus(focused) => core.window_focus(app, *focused),
+        Kind::Focus(focused) => { core.window_focus(app, *focused); }
         Kind::Move => core.pointer_move(app, x, y),
         Kind::PointerMotion(dx, dy) => core.pointer_motion(*dx, *dy),
         Kind::Down => core.pointer_down(app, x, y),

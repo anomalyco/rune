@@ -119,10 +119,6 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.poll_hidden(app))
     }
 
-    pub(super) fn set_live_visible(&mut self, visible: bool) {
-        self.driver(|rt, app| rt.set_live_visible(app, visible));
-    }
-
     pub(super) fn clock_advance(&mut self, clock: &mut FrameClock, at: Instant, compositing: bool) -> (bool, f64) {
         self.driver(|rt, app| clock.advance_core(rt, app, at, compositing))
     }
@@ -135,8 +131,31 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.copy_text(app))
     }
 
-    pub(super) fn window_focus(&mut self, focused: bool) {
-        self.driver(|rt, app| rt.window_focus(app, focused));
+    pub(super) fn apply_init(
+        &mut self,
+        shared: &SharedCore,
+        event: &serde_json::Value,
+        viewport_changed: bool,
+        pointer_changed: bool,
+    ) -> super::web_math::platform_events::InitOutcome {
+        self.driver(|rt, app| {
+            super::web_math::platform_events::apply_init(rt, app, shared, event, viewport_changed, pointer_changed)
+        })
+    }
+
+    pub(super) fn apply_focus(
+        &mut self,
+        event: &serde_json::Value,
+    ) -> super::web_math::platform_events::FocusChange {
+        self.driver(|rt, app| super::web_math::platform_events::apply_focus(rt, app, event))
+    }
+
+    pub(super) fn apply_visibility(
+        &mut self,
+        shared: &SharedCore,
+        event: &serde_json::Value,
+    ) -> super::web_math::platform_events::VisibilityAction {
+        self.driver(|rt, app| super::web_math::platform_events::apply_visibility(rt, app, shared, event))
     }
 
     pub(super) fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> {

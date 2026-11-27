@@ -434,7 +434,7 @@ export function viewport(canvas, callback, embedded) {
     // when the virtual keyboard opens. Leaving the canvas at the layout viewport prevents squash
     // distortion and spurious relayouts; instead report the unzoomed visual viewport's vertical
     // band so Rune can scroll or shift only the focused field into view.
-    const update = () => {
+    const readViewport = () => {
         const s = getComputedStyle(probe);
         const layoutH = Number.isFinite(innerHeight) && innerHeight > 0 ? innerHeight : 0;
         const v = window.visualViewport;
@@ -446,10 +446,13 @@ export function viewport(canvas, callback, embedded) {
             const bottom = Math.min(layoutH, top + vh);
             if (bottom > top) visual = [top, bottom, layoutH];
         }
-        callback(JSON.stringify({ kind: 'viewport', h: largest.offsetHeight || innerHeight,
+        return {
+            h: largest.offsetHeight || innerHeight,
             insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat),
-            visual }));
+            visual,
+        };
     };
+    const update = () => callback(JSON.stringify({ kind: 'viewport', ...readViewport() }));
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
     // A primary pointer that can't hover (a touch screen): `Cx::hover_none`.
@@ -459,8 +462,8 @@ export function viewport(canvas, callback, embedded) {
     // A contrast theme (Windows' Contrast themes): `forced-colors`, and its system colours read
     // off a probe, as sRGB bytes, for `Cx::system_contrast`.
     const forced = matchMedia('(forced-colors: active)');
-    const contrast = () => {
-        if (!forced.matches) { callback(JSON.stringify({ kind: 'contrast', colors: null })); return; }
+    const readContrast = () => {
+        if (!forced.matches) return null;
         const swatch = document.createElement('span');
         swatch.style.cssText = 'position:fixed;visibility:hidden;forced-color-adjust:none';
         document.body.append(swatch);
@@ -469,8 +472,9 @@ export function viewport(canvas, callback, embedded) {
             return (getComputedStyle(swatch).color.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map(Number);
         });
         swatch.remove();
-        callback(JSON.stringify({ kind: 'contrast', colors }));
+        return colors;
     };
+    const contrast = () => callback(JSON.stringify({ kind: 'contrast', colors: readContrast() }));
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
     const languageChange = () => callback(JSON.stringify({ kind: 'languages', languages: preferredLanguages() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden, focused: document.hasFocus() }));
@@ -501,9 +505,24 @@ export function viewport(canvas, callback, embedded) {
     window.addEventListener('blur', focus);
     window.addEventListener('languagechange', languageChange);
     document.addEventListener('visibilitychange', visibility);
-    // Mount is called while Rust is installing the shell; enter it only after installation.
-    queueMicrotask(() => { update(); reduced(); pointer(); contrast(); focus(); visibility(); });
+    let disposed = false;
+    // Mount is called while Rust is installing the shell; enter it once after installation with a
+    // single snapshot instead of six separate callbacks.
+    queueMicrotask(() => {
+        if (disposed) return;
+        callback(JSON.stringify({
+            kind: 'init',
+            ...readViewport(),
+            reduced: motion.matches,
+            hover: !hoverNone.matches,
+            coarse: coarse.matches,
+            colors: readContrast(),
+            focused: document.hasFocus(),
+            visible: !document.hidden,
+        }));
+    });
     return () => {
+        disposed = true;
         dprMedia?.removeEventListener('change', onDpr);
         window.visualViewport?.removeEventListener('resize', update);
         window.visualViewport?.removeEventListener('scroll', update);
