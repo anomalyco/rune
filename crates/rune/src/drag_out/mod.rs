@@ -76,11 +76,35 @@ pub struct DragItem {
     operations: u8,
     backing: Option<Color>,
     within_app: bool,
+    on_image: ImageSink,
 }
 
 impl Default for DragItem {
     fn default() -> Self {
-        Self { files: Vec::new(), png: None, text: None, custom: Vec::new(), image: None, operations: DragOperation::Copy.bit(), backing: None, within_app: false }
+        Self { files: Vec::new(), png: None, text: None, custom: Vec::new(), image: None, operations: DragOperation::Copy.bit(), backing: None, within_app: false, on_image: ImageSink::default() }
+    }
+}
+
+/// What [`DragItem::on_image`] runs.
+type ImageFn = Arc<dyn Fn(&DragImage) + Send + Sync>;
+
+/// [`DragItem::on_image`]'s callback, if any; items holding the same one compare equal.
+#[derive(Clone, Default)]
+struct ImageSink(Option<ImageFn>);
+
+impl std::fmt::Debug for ImageSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "ImageSink(Some(..))" } else { "ImageSink(None)" })
+    }
+}
+
+impl PartialEq for ImageSink {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
     }
 }
 
@@ -162,6 +186,30 @@ impl DragItem {
     pub fn image(mut self, image: DragImage) -> Self {
         self.image = Some(image);
         self
+    }
+
+    /// Runs `f` once as the session starts, on the UI thread, with the picture the drag shows:
+    /// the item's own [`DragItem::image`], else the element's snapshot. Not run when there is
+    /// neither (no GPU to take the snapshot) or the session never starts. An app keeps the
+    /// picture this way, say as the icon of the file the drag carries, written before the drop.
+    ///
+    /// ```
+    /// # use rune::DragItem;
+    /// let item = DragItem::new().text("row").on_image(|image| { let _png = image.png_data(); });
+    /// assert!(!item.is_empty());
+    /// ```
+    pub fn on_image(mut self, f: impl Fn(&DragImage) + Send + Sync + 'static) -> Self {
+        self.on_image = ImageSink(Some(Arc::new(f)));
+        self
+    }
+
+    /// Hands [`DragItem::on_image`] the picture the session shows: the item's own, else
+    /// `snapshot`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn image_shown(&self, snapshot: Option<&DragImage>) {
+        if let (Some(f), Some(image)) = (&self.on_image.0, self.image.as_ref().or(snapshot)) {
+            f(image);
+        }
     }
 
     /// Show the drag image composited over `color`, so it's opaque even where the element or

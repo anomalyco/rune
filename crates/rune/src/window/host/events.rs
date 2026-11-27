@@ -910,6 +910,7 @@ fn begin_host_drag_out(
     let image = gpu.filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)| {
         crate::drag_out::snapshot(gpu, renderer, (l.config.width, l.config.height), scale, rt.clear_color(), start.rect)
     });
+    start.item.image_shown(image.as_ref());
     let (sink, path) = (rt.drag_end_sink(), start.path.clone());
     let handle = native_handle.clone();
     crate::drag_out::begin(&l.window, start, image, Box::new(move |outcome| {

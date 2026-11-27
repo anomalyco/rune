@@ -188,6 +188,7 @@ impl OverlayCore {
                 crate::drag_out::snapshot(gpu, renderer, (live.config.width, live.config.height), live.scale, rt.clear_color(), start.rect),
             _ => None,
         };
+        start.item.image_shown(image.as_ref());
         let wake = self.shared.wake.lock().unwrap().clone();
         crate::drag_out::begin(&window, start, image, Box::new(move |outcome| {
             sink.borrow_mut().push((path, outcome));
