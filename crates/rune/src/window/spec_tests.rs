@@ -592,6 +592,27 @@ fn app_and_window_spec_cpu_first_default_auto_and_retain_builder_value() {
 }
 
 #[test]
+fn app_and_window_spec_keyboard_dispatch_default_batched_and_retain_per_window_value() {
+    let spec = || AppSpec::new("transport", (800.0, 520.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).keyboard_dispatch, crate::KeyboardDispatch::Batched);
+    assert_eq!(WindowSpec::new("main", spec()).app.keyboard_dispatch, crate::KeyboardDispatch::Batched);
+
+    let app_imm = App::new(spec()).keyboard_dispatch(crate::KeyboardDispatch::Immediate);
+    assert_eq!(app_imm.keyboard_dispatch, crate::KeyboardDispatch::Immediate);
+    let from_app = WindowSpec::from_app("main", app_imm);
+    assert_eq!(from_app.app.keyboard_dispatch, crate::KeyboardDispatch::Immediate);
+
+    let win_a = WindowSpec::new("a", spec()).keyboard_dispatch(crate::KeyboardDispatch::Immediate);
+    let win_b = WindowSpec::new("b", spec()).keyboard_dispatch(crate::KeyboardDispatch::Batched);
+    assert_eq!(win_a.app.keyboard_dispatch, crate::KeyboardDispatch::Immediate);
+    assert_eq!(win_b.app.keyboard_dispatch, crate::KeyboardDispatch::Batched);
+    let kept = win_a.options(WindowOptions::default());
+    assert_eq!(kept.app.keyboard_dispatch, crate::KeyboardDispatch::Immediate);
+    let reset = kept.keyboard_dispatch(crate::KeyboardDispatch::Batched);
+    assert_eq!(reset.app.keyboard_dispatch, crate::KeyboardDispatch::Batched);
+}
+
+#[test]
 fn app_and_window_spec_resize_sync_default_auto_and_retain_per_window_value() {
     let spec = || AppSpec::new("settings", (620.0, 520.0), || (), |_, _| crate::el());
     assert_eq!(App::new(spec()).resize_sync, crate::ResizeSync::Auto);

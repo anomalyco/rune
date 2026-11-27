@@ -76,6 +76,16 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| clock.advance_core(rt, app, at, compositing))
     }
 
+    pub(super) fn immediate_keyboard_step(
+        &mut self,
+        policy: crate::KeyboardDispatch,
+        clock: &mut FrameClock,
+        now: Instant,
+        compositing: bool,
+    ) -> bool {
+        self.driver(|rt, app| crate::window::step_immediate_core(policy, rt, app, clock, now, compositing))
+    }
+
     pub(super) fn poll_hidden_for_wake(&mut self) -> bool {
         self.driver(|rt, app| rt.poll_hidden_or_arm_follow_up(app).1)
     }
@@ -346,7 +356,7 @@ fn build_parts<S, T: 'static>(
 ) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
-        macos_level, macos_color_space, window_backdrop, frame_latency, on_materials, animate_reveal, release_after, renderer,
+        macos_level, macos_color_space, window_backdrop, frame_latency, keyboard_dispatch, on_materials, animate_reveal, release_after, renderer,
         sizing, min_size, max_size,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
@@ -386,6 +396,7 @@ fn build_parts<S, T: 'static>(
         release_after,
     );
     core.frame_latency = frame_latency;
+    core.keyboard_dispatch = keyboard_dispatch;
     core.on_materials = on_materials;
     core.requested_renderer = renderer;
     core.sizing = super::sizing::SizingConfig { mode: sizing, min_size, max_size };
@@ -604,6 +615,10 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn take_window_requests(&mut self) { self.core.take_window_requests(self.rt.core_mut()) }
     pub(super) fn settle_before_reveal(&mut self) { self.core.settle_before_reveal(self.rt.core_mut()) }
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
+    #[cfg(test)]
+    pub(super) fn dispatch_immediate_keyboard(&mut self) -> bool {
+        with_app!(self, |core, app| core.dispatch_immediate_keyboard(&mut app))
+    }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
     #[cfg(test)]

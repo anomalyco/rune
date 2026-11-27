@@ -412,20 +412,28 @@ impl AnyHost for OverlayHost {
                 core.dirty = true;
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys.takes_keys() => {
-                if event.state == winit::event::ElementState::Pressed
+                let queued = if event.state == winit::event::ElementState::Pressed
                     && let Some(window) = core.live_window().cloned()
                     && let Some(text) = crate::platform::ime::take_direct_commit(&window)
                 {
                     host_events::ime(app.rt_mut(), &window, &mut core.ime, winit::event::Ime::Commit(text));
-                    core.dirty = true;
+                    true
                 } else {
-                    core.dirty |= app.keyboard(&event, core.mods);
+                    app.keyboard(&event, core.mods)
+                };
+                if queued {
+                    core.dirty = true;
+                    core.dispatch_immediate_keyboard(app);
                 }
             }
             WindowEvent::Ime(ime) if core.options.keys.takes_keys() => {
+                let is_commit = matches!(ime, winit::event::Ime::Commit(_));
                 if let Some(window) = core.live_window().cloned() {
                     host_events::ime(app.rt_mut(), &window, &mut core.ime, ime);
                     core.dirty = true;
+                    if is_commit {
+                        core.dispatch_immediate_keyboard(app);
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {

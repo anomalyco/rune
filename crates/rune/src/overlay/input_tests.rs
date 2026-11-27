@@ -746,3 +746,67 @@ fn occluded_and_hidden_overlay_wakes_deliver_poll_keys_once_with_poll_clock_and_
     assert_eq!(overlay.rt.state.clicks, 1);
     assert!(!overlay.rt.has_input_waiting());
 }
+
+#[test]
+fn overlay_immediate_keyboard_dispatch_respects_policy_and_key_policy() {
+    use crate::overlay::{Overlay, Presence};
+    use crate::{AppSpec, Key, KeyEvent, KeyPolicy, Mods, OverlayOptions, OverlaySpec, el};
+
+    let app = AppSpec::new("app", (400.0, 200.0), || (), |_, _| el());
+
+    // 1. Default Batched policy does not drain immediately.
+    let batched_spec = OverlaySpec::new("ov-batched", app.size, |_: &Vec<Key>, _| el().size(200.0, 80.0))
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+        .on_key(|keys, ev, _| {
+            keys.push(ev.key.clone());
+            true
+        });
+    assert_eq!(batched_spec.keyboard_dispatch, crate::KeyboardDispatch::Batched);
+    let (mut batched, _h) = Overlay::new(batched_spec, Vec::new(), &app);
+    batched.presence = Presence::Shown { occluded: false };
+    batched.rt.frame(0.0);
+    batched.rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    assert!(!batched.dispatch_immediate_keyboard());
+    assert!(batched.rt.state.is_empty());
+    assert!(batched.rt.has_input_waiting());
+
+    // 2. Immediate policy with KeyPolicy::None still does not drain (overlay does not take keys).
+    let no_keys_spec = OverlaySpec::new("ov-no-keys", app.size, |_: &Vec<Key>, _| el().size(200.0, 80.0))
+        .options(OverlayOptions { keys: KeyPolicy::None, ..Default::default() })
+        .keyboard_dispatch(crate::KeyboardDispatch::Immediate)
+        .on_key(|keys, ev, _| {
+            keys.push(ev.key.clone());
+            true
+        });
+    let (mut no_keys, _h) = Overlay::new(no_keys_spec, Vec::new(), &app);
+    no_keys.presence = Presence::Shown { occluded: false };
+    no_keys.rt.frame(0.0);
+    no_keys.rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    assert!(!no_keys.dispatch_immediate_keyboard());
+    assert!(no_keys.rt.state.is_empty());
+
+    // 3. Immediate policy with KeyPolicy::OnDemand drains immediately without double delivery
+    //    and marks the overlay dirty / non-idle for the next paced draw.
+    let imm_spec = OverlaySpec::new("ov-imm", app.size, |_: &Vec<Key>, _| el().size(200.0, 80.0))
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+        .keyboard_dispatch(crate::KeyboardDispatch::Immediate)
+        .on_key(|keys, ev, _| {
+            keys.push(ev.key.clone());
+            true
+        });
+    let (mut imm, _h) = Overlay::new(imm_spec, Vec::new(), &app);
+    imm.presence = Presence::Shown { occluded: false };
+    imm.idle = true;
+    imm.dirty = false;
+    imm.rt.frame(0.0);
+    imm.rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+    assert!(imm.dispatch_immediate_keyboard());
+    assert_eq!(imm.rt.state, vec![Key::Enter]);
+    assert!(!imm.rt.has_input_waiting());
+    assert!(imm.dirty && !imm.idle, "overlay stays dirty so the next paced frame presents");
+
+    // Next paced frame must not redeliver the Enter key.
+    let next = crate::time::now() + std::time::Duration::from_millis(16);
+    imm.step_frame(next, false);
+    assert_eq!(imm.rt.state, vec![Key::Enter]);
+}

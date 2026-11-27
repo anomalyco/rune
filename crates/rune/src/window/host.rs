@@ -108,6 +108,7 @@ pub(in crate::window) struct Host {
     pub(in crate::window) release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) cpu_first: crate::CpuFirst,
+    pub(in crate::window) keyboard_dispatch: crate::KeyboardDispatch,
     #[cfg(target_os = "windows")]
     pub(in crate::window) resize_sync: crate::ResizeSync,
     /// Per-window terminal GPU-loss state (`App::gpu_loss_policy`).
@@ -248,6 +249,7 @@ struct HostInit {
     release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     cpu_first: crate::CpuFirst,
+    keyboard_dispatch: crate::KeyboardDispatch,
     #[cfg(target_os = "windows")]
     resize_sync: crate::ResizeSync,
     gpu_loss_policy: crate::GpuLossPolicy,
@@ -306,6 +308,7 @@ impl Host {
         let gpu_loss_latch = app.gpu_loss_latch.take();
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let cpu_first = app.cpu_first;
+        let keyboard_dispatch = app.keyboard_dispatch;
         #[cfg(target_os = "windows")]
         let resize_sync = app.resize_sync;
         let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
@@ -373,6 +376,7 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            keyboard_dispatch,
             #[cfg(target_os = "windows")]
             resize_sync,
             gpu_loss_policy,
@@ -429,6 +433,7 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            keyboard_dispatch,
             #[cfg(target_os = "windows")]
             resize_sync,
             gpu_loss_policy,
@@ -568,6 +573,7 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            keyboard_dispatch,
             #[cfg(target_os = "windows")]
             resize_sync,
             terminal_loss,

@@ -727,26 +727,44 @@ impl OverlayCore {
             Input::Key(key) => {
                 if matches!(key.key, crate::Key::Media(_)) && !app.rt().media_keys() { return; }
                 app.rt_mut().key(key);
+                self.dirty = true;
+                self.dispatch_immediate_keyboard(app);
+                return;
             }
             Input::KeyRepeat(key) => {
                 if matches!(key.key, crate::Key::Media(_)) && !app.rt().media_keys() { return; }
                 app.rt_mut().repeat_key(key);
+                self.dirty = true;
+                self.dispatch_immediate_keyboard(app);
+                return;
             }
             Input::KeyUp(key) => {
-                self.dirty |= app.key_up(key);
+                if app.key_up(key) {
+                    self.dirty = true;
+                    self.dispatch_immediate_keyboard(app);
+                }
                 return;
             }
             Input::Physical(event, fallback) => {
                 let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || app.rt().wants_key_up();
                 let media_keys = app.rt().media_keys();
-                self.dirty |= app.physical_with_fallback(
+                if app.physical_with_fallback(
                     event,
                     fallback.filter(|ev| keep && (media_keys || !matches!(ev.key, crate::Key::Media(_)))),
-                );
+                ) {
+                    self.dirty = true;
+                    self.dispatch_immediate_keyboard(app);
+                }
                 return;
             }
             Input::Ime(ime) if self.options.keys.takes_keys() => {
+                let is_commit = matches!(ime, crate::Ime::Commit(_));
                 deliver_layer_ime(app.rt_mut(), &mut self.ime, ime);
+                self.dirty = true;
+                if is_commit {
+                    self.dispatch_immediate_keyboard(app);
+                }
+                return;
             }
             Input::Ime(_) => return,
         }
@@ -763,7 +781,7 @@ impl OverlayCore {
 
     /// Syncs OS IME allowance and cursor area for overlays that accept on-demand keyboard focus.
     /// Returns true when the sync queued an immediate IME state event for the runtime.
-    fn sync_ime(&mut self, app: &mut dyn OverlayApp) -> bool {
+    pub(super) fn sync_ime(&mut self, app: &mut dyn OverlayApp) -> bool {
         if !self.options.keys.takes_keys() { return false; }
         let Some(live) = self.surface.live_mut() else { return false };
         match &mut live.backing {

@@ -489,6 +489,7 @@ pub use video::Thumbnails;
 pub use video::Video;
 pub use window::ColorScheme;
 pub use window::CpuFirst;
+pub use window::KeyboardDispatch;
 pub use window::ResizeSync;
 pub use window::WindowBackdrop;
 pub use window::WindowHandle;

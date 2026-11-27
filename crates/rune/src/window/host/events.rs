@@ -11,7 +11,7 @@ use super::stepping::FrameMove;
 use super::{Host, WindowApp};
 use crate::app::Shared;
 use crate::input::host_events;
-use crate::window::chrome::{self, sync_chrome_core};
+use crate::window::chrome::{self, sync_chrome_core, sync_platform_core};
 #[cfg(target_os = "macos")]
 use crate::window::chrome::mac;
 use crate::window::file_drop::{FileDrop, FileStep};
@@ -56,8 +56,71 @@ impl Host {
         self.shell(event_loop);
     }
 
+    /// Drains queued keyboard input immediately without acquiring, encoding, or presenting a
+    /// drawable when [`KeyboardDispatch::Immediate`](crate::KeyboardDispatch::Immediate) is
+    /// active for this window. Visual presentation still waits for normal frame pacing.
+    pub(in crate::window) fn dispatch_immediate_keyboard(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let policy = self.keyboard_dispatch.effective();
+        if !policy.is_immediate() {
+            return false;
+        }
+        if self.poll_gpu_loss() || !self.started || self.life.finished() {
+            return false;
+        }
+        if !self.app.rt().has_input_waiting() {
+            return false;
+        }
+        let now = crate::time::now();
+        let compositing = self.app.compositor_animating();
+        if !self.app.immediate_keyboard_step(policy, &mut self.clock, now, compositing) {
+            return false;
+        }
+        // Clear resting-frame caches so the next paced draw presents the updated frame and
+        // cannot take quiet-timer, loop-only, macOS satisfied-paint, or stale handover skips.
+        self.idle = false;
+        if let Some(l) = self.win.as_mut() {
+            l.presented = None;
+            l.timer_frame.no_longer_quiet();
+            l.loop_frame.touched();
+            #[cfg(target_os = "windows")]
+            if let crate::window::win32::handover::SurfaceMode::HandingOver { done, readback, paused, since, .. } = &mut l.native.mode {
+                if !*paused { crate::marks::mark("gpu.window.paused"); }
+                (*done, *readback, *paused, *since) = (None, None, true, now);
+            }
+            if self.life.shown() {
+                sync_platform_core(
+                    l,
+                    self.app.rt_mut(),
+                    &mut self.secure_input,
+                    &mut self.ime,
+                    self.ime_waits,
+                    &self.clipboard,
+                );
+                crate::haptics::flush_live(self.app.rt_mut(), self.life.uncovered() && !l.minimized());
+                if self.app.rt_mut().take_urgent_frame() && !l.backing_off(now) {
+                    l.admit_urgent_frame();
+                }
+            } else {
+                self.clipboard.flush_core(self.app.rt_mut());
+                crate::haptics::flush_live(self.app.rt_mut(), false);
+            }
+        } else {
+            self.clipboard.flush_core(self.app.rt_mut());
+            crate::haptics::flush_live(self.app.rt_mut(), false);
+        }
+        self.shell(event_loop);
+        if !self.life.finished()
+            && !event_loop.exiting()
+            && !self.gpu_loss_failed()
+            && let Some(w) = self.win.as_ref().filter(|_| self.life.shown() || self.launcher())
+        {
+            w.request_redraw();
+        }
+        true
+    }
+
     #[cfg(target_os = "macos")]
-    pub(in crate::window) fn fn_key(&mut self) {
+    pub(in crate::window) fn fn_key(&mut self, event_loop: &ActiveEventLoop) {
         if self.poll_gpu_loss() { return; }
         let changes = {
             let Some(l) = &self.win else { return };
@@ -73,19 +136,26 @@ impl Host {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
-        if redraw && let Some(l) = &self.win { l.request_redraw(); }
+        if redraw && !self.dispatch_immediate_keyboard(event_loop) && let Some(l) = &self.win {
+            l.request_redraw();
+        }
     }
 
     #[cfg(target_os = "macos")]
-    pub(in crate::window) fn media_keys(&mut self) {
+    pub(in crate::window) fn media_keys(&mut self, event_loop: &ActiveEventLoop) {
         if self.poll_gpu_loss() { return; }
-        let Some(l) = &self.win else { return };
-        let Some(events) = l.native.media_keys.as_ref().map(|m| m.take()) else { return };
+        let events = {
+            let Some(l) = &self.win else { return };
+            let Some(events) = l.native.media_keys.as_ref().map(|m| m.take()) else { return };
+            events
+        };
         let mut redraw = false;
         for (decoded, mods) in events {
             redraw |= self.app.media_key(decoded, mods);
         }
-        if redraw { l.request_redraw(); }
+        if redraw && !self.dispatch_immediate_keyboard(event_loop) && let Some(l) = &self.win {
+            l.request_redraw();
+        }
     }
 
     /// Hands the runtime the file drag winit reported since the last pass, in order: the files
@@ -637,7 +707,9 @@ impl Host {
                 if pressed { crate::marks::input_arrived(true); }
                 if pressed && let Some(text) = crate::platform::ime::take_direct_commit(&l.window) {
                     host_events::ime(app.rt_mut(), &l.window, &mut self.ime, winit::event::Ime::Commit(text));
-                    l.request_redraw();
+                    if !self.dispatch_immediate_keyboard(event_loop) && let Some(l) = &self.win {
+                        l.request_redraw();
+                    }
                     return;
                 }
                 // A menu item handing Rune its key: it acts after, if no handler takes it. So does
@@ -647,13 +719,19 @@ impl Host {
                     logical.as_ref().filter(|ev| ev.is_window_menu_chord() && chrome::has_window_menu(&l.window))
                         .map(|_| crate::runtime::Unhandled::WindowMenu)
                 });
-                if app.keyboard(&event, self.mods, unhandled) {
+                if app.keyboard(&event, self.mods, unhandled)
+                    && !self.dispatch_immediate_keyboard(event_loop)
+                    && let Some(l) = &self.win
+                {
                     l.request_redraw();
                 }
             }
             WindowEvent::Ime(ime) => {
+                let is_commit = matches!(ime, winit::event::Ime::Commit(_));
                 host_events::ime(app.rt_mut(), &l.window, &mut self.ime, ime);
-                l.request_redraw();
+                if !(is_commit && self.dispatch_immediate_keyboard(event_loop)) && let Some(l) = &self.win {
+                    l.request_redraw();
+                }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 host_events::wheel(app.rt_mut(), delta, gesture_phase(phase), scale, self.mods);
