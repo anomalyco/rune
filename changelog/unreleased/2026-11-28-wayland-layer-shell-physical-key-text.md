@@ -1,0 +1,1 @@
+- Wayland layer-shell overlays now populate `PhysicalInput::Key::text` from XKB `key_get_utf8` / `keysym_to_utf8` (and compose outcomes) using the same rule as the window host, so `Ctrl+c`, `Ctrl+Shift+c`, `Alt+Enter`, `Escape`, and other control/command keys carry their text instead of `None`.

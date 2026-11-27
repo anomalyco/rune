@@ -79,7 +79,7 @@ const NO_KEY: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Unidentifie
 /// modifier-supplement text when it is non-empty and carries no control characters, falling back
 /// to `text` so Ctrl+letter chords (whose supplement is a control byte such as `"\x01"`) keep the
 /// key they name.
-fn pick_typed_text<'a>(with_all_mods: Option<&'a str>, text: Option<&'a str>) -> Option<&'a str> {
+pub(crate) fn pick_typed_text<'a>(with_all_mods: Option<&'a str>, text: Option<&'a str>) -> Option<&'a str> {
     with_all_mods
         .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
         .or(text)

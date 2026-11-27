@@ -151,12 +151,8 @@ impl State {
         };
         let mods = key_mods(xkb);
         let compose_action = keyboard::compose_action(pressed, repeat, mods);
-        let fallback = key_event(xkb, self.compose.for_key(compose_action), key, physical, pressed, repeat);
+        let (text, fallback) = key_event(xkb, self.compose.for_key(compose_action), key, physical, pressed, repeat);
         if let Some(code) = physical {
-            let text = match &fallback {
-                Some(crate::KeyEvent { key: crate::Key::Text(t), .. }) if pressed => Some(t.clone()),
-                _ => None,
-            };
             let consumed_mods = crate::window::consumed_from(false, mods, text.as_deref(), unmodified_text(xkb, key).as_deref());
             self.input.push(Input::Physical(
                 crate::PhysicalInput::Key { key: code, mods, pressed, repeat, text, consumed_mods },
@@ -433,7 +429,7 @@ fn key_event(
     physical: Option<crate::PhysicalKeyCode>,
     pressed: bool,
     repeat: bool,
-) -> Option<crate::KeyEvent> {
+) -> (Option<String>, Option<crate::KeyEvent>) {
     use xkbcommon::xkb;
     let code = xkb::Keycode::new(key + 8);
     let sym = state.key_get_one_sym(code);
@@ -446,8 +442,11 @@ fn key_event(
         }
         (_, keyboard::ComposeAction::Bypass) | (None, _) => keyboard::ComposeOutcome::Nothing,
     };
-    let text = state.key_get_utf8(code);
-    keyboard::key_event_with_compose(outcome, named_keysym(sym.raw()), xkb::keysym_to_utf32(sym), text, mods, physical)
+    let state_utf8 = state.key_get_utf8(code);
+    let sym_utf8 = xkb::keysym_to_utf8(sym);
+    let text = keyboard::physical_text(pressed, &outcome, &state_utf8, &sym_utf8);
+    let logical = keyboard::key_event_with_compose(outcome, named_keysym(sym.raw()), xkb::keysym_to_utf32(sym), state_utf8, mods, physical);
+    (text, logical)
 }
 
 /// The named key an XKB keysym is, or None for one that types (or nothing Rune names).

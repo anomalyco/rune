@@ -377,3 +377,87 @@ fn dead_key_compose_emits_composed_text_and_suppresses_composing_and_cancelled()
     assert_eq!(compose_locale(|k| match k { "LC_ALL" => Some("bad\0loc".into()), "LANG" => Some("en_US.UTF-8".into()), _ => None }), "en_US.UTF-8");
     assert_eq!(compose_locale(|_| None), "C");
 }
+
+#[test]
+fn physical_text_matches_window_host_for_chords_control_keys_and_compose() {
+    use super::keyboard::{ComposeOutcome, key_event_with_compose, physical_text};
+    use crate::window::consumed_from;
+    use crate::{Key, KeyEvent, Mods, PhysicalKeyCode};
+
+    let none = Mods::default();
+    let shift = Mods { shift: true, ..Default::default() };
+    let ctrl = Mods { ctrl: true, cmd: true, ..Default::default() };
+    let ctrl_shift = Mods { ctrl: true, cmd: true, shift: true, ..Default::default() };
+    let alt = Mods { alt: true, ..Default::default() };
+    let logo = Mods { logo: true, ..Default::default() };
+
+    // Plain, shifted, Alt, Super, AltGr, and layout-typed characters (including Persian ZWNJ).
+    for (label, mods, state_utf8, sym_utf8, unmodified, want_text, want_consumed) in [
+        ("a", none, "a", "a", Some("a"), Some("a"), none),
+        ("Shift+a", shift, "A", "A", Some("a"), Some("A"), shift),
+        ("Shift+2", shift, "@", "@", Some("2"), Some("@"), shift),
+        ("Alt+a", alt, "a", "a", Some("a"), Some("a"), none),
+        ("Super+a", logo, "a", "a", Some("a"), Some("a"), none),
+        ("no AltGr+8", none, "[", "[", Some("8"), Some("["), none),
+        ("ir Shift+Space ZWNJ", shift, "\u{200c}", "\u{200c}", Some(" "), Some("\u{200c}"), shift),
+        // Ctrl chords: xkb_state_key_get_utf8 returns a control byte, so sym_utf8 supplies the key's text.
+        ("Ctrl+c", ctrl, "\x03", "c", Some("c"), Some("c"), none),
+        ("Ctrl+Shift+c", ctrl_shift, "\x03", "C", Some("c"), Some("C"), none),
+        ("Ctrl+Space (NUL)", ctrl, "\0", " ", Some(" "), Some(" "), none),
+        ("Ctrl+Space (empty)", ctrl, "", " ", Some(" "), Some(" "), none),
+        ("Russian Ctrl+м", ctrl, "м", "м", Some("м"), Some("м"), none),
+        // Control keys keep their control text and consume no modifiers.
+        ("Alt+Enter", alt, "\r", "\r", None, Some("\r"), none),
+        ("Escape", none, "\u{1b}", "\u{1b}", None, Some("\u{1b}"), none),
+        ("Tab", none, "\t", "\t", None, Some("\t"), none),
+        ("Backspace", none, "\u{8}", "\u{8}", None, Some("\u{8}"), none),
+        ("Delete", none, "\u{7f}", "\u{7f}", None, Some("\u{7f}"), none),
+        // Shift+Tab (ISO_Left_Tab) and non-text keys carry None.
+        ("Shift+Tab", shift, "", "", None, None, none),
+        ("Arrow/F-key", none, "", "", None, None, none),
+    ] {
+        let text = physical_text(true, &ComposeOutcome::Nothing, state_utf8, sym_utf8);
+        assert_eq!(text.as_deref(), want_text, "{label}: physical text");
+        assert_eq!(consumed_from(false, mods, text.as_deref(), unmodified), want_consumed, "{label}: consumed_mods");
+        // Releases never carry text or consumed_mods.
+        assert_eq!(physical_text(false, &ComposeOutcome::Nothing, state_utf8, sym_utf8), None, "{label}: release");
+    }
+
+    // Logical fallback stays unchanged: Ctrl+c is Command('c'), Alt+Enter is Enter, Escape is Escape,
+    // and Russian Ctrl+м remaps to Command('v') while physical_text keeps "м".
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, None, 'c' as u32, "\x03".into(), ctrl, Some(PhysicalKeyCode::KeyC)),
+        Some(KeyEvent { key: Key::Command('c'), mods: ctrl })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, None, 'C' as u32, "\x03".into(), ctrl_shift, Some(PhysicalKeyCode::KeyC)),
+        Some(KeyEvent { key: Key::Command('c'), mods: ctrl_shift })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, Some(Key::Enter), '\r' as u32, "\r".into(), alt, Some(PhysicalKeyCode::Enter)),
+        Some(KeyEvent { key: Key::Enter, mods: alt })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, Some(Key::Escape), 0x1b, "\u{1b}".into(), none, Some(PhysicalKeyCode::Escape)),
+        Some(KeyEvent { key: Key::Escape, mods: none })
+    );
+    assert_eq!(
+        key_event_with_compose(ComposeOutcome::Nothing, None, 'м' as u32, "м".into(), ctrl, Some(PhysicalKeyCode::KeyV)),
+        Some(KeyEvent { key: Key::Command('v'), mods: ctrl })
+    );
+
+    // Dead-key compose: Composing and Cancelled produce None; Composed carries the composed string.
+    assert_eq!(physical_text(true, &ComposeOutcome::Composing, "", ""), None);
+    assert_eq!(physical_text(true, &ComposeOutcome::Composing, "a", "a"), None);
+    assert_eq!(physical_text(true, &ComposeOutcome::Cancelled, "q", "q"), None);
+    assert_eq!(physical_text(true, &ComposeOutcome::Cancelled, "\u{1b}", "\u{1b}"), None);
+    assert_eq!(physical_text(true, &ComposeOutcome::Composed(None), "a", "a"), None);
+    assert_eq!(physical_text(true, &ComposeOutcome::Composed(Some(String::new())), "a", "a"), None);
+    let composed = physical_text(true, &ComposeOutcome::Composed(Some("é".into())), "e", "e");
+    assert_eq!(composed.as_deref(), Some("é"));
+    assert_eq!(consumed_from(false, none, composed.as_deref(), Some("e")), none);
+    let composed_shift = physical_text(true, &ComposeOutcome::Composed(Some("É".into())), "E", "E");
+    assert_eq!(composed_shift.as_deref(), Some("É"));
+    assert_eq!(consumed_from(false, shift, composed_shift.as_deref(), Some("e")), shift);
+    assert_eq!(physical_text(false, &ComposeOutcome::Composed(Some("é".into())), "e", "e"), None);
+}

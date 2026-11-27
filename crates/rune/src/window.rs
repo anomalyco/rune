@@ -104,6 +104,8 @@ pub(crate) use event_loop::run_windows;
 pub(crate) use file_drop::FileStep;
 #[cfg(any(test, target_arch = "wasm32", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) use keys::consumed_from;
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub(crate) use keys::pick_typed_text;
 pub(crate) use keys::{consumed_mods, key_base, map_key_event, map_mods, platform_text};
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) use keys::web_key_base_str;
