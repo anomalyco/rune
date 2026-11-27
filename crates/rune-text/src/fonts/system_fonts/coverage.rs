@@ -7,7 +7,6 @@ use parley::fontique::{
 
 use crate::{TextSystem, family_list, fonts::fallback, named_list};
 
-#[cfg(any(windows, target_vendor = "apple"))]
 use super::SYMBOL_FAMILIES;
 use super::{
     emoji_family_list, is_cjk, load_families, needs_no_font, platform, reader_has_color_table,
@@ -491,13 +490,15 @@ impl TextSystem {
             self.fallbacks.asked.extend(missing.iter().copied());
             self.add_symbol_files(direct_write::fallback_family_files(&missing, locale.as_deref()));
         }
-        #[cfg(target_vendor = "apple")]
+        #[cfg(not(windows))]
         if !missing.is_empty() {
             if !self.fallbacks.symbols {
                 self.load_symbol_families();
             }
-            // Skip CoreText fallback for characters the non-emoji symbol families just loaded cover.
-            let mut sym_cov = FamilyCoverage::from_names(&mut self.font_cx.collection, SYMBOL_FAMILIES.iter().copied(), attributes);
+            // Skip the platform fallback scan for characters already covered by the non-emoji
+            // symbol families just loaded (avoids a second synchronous fallback load on Linux/macOS).
+            let non_emoji = SYMBOL_FAMILIES.iter().copied().filter(|f| self.emoji != Some(*f) && !f.contains("Emoji"));
+            let mut sym_cov = FamilyCoverage::from_names(&mut self.font_cx.collection, non_emoji, attributes);
             missing.retain(|&ch| !sym_cov.covers(&mut self.font_cx, ch));
             // What the symbol families lack (Ethiopic, Khmer, Tibetan...): the platform's own
             // fallback, once per character.
@@ -505,16 +506,6 @@ impl TextSystem {
                 self.fallbacks.asked.extend(missing.iter().copied());
                 self.add_symbol_files(platform::fallback_family_files(&missing, locale.as_deref()));
             }
-        }
-        #[cfg(not(any(windows, target_vendor = "apple")))]
-        if !missing.is_empty() {
-            if !self.fallbacks.symbols {
-                self.load_symbol_families();
-            }
-            // What the symbol families lack (Ethiopic, Khmer, Tibetan...): the platform's own
-            // fallback, once per character.
-            self.fallbacks.asked.extend(missing.iter().copied());
-            self.add_symbol_files(platform::fallback_family_files(&missing, locale.as_deref()));
         }
         // Load the math fallback only when a non-emoji symbol in `needs_symbols` is still
         // uncovered after primary and non-emoji symbol fallbacks.

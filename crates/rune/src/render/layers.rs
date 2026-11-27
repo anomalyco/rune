@@ -864,6 +864,39 @@ impl Renderer {
         self.encode_layers_timed(encoder, None, hook);
     }
 
+    /// Resolves which pass will draw effect slot at instance index `at`, returning `None` when an
+    /// enclosing layer is skipped or reuses a cached texture. Returns `(target, inline_clip)`,
+    /// where `target` is `Some(layer_idx)` for an isolated layer pass or `None` for the main frame
+    /// pass, and `inline_clip` is the intersection of any enclosing inline layer clips in window
+    /// device pixels.
+    pub(super) fn effect_target(&self, at: u32) -> Option<(Option<usize>, Option<[f32; 4]>)> {
+        let mut layer = self.layers.plan.iter().rposition(|l| at > l.begin && at < l.end);
+        let mut clip: Option<[f32; 4]> = None;
+        while let Some(index) = layer {
+            let l = self.layers.plan[index];
+            let disposition = self.layers.planner.dispositions.get(index).copied().unwrap_or(Disposition::Skip);
+            match disposition {
+                Disposition::Skip | Disposition::Cached { .. } => return None,
+                Disposition::Render { .. } => {
+                    if self.layers.targets[index].is_some() {
+                        return Some((Some(index), clip));
+                    }
+                    return None;
+                }
+                Disposition::Inline => {
+                    if l.clip != NO_CLIP {
+                        clip = Some(match clip {
+                            Some(c) => [c[0].max(l.clip[0]), c[1].max(l.clip[1]), c[2].min(l.clip[2]), c[3].min(l.clip[3])],
+                            None => l.clip,
+                        });
+                    }
+                    layer = l.parent;
+                }
+            }
+        }
+        Some((None, clip))
+    }
+
     /// Origin and size of a pass's target: a layer's bounds, or the frame viewport.
     pub(super) fn target_frame(&self, target: Option<usize>) -> ([f32; 2], [u32; 2]) {
         match target {

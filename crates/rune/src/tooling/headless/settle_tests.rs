@@ -408,3 +408,177 @@ fn headless_tree_with_settle_also_settles_at_nonzero_at_time() {
     let node = find_tree_node(&json, "late-derived").expect("late-derived node in tree");
     assert_eq!(node["rect"][2].as_f64(), Some(48.0));
 }
+
+#[test]
+fn settle_ready_waits_for_background_update_and_records_settled_status() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = crate::tooling::headless_run::test_turn();
+
+    #[derive(Default)]
+    struct State {
+        loaded: bool,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        if s.loaded {
+            el().key("page").w_full().h_full().fill(oklch(0.75, 0.2, 145.0))
+        } else {
+            el().key("loading").w_full().h_full().fill(Color::BLACK)
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("rune-settle-ready-bg-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let snap = dir.join("ready.png");
+    let tree = dir.join("ready.json");
+
+    let (kick_tx, kick_rx) = std::sync::mpsc::channel::<()>();
+    let mut kicked = false;
+    let spec = AppSpec::new("settle-ready-bg", (32.0, 32.0), State::default, view);
+    let app = App::new(spec).settle_ready(std::time::Duration::from_secs(2), move |s| {
+        if !kicked {
+            kicked = true;
+            let _ = kick_tx.send(());
+        }
+        s.loaded
+    });
+    let handle = app.handle();
+    let worker = std::thread::spawn(move || {
+        let _ = kick_rx.recv();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        handle.update(|s, _| s.loaded = true);
+    });
+
+    let args = crate::tooling::Args::parse_from(vec![
+        "--snap".into(), snap.to_string_lossy().into_owned(),
+        "--tree".into(), tree.to_string_lossy().into_owned(),
+        "--scale".into(), "1".into(),
+        "--settle".into(),
+    ]);
+    crate::tooling::headless(app, args);
+    worker.join().unwrap();
+
+    let img = image::open(&snap).unwrap().into_rgba8();
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(json["t"].as_f64(), Some(0.0), "waiting for settle_ready must not advance virtual time");
+    assert_eq!(json["settle"]["ready"].as_bool(), Some(true));
+    assert_eq!(json["settle"]["timedOut"].as_bool(), Some(false));
+    assert!(json["settle"]["waitMs"].as_f64().unwrap_or(0.0) >= 15.0);
+    assert!(find_tree_node(&json, "page").is_some(), "settled tree has the loaded page");
+    let px = img.get_pixel(16, 16).0;
+    assert!(px[1] > 150 && px[0] < 120, "settled snap painted the ready green fill: {px:?}");
+}
+
+#[test]
+fn settle_ready_waits_for_background_work_drained_by_poll() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = crate::tooling::headless_run::test_turn();
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+    struct State {
+        done: Arc<AtomicBool>,
+        rendered: bool,
+    }
+
+    fn poll(s: &mut State, _: f64, _: &mut crate::Tx) -> bool {
+        if !s.rendered && s.done.load(Ordering::Acquire) {
+            s.rendered = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        if s.rendered {
+            el().key("poll-ready").w(24.0).h(24.0)
+        } else {
+            el().key("poll-pending").w(4.0).h(4.0)
+        }
+    }
+
+    let (kick_tx, kick_rx) = std::sync::mpsc::channel::<()>();
+    let mut kicked = false;
+    let done = Arc::new(AtomicBool::new(false));
+    let done_bg = done.clone();
+    let worker = std::thread::spawn(move || {
+        let _ = kick_rx.recv();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        done_bg.store(true, Ordering::Release);
+    });
+
+    let tree = std::env::temp_dir().join(format!("rune-settle-ready-poll-{}.json", std::process::id()));
+    let mut spec = AppSpec::new("settle-ready-poll", (32.0, 32.0), || unreachable!(), view);
+    spec.poll = Some(poll);
+    let app = App::new(spec)
+        .init(move || State { done, rendered: false })
+        .settle_ready(std::time::Duration::from_secs(2), move |s| {
+            if !kicked {
+                kicked = true;
+                let _ = kick_tx.send(());
+            }
+            s.rendered
+        });
+    let args = crate::tooling::Args::parse_from(vec![
+        "--tree".into(), tree.to_string_lossy().into_owned(),
+        "--scale".into(), "1".into(),
+        "--settle".into(),
+    ]);
+    crate::tooling::headless(app, args);
+    worker.join().unwrap();
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
+    std::fs::remove_file(&tree).unwrap();
+
+    assert_eq!(json["settle"]["ready"].as_bool(), Some(true));
+    assert_eq!(json["settle"]["timedOut"].as_bool(), Some(false));
+    assert!(find_tree_node(&json, "poll-ready").is_some(), "poll drained background completion");
+}
+
+#[test]
+fn settle_ready_bounds_wait_and_reports_timeout_in_tree_and_skips_without_flag() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = crate::tooling::headless_run::test_turn();
+
+    let dir = std::env::temp_dir().join(format!("rune-settle-ready-timeout-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 1. With --settle and a predicate that never becomes ready: terminates at timeout and sets timedOut.
+    let timed_tree = dir.join("timed.json");
+    let spec = AppSpec::new("settle-timeout", (32.0, 32.0), || (), |_, _| el().key("waiting").w(10.0).h(10.0));
+    let app = App::new(spec).settle_ready(std::time::Duration::from_millis(25), |_| false);
+    let started = std::time::Instant::now();
+    crate::tooling::headless(app, crate::tooling::Args::parse_from(vec![
+        "--tree".into(), timed_tree.to_string_lossy().into_owned(),
+        "--scale".into(), "1".into(),
+        "--settle".into(),
+    ]));
+    let elapsed = started.elapsed();
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&timed_tree).unwrap()).unwrap();
+    assert_eq!(json["settle"]["ready"].as_bool(), Some(false));
+    assert_eq!(json["settle"]["timedOut"].as_bool(), Some(true));
+    assert!(json["settle"]["waitMs"].as_f64().unwrap_or(0.0) >= 20.0);
+    assert!(elapsed < std::time::Duration::from_secs(2), "timeout must bound wait: {elapsed:?}");
+
+    // 2. Without --settle: settle_ready is not invoked and no settle object is written.
+    let raw_tree = dir.join("raw.json");
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called_pred = called.clone();
+    let spec = AppSpec::new("settle-ignored", (32.0, 32.0), || (), |_, _| el().key("raw").w(10.0).h(10.0));
+    let app = App::new(spec).settle_ready(std::time::Duration::from_secs(10), move |_| {
+        called_pred.store(true, std::sync::atomic::Ordering::SeqCst);
+        false
+    });
+    crate::tooling::headless(app, crate::tooling::Args::parse_from(vec![
+        "--tree".into(), raw_tree.to_string_lossy().into_owned(),
+        "--scale".into(), "1".into(),
+    ]));
+    let raw: Value = serde_json::from_str(&std::fs::read_to_string(&raw_tree).unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "settle_ready must not run without --settle");
+    assert!(raw.get("settle").is_none(), "tree without --settle must not include settle status");
+}

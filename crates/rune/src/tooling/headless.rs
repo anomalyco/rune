@@ -62,6 +62,35 @@ impl HeadlessPrep {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) struct HeadlessWake(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+impl HeadlessWake {
+    fn waker(&self) -> crate::runtime::Waker {
+        let inner = self.0.clone();
+        Arc::new(move || {
+            let (lock, cvar) = &*inner;
+            if let Ok(mut notified) = lock.lock() {
+                *notified = true;
+                cvar.notify_one();
+            }
+        })
+    }
+
+    pub(super) fn wait_timeout(&self, dur: std::time::Duration) {
+        if dur.is_zero() {
+            return;
+        }
+        let (lock, cvar) = &*self.0;
+        let Ok(mut notified) = lock.lock() else { return };
+        if !*notified {
+            let Ok((guard, _)) = cvar.wait_timeout(notified, dur) else { return };
+            notified = guard;
+        }
+        *notified = false;
+    }
+}
+
 struct HeadlessConfig {
     launched: Instant,
     state_ms: f64,
@@ -79,6 +108,7 @@ struct HeadlessConfig {
     shortcuts_core: Arc<crate::shortcuts::HubCore>,
     shortcuts: crate::shortcuts::Guard,
     menus: crate::native_menu::MenuGuard,
+    wake: HeadlessWake,
 }
 
 fn wait_for_profiler() -> Instant {
@@ -172,15 +202,18 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let on_ready = app.on_ready.take();
     let on_frame_encoded = app.on_frame_encoded.take();
     let observability = crate::frame::stage::HostObservability::new(app.observability.take(), Some("main"));
+    let settle_ready = app.settle_ready.take();
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
     crate::credentials::note_headless_runtime();
+    let wake = HeadlessWake::default();
     let (spec, mut rt, shared, runtime, shortcuts, menus, state_ms) = {
         let _startup = observability.scope_stages(None);
         let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
-        let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
+        shared.core.connect(wake.waker());
+        let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.waker(), true, false);
         let menus = crate::native_menu::MenuGuard::attach(&shared, true);
         let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
-        let rt = runtime_for(&spec, state, prep.size, Env::new(prep.dark, prep.scale), Arc::new(|| {}));
+        let rt = runtime_for(&spec, state, prep.size, Env::new(prep.dark, prep.scale), wake.waker());
         (spec, rt, shared, runtime, shortcuts, menus, state_ms)
     };
     if let Some(attach) = attach_playground {
@@ -190,9 +223,9 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let config = HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
         min_size: spec.min_size, on_ready, on_frame_encoded, observability,
-        shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus,
+        shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus, wake,
     };
-    let mut typed = TypedHeadlessApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files };
+    let mut typed = TypedHeadlessApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files, settle_ready };
     run_headless(prep, config, &mut typed)
 }
 
@@ -200,7 +233,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let HeadlessPrep { source, script, timeline, scale, size, dark, mut writer } = prep;
     let HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
-        min_size, on_ready, on_frame_encoded, observability, shared_core, shortcuts_core, shortcuts, mut menus,
+        min_size, on_ready, on_frame_encoded, observability, shared_core, shortcuts_core, shortcuts, mut menus, wake,
     } = config;
     // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
     let mut on_ready = on_ready.filter(|_| args.realtime);
@@ -349,6 +382,8 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         idle: true,
         early_place: None,
         placed: None,
+        wake,
+        settle_outcome: None,
         snap_crop: &snap_crop,
         cpu_boot: &cpu_boot,
         loop_check: super::loop_check::Tally::default(),
@@ -430,6 +465,8 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         let mut host = HeadlessFrame {
             state: &mut state,
             app,
+            shortcuts: &shortcuts,
+            menus: &mut menus,
             deliver: &mut deliver,
             k,
             real_t,

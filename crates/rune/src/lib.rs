@@ -492,6 +492,7 @@ pub use window::WindowHandle;
 pub use window::display_queue::DisplayQueueWatch;
 pub use window::display_queue::watch_display_queue;
 pub use window::displays::displays;
+pub use window::displays::primary_display_scale;
 pub use window::geometry::WindowGeometry;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]

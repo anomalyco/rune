@@ -32,10 +32,15 @@ fn book() -> std::sync::MutexGuard<'static, Book> {
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
 pub fn mark(name: &'static str) {
-    let now = crate::time::now();
+    mark_at(name, crate::time::now());
+}
+
+/// Records `name` at `at`, unless it was reached before. Use this when a step's real timestamp
+/// arrives asynchronously (for example `frame.first.on_display` from a presentation handler).
+pub fn mark_at(name: &'static str, at: Instant) {
     let mut book = book();
     if !book.marks.iter().any(|(n, _)| *n == name) {
-        book.marks.push((name, now));
+        book.marks.push((name, at));
         // A page's marks are the browser's too: its performance timeline and DevTools show them.
         #[cfg(target_arch = "wasm32")]
         page_mark(name);
@@ -183,3 +188,7 @@ pub fn loop_waits() {
 pub fn noted(key: &'static str) -> bool {
     book().notes.iter().any(|(k, _)| *k == key)
 }
+
+#[cfg(test)]
+#[path = "marks_tests.rs"]
+mod tests;

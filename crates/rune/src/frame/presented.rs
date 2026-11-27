@@ -232,6 +232,9 @@ impl FramePresentReports {
             }
         }
         for frame in t.ready.drain(..) {
+            if let Some(at) = frame.presented_at {
+                record_first_on_display(at);
+            }
             (t.hook)(&frame);
         }
     }
@@ -263,6 +266,15 @@ impl FramePresentReports {
     #[cfg(test)]
     pub(crate) fn is_watching(&self) -> bool {
         self.0.as_ref().is_some_and(|t| t.watch == WatchState::Watching)
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn record_first_on_display(at: Instant) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FIRST: AtomicBool = AtomicBool::new(false);
+    if !FIRST.swap(true, Ordering::Relaxed) {
+        crate::marks::mark_at("frame.first.on_display", at);
     }
 }
 

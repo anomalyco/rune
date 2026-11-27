@@ -32,6 +32,8 @@ pub(super) trait HeadlessApp {
     fn run_open_url(&mut self, url: &str);
     fn run_open_files(&mut self, paths: &[std::path::PathBuf]);
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard);
+    fn settle_ready_timeout(&self) -> Option<std::time::Duration>;
+    fn is_settle_ready(&mut self) -> bool;
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
     fn render_compositor(&mut self, args: HeadlessRenderArgs<'_>) -> bool;
@@ -76,6 +78,7 @@ pub(super) struct TypedHeadlessApp<S: 'static> {
     pub(super) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(super) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(super) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
+    pub(super) settle_ready: Option<(std::time::Duration, Box<dyn FnMut(&S) -> bool>)>,
 }
 
 impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
@@ -127,6 +130,15 @@ impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
         for f in self.shared.take_updates() {
             self.rt.update_if(f);
             menus.drain();
+        }
+    }
+    fn settle_ready_timeout(&self) -> Option<std::time::Duration> {
+        self.settle_ready.as_ref().map(|(timeout, _)| *timeout)
+    }
+    fn is_settle_ready(&mut self) -> bool {
+        match self.settle_ready.as_mut() {
+            Some((_, pred)) => pred(&self.rt.state),
+            None => true,
         }
     }
     fn has_compositor(&self) -> bool { self.comp.is_some() }
