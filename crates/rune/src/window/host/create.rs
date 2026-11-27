@@ -46,11 +46,7 @@ impl Host {
         let size = self.args.size.unwrap_or(self.geometry.size);
         let launcher = self.launcher();
         let visible = !launcher && (self.started || self.options.visible);
-        let effective_theme = crate::window::window_theme_for_platform(
-            self.color_scheme,
-            crate::window::app_color_scheme(),
-            cfg!(target_os = "macos"),
-        );
+        let effective_theme = self.window_theme();
         #[allow(unused_mut)]
         let mut attrs = self.options.attributes_with_theme(
             self.app.rt().host.window_title.current().unwrap_or(self.geometry.title),
@@ -563,6 +559,8 @@ impl Host {
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
         self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
+        #[cfg(target_os = "linux")]
+        self.apply_window_color_scheme();
         self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]

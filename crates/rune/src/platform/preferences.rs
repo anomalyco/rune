@@ -39,6 +39,9 @@ static CACHED_DOUBLE_CLICK: CachedDoubleClick = CachedDoubleClick::new();
 static CACHED_INCREASED_CONTRAST: CachedPref<bool> = CachedPref::new(false);
 
 #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+static CACHED_DARK: CachedPref<Option<bool>> = CachedPref::new(None);
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
 static FALLBACK_WINDOWS: std::sync::Mutex<Vec<std::sync::Weak<winit::window::Window>>> =
     std::sync::Mutex::new(Vec::new());
 
@@ -53,6 +56,7 @@ pub(crate) fn follow_fallback(window: &std::sync::Arc<winit::window::Window>) {
     if CACHED_REDUCED_MOTION.late_changed()
         || CACHED_DOUBLE_CLICK.late_changed()
         || CACHED_INCREASED_CONTRAST.late_changed()
+        || CACHED_DARK.late_changed()
         || crate::platform::text_scale::linux_fallback_late_changed()
     {
         window.request_redraw();
@@ -344,12 +348,12 @@ fn resolve_double_click_fallback(
 }
 
 #[cfg(target_os = "linux")]
-fn is_kde_desktop() -> bool {
+pub(super) fn is_kde_desktop() -> bool {
     rune_core::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|d| d.eq_ignore_ascii_case("KDE"))
 }
 
 #[cfg(target_os = "linux")]
-fn read_kdeglobals() -> Option<String> {
+pub(super) fn read_kdeglobals() -> Option<String> {
     let config = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()).map(|h| std::path::PathBuf::from(h).join(".config")))?;
     std::fs::read_to_string(config.join("kdeglobals")).ok()
@@ -674,21 +678,60 @@ pub fn last_appearance(last: Option<Appearance>, keep: impl FnMut(Appearance) + 
 }
 
 /// The desktop's light or dark preference where winit reports none (Linux: the XDG desktop
-/// portal's `color-scheme`). None leaves the host's own default.
+/// portal's `color-scheme`, falling back off the UI thread to GSettings, GTK `settings.ini`,
+/// or `kdeglobals`). None leaves the host's own default.
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) fn dark() -> Option<bool> { crate::platform::portal_appearance::dark() }
 
-#[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_arch = "wasm32")))]
-pub(crate) fn dark() -> Option<bool> { None }
-
-/// [`dark`] for a window winit gives no theme; None leaves the window's appearance as it is.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
-    dark().filter(|_| window.theme().is_none())
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+pub(crate) fn dark() -> Option<bool> {
+    CACHED_DARK.get_or_init_with(
+        "rune-color-scheme",
+        CachedPref::<Option<bool>>::FIRST_ANSWER,
+        crate::platform::linux_color_scheme::read_color_scheme_fallback,
+        redraw_fallback_windows,
+    )
 }
 
-/// A new window's appearance: `--theme` when given, else winit's theme, else [`desktop_dark`],
-/// else dark. On Linux a change of the desktop's preference redraws the window, which rereads it.
+#[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
+pub(crate) fn dark() -> Option<bool> { None }
+
+/// Resolves the Linux desktop's dark preference from an optional `--theme` override and the
+/// sampled portal/fallback preference, defaulting to dark (`true`) when unknown.
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) fn resolve_linux_dark(theme_arg: Option<&str>, desktop_dark: Option<bool>) -> bool {
+    match theme_arg {
+        Some("light") => false,
+        Some("dark") => true,
+        _ => desktop_dark.unwrap_or(true),
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn resolved_linux_dark(theme_arg: Option<&str>) -> bool {
+    resolve_linux_dark(theme_arg, dark())
+}
+
+/// [`dark`] for a window whose platform winit gives no OS theme; None leaves the window's
+/// appearance as it is. On Linux, winit's `Window::theme` on Wayland only echoes the CSD theme
+/// Rune passed to `with_theme` / `set_theme` (and on X11 is always `None`), so `dark()` always
+/// drives `Cx::system_dark()` regardless of `window.theme()`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window;
+        dark()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dark().filter(|_| window.theme().is_none())
+    }
+}
+
+/// A new window's appearance: `--theme` when given, else the platform's OS theme ([`dark`] on
+/// Linux; winit's `Window::theme` on macOS and Windows), else dark. On Linux a change of the
+/// desktop's preference redraws the window, which rereads it.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme: Option<&str>) -> bool {
     #[cfg(all(target_os = "linux", feature = "dbus"))]
@@ -696,6 +739,12 @@ pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme:
     #[cfg(all(target_os = "linux", not(feature = "dbus")))]
     follow_fallback(window);
     crate::platform::text_scale::follow(window);
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window;
+        resolved_linux_dark(theme)
+    }
+    #[cfg(not(target_os = "linux"))]
     match theme {
         Some("light") => false,
         Some("dark") => true,

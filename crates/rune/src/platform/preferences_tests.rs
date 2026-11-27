@@ -315,3 +315,14 @@ fn reduced_transparency_test_override_scoped_and_restored() {
     }
     assert!(!reduced_transparency());
 }
+
+#[test]
+fn linux_dark_resolution_honors_cli_override_then_desktop_then_dark_default() {
+    assert!(!resolve_linux_dark(Some("light"), Some(true)));
+    assert!(!resolve_linux_dark(Some("light"), None));
+    assert!(resolve_linux_dark(Some("dark"), Some(false)));
+    assert!(resolve_linux_dark(Some("dark"), None));
+    assert!(resolve_linux_dark(None, Some(true)));
+    assert!(!resolve_linux_dark(None, Some(false)));
+    assert!(resolve_linux_dark(None, None));
+}

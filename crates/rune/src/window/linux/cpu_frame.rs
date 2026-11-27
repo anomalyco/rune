@@ -221,6 +221,7 @@ impl Host {
             presented: None,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
+        self.apply_window_color_scheme();
         self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
         if !self.announce_created(false) { return Ok(()); }

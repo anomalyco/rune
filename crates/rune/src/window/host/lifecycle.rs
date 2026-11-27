@@ -200,12 +200,25 @@ impl Host {
         self.apply_window_color_scheme();
     }
 
+    pub(in crate::window) fn window_theme(&self) -> Option<winit::window::Theme> {
+        let app = crate::window::app_color_scheme();
+        #[cfg(target_os = "macos")]
+        let platform = crate::window::ThemePlatform::MacOs;
+        #[cfg(target_os = "linux")]
+        let platform = crate::window::ThemePlatform::Linux {
+            system_dark: if self.color_scheme.effective_for_window(app) == crate::ColorScheme::System {
+                crate::platform::preferences::resolved_linux_dark(self.args.theme.as_deref())
+            } else {
+                true
+            },
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let platform = crate::window::ThemePlatform::Windows;
+        crate::window::window_theme_for_platform(self.color_scheme, app, platform)
+    }
+
     pub(in crate::window) fn apply_window_color_scheme(&mut self) {
-        let target = crate::window::window_theme_for_platform(
-            self.color_scheme,
-            crate::window::app_color_scheme(),
-            cfg!(target_os = "macos"),
-        );
+        let target = self.window_theme();
         let Some(w) = &self.win else { return };
         let color_scheme = self.color_scheme;
         let changed = crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {

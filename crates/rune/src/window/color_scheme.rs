@@ -58,7 +58,6 @@ impl ColorScheme {
 
     /// Resolves whether a window with this per-window scheme and `app`-wide scheme should draw
     /// dark chrome/backdrop given the OS's `system_dark` preference.
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
     pub(crate) const fn effective_dark(self, app: ColorScheme, system_dark: bool) -> bool {
         match self.effective_for_window(app) {
             ColorScheme::Dark => true,
@@ -113,23 +112,42 @@ pub(crate) fn set_app_color_scheme_state(scheme: ColorScheme) {
     APP_COLOR_SCHEME.store(scheme.to_u8(), Ordering::Release);
 }
 
-/// Resolves the winit `Option<Theme>` to apply to a native window on `is_macos` or other
-/// desktop platforms.
-///
-/// On macOS, AppKit natively inherits `NSApplication.appearance` for any window whose own
-/// `NSWindow.appearance` is `nil`, so `ColorScheme::System` maps to `None` regardless of
-/// `app`. On Windows and Linux there is no process-wide appearance property, so a window
-/// set to `ColorScheme::System` falls back to `app`.
+/// Platform rules for turning a window/app [`ColorScheme`] pair into winit's `Option<Theme>`.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThemePlatform {
+    /// macOS: AppKit inherits `NSApplication.appearance` when `NSWindow.appearance` is `nil`,
+    /// so a `ColorScheme::System` window passes `None` regardless of `app`.
+    MacOs,
+    /// Windows (and other non-Linux desktops): no process-wide appearance property, so a
+    /// `ColorScheme::System` window inherits `app`, and `None` lets winit follow the OS.
+    Windows,
+    /// Linux: always resolves to an explicit `Some(Theme::Dark | Light)` using Rune's own
+    /// XDG Settings portal / GSettings / GTK / KDE detection (`system_dark`) rather than
+    /// passing `None` to winit, which would make Wayland's `sctk-adwaita` spawn `dbus-send`
+    /// and fall back to a light CSD frame when `dbus-send` is missing (and leave X11's
+    /// `_GTK_THEME_VARIANT` pinned to dark on light desktops).
+    Linux { system_dark: bool },
+}
+
+/// Resolves the winit `Option<Theme>` to apply to a native window on `platform`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const fn window_theme_for_platform(
     window: ColorScheme,
     app: ColorScheme,
-    is_macos: bool,
+    platform: ThemePlatform,
 ) -> Option<winit::window::Theme> {
-    if is_macos {
-        window.winit_theme()
-    } else {
-        window.effective_for_window(app).winit_theme()
+    match platform {
+        ThemePlatform::MacOs => window.winit_theme(),
+        ThemePlatform::Windows => window.effective_for_window(app).winit_theme(),
+        ThemePlatform::Linux { system_dark } => {
+            if window.effective_dark(app, system_dark) {
+                Some(winit::window::Theme::Dark)
+            } else {
+                Some(winit::window::Theme::Light)
+            }
+        }
     }
 }
 
