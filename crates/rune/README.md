@@ -1570,10 +1570,21 @@ For an app's own perf log, with nothing changed about how its windows draw:
   gesture, or file drag-and-drop event lifts the cap on the very next display refresh; motion stays steered at the
   display's full rate for 600 ms after input and up to 2 s while an unbroken run of frames that started within
   100 ms of input keeps presenting with gaps of at most 100 ms (drags, scrolls, typing, and springs following a
-  finger never cap). When multiple caps apply, the lower rate wins: Low Power Mode (60 Hz on built-in ProMotion
-  panels) bounds both steered and ambient frames, and combining `ambient_fps` with `App::reveal_fps` paces
-  reveal-only tails on the `reveal_fps` timer while concurrent unsteered motion paces at `ambient_fps`. Enforced
+  finger never cap). Losing focus drops any prior steered window immediately so ambient and unfocused caps engage
+  on the next tick. When multiple caps apply, the lower rate wins: macOS Low Power Mode (60 Hz across both built-in
+  and external high-refresh displays) and automatic macOS thermal-pressure pacing (`NSProcessInfo.thermalState`,
+  re-polled once a second during active streams: `Fair` caps unsteered frames at 60 Hz while keeping steered input
+  at full rate; `Serious` caps steered at 60 Hz and unsteered at 30 Hz; `Critical` caps steered at 30 Hz and
+  unsteered at 20 Hz) compose monotonically with `ambient_fps`, `unfocused_fps`, and `App::reveal_fps`. Enforced
   on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and headless runs ignore it.
+- **`App::unfocused_fps(fps)`** (also on `WindowSpec::unfocused_fps`) opts a visible unfocused window into a
+  separate unsteered frame-rate cap (`0.0`, default = no extra unfocused cap) without pausing it—useful for
+  streaming transcripts on a secondary display while working in another app. Occluded and minimized windows still
+  stop their display link completely, and live input over an unfocused window (such as trackpad scrolling) lifts the
+  cap immediately. Because full-window GPU fill scales with drawable pixel area × refresh rate (for example, a
+  3840×2160 HiDPI external display at 100 Hz shades ~829 Mpixels/s when scrolling or streaming), streaming apps
+  targeting fanless laptops should pair `ambient_fps(60.0)` (or `30.0`), `unfocused_fps(30.0)`, and
+  `reveal_fps(30.0)`.
 - **`App::frame_latency(frames)`** (also on `WindowSpec::frame_latency` and
   `ConfiguredOverlay::frame_latency`) caps a macOS surface's swap-chain latency at creation time
   (`1` = 2 `CAMetalLayer` drawables, `2` = 3 drawables; clamped to `1..=2`, default `2`). Ignored

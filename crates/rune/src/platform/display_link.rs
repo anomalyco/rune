@@ -6,9 +6,10 @@
 //! ~150 ms) without waking the main thread, drawing, or presenting, so trackpad wheel deltas and
 //! steady `NativeSurface` pushes resume without cold `CVDisplayLinkStop`/`Start` stalls.
 //!
-//! Low Power Mode caps a ProMotion panel at 60 Hz while CVDisplayLink, CADisplayLink and
-//! NSScreen all still report 120 Hz. Submitting on every tick then fills the drawable queue
-//! with a few fast frames before backpressure settles it at 60 Hz, so pace at the cap instead.
+//! Low Power Mode caps frame pacing at 60 Hz across both built-in ProMotion panels (where
+//! CVDisplayLink, CADisplayLink and NSScreen still report 120 Hz) and high-refresh external
+//! displays. Thermal pressure (`NSProcessInfo.thermalState`) steps pacing down automatically
+//! under `Fair`, `Serious`, and `Critical` load, and active links re-poll both once a second.
 #![allow(deprecated)] // CVDisplayLink supports the same macOS versions as winit.
 #![allow(unsafe_code)]
 
@@ -21,7 +22,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_core_video::{CVDisplayLink, CVGetCurrentHostTime, CVGetHostClockFrequency, CVOptionFlags, CVReturn, CVTime, CVTimeFlags, CVTimeStamp, CVTimeStampFlags};
 use winit::{platform::macos::MonitorHandleExtMacOS, window::Window};
 
-use super::display_link_machine::{DisplayLinkCore, LinkEffect, pacing_of};
+use super::display_link_machine::{DisplayLinkCore, LinkEffect, ThermalState, pacing_of, power_poll_due};
 pub(crate) use super::display_link_machine::Opportunity;
 
 const INITIAL_PERIOD_NS: u64 = 1_000_000_000 / 60;
@@ -90,6 +91,7 @@ pub(crate) struct DisplayLink {
     callback: Box<Callback>,
     core: DisplayLinkCore,
     display: Option<u32>,
+    last_power_check: Option<Instant>,
 }
 
 static CREATE_FAILED: AtomicBool = AtomicBool::new(false);
@@ -106,16 +108,24 @@ pub(crate) fn pacing(link: Option<&DisplayLink>, moving: bool) -> crate::frame::
     pacing_of(link.map(|link| link.core.state()), failure(), moving)
 }
 
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" { fn CGDisplayIsBuiltin(display: u32) -> u32; }
-
-fn low_power_caps(display: Option<u32>) -> bool {
-    use objc2_foundation::{NSObjectProtocol, NSProcessInfo};
+/// Reads macOS Low Power Mode and thermal pressure (`NSProcessInfo`), applying to both
+/// built-in and external displays.
+fn power_state() -> (bool, ThermalState) {
+    use objc2_foundation::{NSObjectProtocol, NSProcessInfo, NSProcessInfoThermalState};
     let info = NSProcessInfo::processInfo();
-    // SAFETY: `CGDisplayIsBuiltin` accepts any `CGDirectDisplayID`.
-    display.is_some_and(|display| unsafe { CGDisplayIsBuiltin(display) } != 0)
-        && info.respondsToSelector(objc2::sel!(isLowPowerModeEnabled))
-        && info.isLowPowerModeEnabled()
+    let low_power = info.respondsToSelector(objc2::sel!(isLowPowerModeEnabled))
+        && info.isLowPowerModeEnabled();
+    let thermal = if info.respondsToSelector(objc2::sel!(thermalState)) {
+        match info.thermalState() {
+            NSProcessInfoThermalState::Fair => ThermalState::Fair,
+            NSProcessInfoThermalState::Serious => ThermalState::Serious,
+            NSProcessInfoThermalState::Critical => ThermalState::Critical,
+            _ => ThermalState::Nominal,
+        }
+    } else {
+        ThermalState::Nominal
+    };
+    (low_power, thermal)
 }
 
 unsafe extern "C-unwind" fn tick(
@@ -187,6 +197,7 @@ impl DisplayLink {
             callback,
             core: DisplayLinkCore::new(Duration::from_nanos(INITIAL_PERIOD_NS)),
             display: None,
+            last_power_check: None,
         };
         pacing.update_display(window);
         Some(pacing)
@@ -215,7 +226,14 @@ impl DisplayLink {
             self.callback.period_ns.store(ns, Ordering::Relaxed);
             self.core.set_period(Duration::from_nanos(ns));
         }
-        self.core.set_capped(low_power_caps(self.display));
+        self.refresh_power_state(crate::time::now());
+    }
+
+    fn refresh_power_state(&mut self, now: Instant) {
+        let (low_power, thermal) = power_state();
+        self.core.set_capped(low_power);
+        self.core.set_thermal(thermal);
+        self.last_power_check = Some(now);
     }
 
     /// Starts or resumes the link into `Active`; false if Core Video refused `CVDisplayLinkStart`.
@@ -231,8 +249,8 @@ impl DisplayLink {
                         self.core.start_failed();
                         return false;
                     }
-                    // Power state can change while idle; each burst rechecks it.
-                    self.core.set_capped(low_power_caps(self.display));
+                    // Power and thermal state can change while idle; each burst rechecks them.
+                    self.refresh_power_state(crate::time::now());
                 }
                 LinkEffect::ResumeActive => {
                     self.callback.arm_active();
@@ -265,6 +283,9 @@ impl DisplayLink {
         }
         let host_target = self.callback.take_target();
         let now = crate::time::now();
+        if power_poll_due(self.last_power_check, now) {
+            self.refresh_power_state(now);
+        }
         let tick = (host_target != 0).then(|| target_time(now, CVGetCurrentHostTime(), host_target, self.callback.host_frequency));
         self.sync_period();
         self.core.claim(tick, now)
@@ -289,6 +310,20 @@ impl DisplayLink {
     pub(crate) fn with_ambient_period(mut self, period: Option<Duration>) -> Self {
         self.core.set_ambient_period(period);
         self
+    }
+
+    pub(crate) fn with_unfocused_period(mut self, period: Option<Duration>) -> Self {
+        self.core.set_unfocused_period(period);
+        self
+    }
+
+    pub(crate) fn with_focused(mut self, focused: bool) -> Self {
+        self.core.set_focused(focused);
+        self
+    }
+
+    pub(crate) fn set_focused(&mut self, focused: bool) {
+        self.core.set_focused(focused);
     }
 
     pub(crate) fn note_input(&mut self, at: Instant) { self.core.note_input(at); }

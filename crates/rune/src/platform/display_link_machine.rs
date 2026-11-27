@@ -9,9 +9,64 @@ use crate::frame::surface_stats::Pacing;
 use crate::machine::Effects;
 use crate::time::Instant;
 
-/// Low Power Mode caps a built-in ProMotion panel at 60 Hz even when CoreVideo still reports
-/// 120 Hz.
+/// Low Power Mode caps frame pacing at 60 Hz on high-refresh displays (both built-in ProMotion
+/// panels where CoreVideo still reports 120 Hz and external high-refresh displays).
 pub(crate) const LOW_POWER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
+/// Unsteered frame cap under `ThermalState::Serious` (30 Hz: halves 60 Hz, quarters 120 Hz,
+/// and paces 100 Hz external displays at 25 Hz).
+pub(crate) const THERMAL_SERIOUS_AMBIENT_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+/// Steered frame cap under `ThermalState::Critical` (30 Hz).
+pub(crate) const THERMAL_CRITICAL_STEERED_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 30);
+/// Unsteered frame cap under `ThermalState::Critical` (20 Hz: evenly divides 60, 100, and 120 Hz).
+pub(crate) const THERMAL_CRITICAL_AMBIENT_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 20);
+/// How often an active display link re-polls macOS Low Power Mode and thermal state so long
+/// continuous streams adapt mid-stream without stopping the link.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) const POWER_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// macOS thermal pressure levels (`NSProcessInfoThermalState`), kept platform-independent so
+/// every pacing transition runs headless on every host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ThermalState {
+    /// Cool / normal operating temperature: no thermal cap.
+    #[default]
+    Nominal,
+    /// Mild thermal pressure: user-steered motion stays at full display rate; unsteered motion
+    /// caps at 60 Hz (`LOW_POWER_FRAME`).
+    Fair,
+    /// High thermal pressure (e.g. a fanless laptop under sustained GPU load): steered motion
+    /// caps at 60 Hz and unsteered motion caps at 30 Hz.
+    Serious,
+    /// Critical thermal pressure: steered motion caps at 30 Hz and unsteered motion caps at 20 Hz.
+    Critical,
+}
+
+impl ThermalState {
+    /// Base cap applied to all frames (including user-steered motion) under this thermal state.
+    pub(crate) fn steered_period(self) -> Option<Duration> {
+        match self {
+            Self::Nominal | Self::Fair => None,
+            Self::Serious => Some(LOW_POWER_FRAME),
+            Self::Critical => Some(THERMAL_CRITICAL_STEERED_FRAME),
+        }
+    }
+
+    /// Cap applied to unsteered (ambient) frames under this thermal state.
+    pub(crate) fn ambient_period(self) -> Option<Duration> {
+        match self {
+            Self::Nominal => None,
+            Self::Fair => Some(LOW_POWER_FRAME),
+            Self::Serious => Some(THERMAL_SERIOUS_AMBIENT_FRAME),
+            Self::Critical => Some(THERMAL_CRITICAL_AMBIENT_FRAME),
+        }
+    }
+}
+
+/// Whether the display link should re-read macOS Low Power Mode and thermal state at `now`.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn power_poll_due(last_check: Option<Instant>, now: Instant) -> bool {
+    last_check.is_none_or(|at| now.saturating_duration_since(at) >= POWER_POLL_INTERVAL)
+}
 
 /// How long after the last live user input motion stays at full display rate even if no
 /// unbroken run of presents started immediately after that input.
@@ -77,6 +132,9 @@ pub(crate) enum SteeringEvent {
     Input { at: Instant },
     /// A frame finished submitting/presenting at `at`.
     Presented { at: Instant },
+    /// The window lost keyboard/active focus; drop any prior steered window immediately so
+    /// ambient, unfocused, and thermal caps engage without waiting out the idle tail.
+    FocusLost,
 }
 
 /// Effects emitted by [`step_steering`] (none today; kept uniform with `rune::machine`).
@@ -99,6 +157,9 @@ pub(crate) fn step_steering(
         }
         (_, SteeringEvent::Input { at }) => {
             *state = Steering::Steered { last_input: at, run: SteeredRun::None };
+        }
+        (_, SteeringEvent::FocusLost) => {
+            *state = Steering::Ambient;
         }
         (Steering::Ambient, SteeringEvent::Presented { .. }) => {}
         (Steering::Steered { last_input, run }, SteeringEvent::Presented { at }) => {
@@ -432,7 +493,10 @@ pub(crate) struct DisplayLinkCore {
     last_target: Option<Instant>,
     period: Duration,
     capped: bool,
+    thermal: ThermalState,
     ambient_period: Option<Duration>,
+    unfocused_period: Option<Duration>,
+    focused: bool,
     steering: Steering,
     urgent: UrgentAdmission,
 }
@@ -445,7 +509,10 @@ impl DisplayLinkCore {
             last_target: None,
             period,
             capped: false,
+            thermal: ThermalState::Nominal,
             ambient_period: None,
+            unfocused_period: None,
+            focused: true,
             steering: Steering::Ambient,
             urgent: UrgentAdmission::Idle,
         }
@@ -456,17 +523,36 @@ impl DisplayLinkCore {
     pub(crate) fn hardware_running(&self) -> bool { self.state.hardware_running() }
 
     pub(crate) fn frame_period(&self) -> Duration {
-        if self.capped { self.period.max(LOW_POWER_FRAME) } else { self.period }
+        let mut period = self.period;
+        if self.capped {
+            period = period.max(LOW_POWER_FRAME);
+        }
+        if let Some(thermal) = self.thermal.steered_period() {
+            period = period.max(thermal);
+        }
+        period
     }
 
-    /// Effective frame period at `now`, applying `ambient_period` only when no recent user input
-    /// is steering the window (composing monotonically with Low Power Mode).
+    /// Effective frame period at `now`: steered frames use [`Self::frame_period`], while
+    /// unsteered frames compose monotonically with thermal ambient caps, opt-in
+    /// `ambient_period`, and (when unfocused) opt-in `unfocused_period` so the lowest active
+    /// rate (longest frame period) wins.
     pub(crate) fn frame_period_at(&self, now: Instant) -> Duration {
-        let base = self.frame_period();
-        match self.ambient_period {
-            Some(ambient) if !self.steering.is_steered(now) => base.max(ambient),
-            _ => base,
+        let mut period = self.frame_period();
+        if !self.steering.is_steered(now) {
+            if let Some(thermal) = self.thermal.ambient_period() {
+                period = period.max(thermal);
+            }
+            if let Some(ambient) = self.ambient_period {
+                period = period.max(ambient);
+            }
+            if !self.focused
+                && let Some(unfocused) = self.unfocused_period
+            {
+                period = period.max(unfocused);
+            }
         }
+        period
     }
 
     pub(crate) fn refresh_hz(&self) -> f64 { 1.0 / self.frame_period().as_secs_f64() }
@@ -477,9 +563,35 @@ impl DisplayLinkCore {
 
     pub(crate) fn set_capped(&mut self, capped: bool) { self.capped = capped; }
 
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn set_thermal(&mut self, thermal: ThermalState) { self.thermal = thermal; }
+
+    #[cfg(test)]
+    pub(crate) fn thermal(&self) -> ThermalState { self.thermal }
+
     pub(crate) fn set_ambient_period(&mut self, period: Option<Duration>) {
         self.ambient_period = period.filter(|p| !p.is_zero());
     }
+
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn set_unfocused_period(&mut self, period: Option<Duration>) {
+        self.unfocused_period = period.filter(|p| !p.is_zero());
+    }
+
+    /// Updates whether the window currently holds focus. Losing focus drops any stale steered
+    /// run immediately so ambient, unfocused, and thermal caps take effect on the next tick;
+    /// live pointer/wheel/touch input over an unfocused window still calls `note_input` and
+    /// lifts the cap immediately.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+        if !focused {
+            let _ = step_steering(&mut self.steering, SteeringEvent::FocusLost);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focused(&self) -> bool { self.focused }
 
     pub(crate) fn note_input(&mut self, at: Instant) {
         let _ = step_steering(&mut self.steering, SteeringEvent::Input { at });
@@ -570,3 +682,7 @@ mod tests;
 #[cfg(test)]
 #[path = "display_link_urgent_tests.rs"]
 mod urgent_tests;
+
+#[cfg(test)]
+#[path = "display_link_power_tests.rs"]
+mod power_tests;

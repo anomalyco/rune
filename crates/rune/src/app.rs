@@ -146,6 +146,8 @@ pub struct App<S: 'static> {
     pub(crate) observability: crate::frame::stage::WindowObservability,
     #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     pub(crate) ambient_period: Option<std::time::Duration>,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) unfocused_period: Option<std::time::Duration>,
     /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
     #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
     pub(crate) layout_seed: Option<crate::LayoutSeed>,
@@ -238,6 +240,7 @@ impl<S: 'static> App<S> {
             on_frame_drawn: None,
             observability: crate::frame::stage::WindowObservability::default(),
             ambient_period: None,
+            unfocused_period: None,
             layout_seed: None,
             keep_layout: None,
             same_tab_router: None,
@@ -1138,6 +1141,29 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn ambient_fps(mut self, fps: f32) -> Self {
         self.ambient_period = ambient_period_from_fps(fps);
+        self
+    }
+
+    /// Cap frame pacing (Hz) for unsteered motion while the window is visible but unfocused
+    /// (`0.0`, default = no extra unfocused cap beyond [`Self::ambient_fps`], macOS Low Power
+    /// Mode, and macOS thermal pressure; positive finite values clamp to `>= 1.0` Hz, and
+    /// zero, negative, or non-finite values clear the cap).
+    ///
+    /// Keeps streaming updates live on secondary displays without pausing them (occluded and
+    /// minimized windows still stop their display link completely). Losing focus drops any
+    /// prior steered window immediately so this cap applies on the next tick; live input over
+    /// the unfocused window (such as trackpad scrolling) lifts the cap immediately. Composes
+    /// monotonically with `ambient_fps`, Low Power Mode, and thermal pressure (lowest rate
+    /// wins). Enforced on macOS `DisplayLink` windows today.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, text};
+    ///
+    /// let spec = AppSpec::new("Chat", (720.0, 540.0), String::new, |s, _| text(s.as_str()).wrap());
+    /// App::new(spec).ambient_fps(60.0).unfocused_fps(30.0).run();
+    /// ```
+    pub fn unfocused_fps(mut self, fps: f32) -> Self {
+        self.unfocused_period = ambient_period_from_fps(fps);
         self
     }
 

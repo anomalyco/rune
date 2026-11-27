@@ -570,7 +570,7 @@ impl FrameHost for WindowFrame<'_> {
                 #[cfg(target_os = "macos")]
                 if l.native.pacing.is_none() && !self.host.pacing_waits {
                     l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.host.frame_wake.clone())
-                        .map(|p| p.with_ambient_period(self.host.ambient_period));
+                        .map(|p| self.host.pacing_config.apply(p));
                 }
             }
             let now = *self.state.now.get_or_insert_with(crate::time::now);
@@ -814,7 +814,7 @@ impl FrameHost for WindowFrame<'_> {
             // A display link that couldn't be made while the displays slept: they're back.
             if !self.state.hidden && l.native.pacing.is_none() && !self.host.pacing_waits {
                 l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.host.frame_wake.clone())
-                    .map(|p| p.with_ambient_period(self.host.ambient_period));
+                    .map(|p| self.host.pacing_config.apply(p));
             }
         }
         self.state.redraw_stage.end();
