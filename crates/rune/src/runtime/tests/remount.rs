@@ -785,3 +785,123 @@ fn scroll_center_in_instant_scoped_unmounted_virtual_row_mark_mounts_target_list
     let mid = mark.rect[1] + mark.rect[3] * 0.5;
     assert!((mid - 100.0).abs() < 1.0, "mark centred in 200pt viewport: {:?}", mark.rect);
 }
+
+#[test]
+fn scrolling_virtual_rows_with_pixel_aspect_image_skips_view_when_aspect_is_unchanged() {
+    struct State {
+        img: crate::Pixels,
+        views: Cell<u32>,
+    }
+    let img = crate::Pixels::new();
+    img.set(200, 100, vec![255; 200 * 100 * 4]);
+    let view = |s: &State, _: &mut Cx<State>| {
+        s.views.set(s.views.get() + 1);
+        let list = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            200,
+            40.0,
+            |_: &State, i| Cow::Owned(format!("r{i}")),
+            |s: &State, i| {
+                if i % 20 == 0 {
+                    // Markdown-style image: explicit width, auto height -> sets cold.pixel_aspect.
+                    col().w_full().child(el().key("pic").w_full().max_w(200.0).pixels(&s.img))
+                } else {
+                    row().w_full().h(40.0).child(text(format!("Row {i}")).key("label"))
+                }
+            },
+        );
+        col().key("scroll").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(list)
+    };
+    let mut rt = Runtime::new(State { img, views: Cell::new(0) }, view, (400.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+
+    let v0 = rt.state.views.get();
+    let mut remounts = 0u32;
+    for _ in 0..30 {
+        let c0 = rt.stats.commits;
+        rt.wheel(200.0, 120.0, -80.0);
+        rt.frame(1.0 / 120.0);
+        if rt.stats.commits > c0 {
+            remounts += 1;
+        }
+    }
+    assert!(remounts > 0, "scrolling should trigger at least one virtual window remount");
+    assert_eq!(
+        rt.state.views.get() - v0,
+        0,
+        "virtual scroll with an unchanged pixel_aspect image must stay on CommitKind::Remount"
+    );
+
+    // Re-setting pixels with the SAME aspect ratio must keep virtual_only() == true.
+    rt.state.img.set(400, 200, vec![200; 400 * 200 * 4]);
+    assert!(
+        rt.commit.virtual_only(&rt.tree, rt.frame.has_hot(), false),
+        "same-aspect pixel update must keep virtual_only() == true"
+    );
+
+    // Changing the image's aspect ratio must make virtual_only() itself return false (Rebuild)
+    // even before frame() sets commit.relayout.
+    rt.state.img.set(100, 200, vec![128; 100 * 200 * 4]);
+    assert!(
+        !rt.commit.virtual_only(&rt.tree, rt.frame.has_hot(), false),
+        "aspect ratio change on a mounted pixel_aspect image must make virtual_only() return false"
+    );
+    let v1 = rt.state.views.get();
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.views.get() > v1, "aspect ratio change must rebuild the view");
+    let pic = rt.elements().into_iter().find(|e| e.path.ends_with("/pic")).expect("mounted pic after aspect change");
+    assert!(
+        (pic.rect[3] - 400.0).abs() < 1.0,
+        "200pt-wide 1:2 portrait image should lay out at ~400pt tall, got {:?}",
+        pic.rect
+    );
+}
+
+#[test]
+fn scrolling_into_first_pixel_aspect_image_via_remount_refreshes_flag_and_catches_aspect_change() {
+    struct State {
+        img: crate::Pixels,
+        views: Cell<u32>,
+    }
+    let img = crate::Pixels::new();
+    img.set(200, 100, vec![255; 200 * 100 * 4]);
+    let view = |s: &State, _: &mut Cx<State>| {
+        s.views.set(s.views.get() + 1);
+        let list = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            200,
+            40.0,
+            |_: &State, i| Cow::Owned(format!("r{i}")),
+            |s: &State, i| {
+                if i == 40 {
+                    col().w_full().child(el().key("pic").w_full().max_w(200.0).pixels(&s.img))
+                } else {
+                    row().w_full().h(40.0).child(text(format!("Row {i}")).key("label"))
+                }
+            },
+        );
+        col().key("scroll").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(list)
+    };
+    let mut rt = Runtime::new(State { img, views: Cell::new(0) }, view, (400.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+    assert!(!rt.tree.has_pixel_aspect, "initial window has no pixel_aspect image mounted");
+
+    let v0 = rt.state.views.get();
+    for _ in 0..40 {
+        rt.wheel(200.0, 120.0, -80.0);
+        rt.frame(1.0 / 120.0);
+        if rt.elements().iter().any(|e| e.path.ends_with("/pic")) {
+            break;
+        }
+    }
+    assert_eq!(rt.state.views.get() - v0, 0, "scrolling into first pixel_aspect row must stay on Remount");
+    assert!(rt.tree.has_pixel_aspect, "remounting a pixel_aspect row must refresh tree.has_pixel_aspect");
+    let pic = rt.elements().into_iter().find(|e| e.path.ends_with("/pic")).expect("row 40 pic mounted");
+    assert!((pic.rect[3] - 100.0).abs() < 1.0, "200x100 image should lay out at 100pt tall, got {:?}", pic.rect);
+
+    rt.state.img.set(100, 200, vec![64; 100 * 200 * 4]);
+    assert!(
+        !rt.commit.virtual_only(&rt.tree, rt.frame.has_hot(), false),
+        "aspect change on remount-entered pixel_aspect image must make virtual_only() return false"
+    );
+}

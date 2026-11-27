@@ -58,8 +58,17 @@ impl CommitState {
         if hot || checking_live_only || (self.virtuals.is_empty() && self.virtual_items.is_empty()) || tree.nodes.is_empty() {
             return false;
         }
+        if !tree.aspect_snap.is_empty() {
+            return false;
+        }
+        let check_aspect = tree.has_pixel_aspect;
         if !tree.nodes.iter().all(|n| {
-            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted)
+            relayout::reusable(n)
+                && n.text.as_ref().is_none_or(|t| !t.redacted)
+                && (!check_aspect
+                    || n.cold.get().and_then(|c| c.pixel_aspect).is_none_or(|r| {
+                        n.vis.pixels.as_ref().is_some_and(|p| flatten::pixel_ratio(p) == r)
+                    }))
         }) {
             return false;
         }
