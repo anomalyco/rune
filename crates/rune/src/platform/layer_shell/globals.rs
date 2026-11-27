@@ -254,11 +254,11 @@ impl SharedGlobals {
     pub(super) fn dispatch_inner_queue(&self) -> Result<usize, WaylandError> {
         let moved = self.conn.backend().dispatch_inner_queue()?;
         self.drain_tracker.note_inner_drain(moved);
-        if moved > 0
-            && let Ok(mut inner) = self.inner.try_lock()
-            && drain_queue(&mut inner.queue, &mut inner.state)
-        {
-            inner.queue.flush().ok();
+        if moved > 0 && let Ok(mut guard) = self.inner.try_lock() {
+            let inner = &mut *guard;
+            if drain_queue(&mut inner.queue, &mut inner.state) {
+                inner.queue.flush().ok();
+            }
         }
         Ok(moved)
     }
