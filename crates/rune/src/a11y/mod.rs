@@ -21,6 +21,8 @@ mod auto_complete_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;
+#[cfg(test)]
+mod macos_tests;
 pub(crate) mod node;
 pub(crate) mod roles;
 #[cfg(test)]

@@ -178,7 +178,10 @@ fn ns_role(node: &NodeRef) -> &'static NSAccessibilityRole {
             Role::Ruby => NSAccessibilityGroupRole,
             Role::RubyAnnotation => NSAccessibilityUnknownRole,
             Role::ScrollBar => NSAccessibilityScrollBarRole,
-            Role::ScrollView => NSAccessibilityUnknownRole,
+            // Rune (vendor/accesskit_macos.patch): AppKit's scroll area role (`AXScrollArea`),
+            // as WebKit and Chromium expose scrolling containers so VoiceOver announces
+            // "scroll area" instead of "unknown".
+            Role::ScrollView => NSAccessibilityScrollAreaRole,
             Role::Search => NSAccessibilityGroupRole,
             Role::Section => NSAccessibilityGroupRole,
             Role::SectionFooter => NSAccessibilityGroupRole,
