@@ -161,6 +161,7 @@ impl OverlayCore {
         let needs_refuse = !self.terminal_gpu_entered
             || self.surface.live().is_some()
             || self.surface.parked().is_some()
+            || self.has_pending_layer()
             || self.presence.shown()
             || self.shared.availability.load(Ordering::Acquire) != Self::availability_code(Availability::Unavailable)
             || self.shared.failure.lock().unwrap().is_none();

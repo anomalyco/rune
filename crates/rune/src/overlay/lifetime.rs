@@ -43,9 +43,26 @@ impl OverlayCore {
         let size = self.at.size;
         self.resolve_size(event_loop);
         let was_live = self.surface.live().is_some();
-        if !was_live {
+        let was_pending = self.has_pending_layer();
+        if !was_live && !was_pending {
             self.prepare(app, event_loop, true);
             if self.shared.failure.lock().unwrap().is_some() { return; }
+        }
+        if self.has_pending_layer() {
+            if was_pending && size != self.at.size {
+                self.resize_pending_layer();
+            }
+            self.resume_live(app);
+            if !fading { self.settle_before_reveal(app.rt_mut()); }
+            let effects = self.presence.step(presence::Event::Show, self.release);
+            self.carry_out(app, effects);
+            self.after_hidden_shown(app);
+            self.publish_screen_transform(app.rt());
+            self.hidden_pace.reset();
+            self.backoff_step(crate::window::BackoffEvent::Revealed);
+            if !self.retained() { self.dirty = true; }
+            self.idle &= !(app.rt().animating || app.compositor_animating());
+            return;
         }
         if self.surface.live().is_none() { return; }
         self.resume_live(app);
@@ -104,7 +121,7 @@ impl OverlayCore {
             self.prepare_cpu(app, event_loop, showing);
             return;
         }
-        if self.surface.live().is_some() { return; }
+        if self.surface.live().is_some() || self.has_pending_layer() { return; }
         let surface = showing || !self.defers_gpu();
         let wayland = crate::window::is_wayland(event_loop);
         // Only an X11 window waits parked for its surface. A Wayland overlay's window is its
@@ -114,8 +131,13 @@ impl OverlayCore {
         if !surface && !parks { return; }
         self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
+        if wayland && self.start_layer(event_loop, showing) {
+            // An earlier attempt's failure no longer holds while waiting for initial configure.
+            self.shared.failure.lock().unwrap().take();
+            return;
+        }
         let made = if wayland {
-            self.layer(app, event_loop, showing).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
+            self.xwayland(app).or_else(|| self.toplevel(app, event_loop))
         } else if self.surface.parked().is_some() || self.window(app, event_loop).is_some() {
             // macOS made the surface with its panel; elsewhere the window waits parked.
             match self.surface.take_live() {
@@ -388,12 +410,13 @@ impl OverlayCore {
             if !fading { self.on_hide_cpu(); }
             return false;
         }
-        let Some(live) = self.surface.live() else { return false };
+        let pending_destroyed = self.cancel_pending_layer();
+        let Some(live) = self.surface.live() else { return pending_destroyed };
         #[cfg_attr(
             not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))),
             allow(unused_mut)
         )]
-        let mut surface_destroyed = false;
+        let mut surface_destroyed = pending_destroyed;
         match &live.backing {
             Backing::Window(window) => {
                 if self.options.keys.takes_keys() {
@@ -457,40 +480,6 @@ impl OverlayCore {
         {
             self.retire.retire_now(gpu, crate::time::now());
         }
-    }
-
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) fn layer(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, showing: bool) -> Option<Live> {
-        use winit::raw_window_handle::HasDisplayHandle;
-        use winit::platform::wayland::MonitorHandleExtWayland;
-        let display = event_loop.display_handle().ok()?.as_raw();
-        let monitor = monitor(event_loop, &self.options.display);
-        let scale = monitor.as_ref().map_or(1.0, |m| m.scale_factor()).ceil() as i32;
-        // With no target, the compositor chooses an output; global pointer querying is forbidden.
-        let output = match &self.options.display {
-            DisplayTarget::Id(id) if event_loop.available_monitors().any(|m| m == id.0) => Some(id.0.native_id()),
-            DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) if event_loop.available_monitors().any(|m| m.native_id() == *id) => Some(*id),
-            _ => None,
-        };
-        let hold_keys = showing && self.key_hold.is_held();
-        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, hold_keys)?;
-        self.wayland_globals = Some(layer.globals_handle());
-        layer.set_buffer_scale(scale);
-        if let Some((w, h)) = layer.configured_size() {
-            if w > 0 { self.at.size.0 = w as f32; }
-            if h > 0 { self.at.size.1 = h as f32; }
-        }
-        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(
-            OverlaySupport::Unsupported,
-            if layer.supports_keys() { OverlaySupport::Supported } else { OverlaySupport::Unsupported },
-            OverlaySupport::Unsupported,
-        );
-        self.attach(app, Backing::Layer(layer), scale as f32)
-    }
-
-    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    pub(super) fn layer(&mut self, _app: &mut dyn OverlayApp, _event_loop: &ActiveEventLoop, _showing: bool) -> Option<Live> {
-        None
     }
 
     /// Makes the native window: on macOS with its GPU surface (`live`), which binds winit's view

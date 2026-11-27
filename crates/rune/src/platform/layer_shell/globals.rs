@@ -231,8 +231,10 @@ impl SharedGlobals {
         &self.shell
     }
 
-    pub(super) fn drain_tracker(&self) -> &DrainTracker {
-        &self.drain_tracker
+    /// True while `wl_output` global `id` is still advertised and bound in the shared registry.
+    pub(super) fn has_output(&self, id: u32) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.state.outputs.contains_key(&id)
     }
 
     pub(super) fn inner_drain_gen(&self) -> u64 {

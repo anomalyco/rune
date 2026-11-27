@@ -120,32 +120,6 @@ fn read_keymap_fd_ignores_and_preserves_shared_file_offset() -> std::io::Result<
 }
 
 #[test]
-fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::io::Result<()> {
-    use std::os::unix::net::UnixStream;
-    use std::time::Duration;
-    use wayland_client::Connection;
-    use crate::platform::layer_shell_machine::configure_wait::Outcome;
-
-    let (client, _server) = UnixStream::pair()?;
-    let Ok(conn) = Connection::from_socket(client) else { return Ok(()); };
-    let mut queue = conn.new_event_queue::<super::State>();
-    let mut state = super::State::default();
-    let started = crate::time::now();
-    let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_millis(40));
-    assert_eq!(outcome, Outcome::TimedOut);
-    assert!(started.elapsed() >= Duration::from_millis(30));
-
-    let (client, server) = UnixStream::pair()?;
-    drop(server);
-    let Ok(conn) = Connection::from_socket(client) else { return Ok(()); };
-    let mut queue = conn.new_event_queue::<super::State>();
-    let mut state = super::State::default();
-    let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_secs(2));
-    assert_eq!(outcome, Outcome::Error);
-    Ok(())
-}
-
-#[test]
 fn xkb_compose_feeds_dead_keys_and_resets_after_composed_or_cancelled() {
     use xkbcommon::xkb;
     use crate::platform::layer_shell_machine::keyboard::ComposeOutcome;
@@ -393,8 +367,12 @@ fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_close
         let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
         let options = OverlayOptions::default();
         let mut layer = super::LayerSurface::new(display, "test-pending", placement, false, &options, None, false)
-            .expect("configured layer surface");
-
+            .expect("layer surface");
+        while !layer.is_configured() && layer.is_live() {
+            host_read_once(&host);
+            let _ = layer.dispatch();
+        }
+        assert!(layer.is_configured());
         assert!(layer.is_live());
         assert!(!layer.has_pending_events(), "idle layer surface must report no pending events");
 
@@ -465,9 +443,11 @@ fn display_error_reports_dead_connection_and_none_when_live() -> std::io::Result
     let (client, server) = UnixStream::pair()?;
     drop(server);
     let Ok(dead) = Connection::from_socket(client) else { return Ok(()); };
-    let mut queue = dead.new_event_queue::<super::State>();
-    let mut state = super::State::default();
-    let _ = super::wait_for_configure(&dead, &mut queue, &mut state, std::time::Duration::from_secs(1));
+    let queue = dead.new_event_queue::<super::State>();
+    let _ = queue.flush();
+    if let Some(guard) = queue.prepare_read() {
+        let _ = guard.read();
+    }
     let dead_ptr = NonNull::new(dead.display().id().as_ptr().cast()).expect("wl_display");
     let err = super::display_error(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(dead_ptr)));
     assert!(err.is_some(), "expected socket error from dead display");
@@ -585,7 +565,17 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
             NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
         ));
         let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None, false)
-            .expect("configured layer surface");
+            .expect("layer surface");
+        while !layer.is_configured() && layer.is_live() {
+            let guard = host.prepare_read().or_else(|| {
+                host.backend().dispatch_inner_queue().ok();
+                host.prepare_read()
+            });
+            if let Some(guard) = guard {
+                guard.read().ok();
+            }
+            let _ = layer.dispatch();
+        }
         let conn_probe = layer.globals.conn().clone();
 
         // Requesting a second frame callback destroys the previous pending one immediately.
@@ -835,7 +825,12 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
     let options = OverlayOptions { keys: KeyPolicy::Exclusive, ..OverlayOptions::default() };
     let mut layer = super::LayerSurface::new(display, "test-activation", placement, true, &options, None, false)
-        .expect("configured layer surface");
+        .expect("layer surface");
+    while !layer.is_configured() && layer.is_live() {
+        host_read_once(&host);
+        let _ = layer.dispatch();
+    }
+    assert!(layer.is_configured());
 
     let seat_id = layer.seat.as_ref().expect("bound wl_seat").id().protocol_id();
     let keyboard_id = layer.state.keyboard.as_ref().expect("bound wl_keyboard").id().protocol_id();
