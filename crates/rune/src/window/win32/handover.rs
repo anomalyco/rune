@@ -438,7 +438,9 @@ impl Host {
             }
         }
         w.native.slot.reset();
+        w.native.dxgi_present.reset();
         w.native.damage.reset();
+        self.frame_presented.reset();
         // D3D12's idle-priority threads compile the first frame's shaders: on a busy machine they
         // would hold the hand-over frame off.
         crate::platform::win32::unidle_d3d_threads_soon();
@@ -632,7 +634,9 @@ impl Host {
         // From a hand-over: its swap chain and GPU go. DWM kept the window's own content, which
         // the CPU goes on drawing.
         w.native.slot.reset();
+        w.native.dxgi_present.reset();
         w.surface = None;
+        self.frame_presented.reset();
         self.gpu = None;
         self.app.release_compositor_gpu();
         self.app.rt_mut().set_renderer_kind(crate::RendererKind::Cpu);

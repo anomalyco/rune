@@ -23,22 +23,20 @@ impl AnyHost for Host {
     fn has_live_wayland_layer(&self) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return self.wayland
-            && self
-                .win
-                .as_ref()
-                .and_then(|w| w.native.wayland_backdrop.as_ref())
-                .is_some_and(|b| b.needs_wake_on_read());
+            && self.win.as_ref().is_some_and(|w| {
+                w.native.wayland_backdrop.as_ref().is_some_and(|b| b.needs_wake_on_read())
+                    || w.native.wayland_present.as_ref().is_some_and(|p| p.needs_wake_on_read())
+            });
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
     fn has_pending_platform_events(&self) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return self.wayland
-            && self
-                .win
-                .as_ref()
-                .and_then(|w| w.native.wayland_backdrop.as_ref())
-                .is_some_and(|b| b.has_pending_events());
+            && self.win.as_ref().is_some_and(|w| {
+                w.native.wayland_backdrop.as_ref().is_some_and(|b| b.has_pending_events())
+                    || w.native.wayland_present.as_ref().is_some_and(|p| p.has_pending_events())
+            });
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
@@ -101,6 +99,7 @@ impl AnyHost for Host {
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
             .chain(wayland_drop_deadline(win))
+            .chain(dxgi_present_deadline(win, self.frame_presented.has_pending()))
             .chain(self.window_script.as_ref().and_then(|s| s.next_at()))
             .min()
     }
@@ -328,10 +327,8 @@ impl Host {
     fn new_events_in_turn(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         if self.poll_gpu_loss() { return; }
         #[cfg(target_os = "macos")]
-        {
-            if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
-            self.frame_presented.drain();
-        }
+        if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
+        self.drain_frame_presented();
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         if self.window_script.is_some() { self.replay_window_script(crate::time::now()); }
@@ -455,6 +452,7 @@ impl Host {
         self.flush_files(event_loop);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.poll_wayland_backdrop();
+        self.drain_frame_presented();
         // Another window switched the font families (`Tx::set_font_families`).
         if self.app.rt_mut().follow_font_families() && let Some(w) = &mut self.win {
             w.loop_frame.touched();
@@ -551,4 +549,68 @@ fn wayland_drop_deadline(win: Option<&Win>) -> Option<Instant> {
     return win.and_then(|w| w.native.drop_binding.deadline());
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     { let _ = win; None }
+}
+
+/// When a Windows window polls DXGI `GetFrameStatistics` for an in-flight `on_frame_presented` frame.
+fn dxgi_present_deadline(win: Option<&Win>, has_pending: bool) -> Option<Instant> {
+    #[cfg(target_os = "windows")]
+    return has_pending.then(|| win.and_then(|w| w.native.dxgi_present.next_deadline())).flatten();
+    #[cfg(not(target_os = "windows"))]
+    { let _ = (win, has_pending); None }
+}
+
+impl Host {
+    /// Drains any landed presentation timestamps on the active platform without blocking.
+    pub(in crate::window) fn drain_frame_presented(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.frame_presented.drain();
+        #[cfg(target_os = "windows")]
+        self.poll_dxgi_present();
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.poll_wayland_present();
+    }
+
+    /// Drains landed completions, then drops orphaned in-flight presentation tracking after a
+    /// surface replacement, hide, release, or device loss.
+    pub(in crate::window) fn reset_frame_presented(&mut self) {
+        self.drain_frame_presented();
+        self.frame_presented.reset();
+        #[cfg(target_os = "windows")]
+        if let Some(w) = self.win.as_mut() {
+            w.native.dxgi_present.reset();
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(wp) = self.win.as_mut().and_then(|w| w.native.wayland_present.as_mut()) {
+            wp.reset();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) fn poll_dxgi_present(&mut self) {
+        if !self.frame_presented.has_pending() {
+            if let Some(w) = self.win.as_mut() {
+                w.native.dxgi_present.clear_waiting();
+            }
+            return;
+        }
+        let Some(w) = self.win.as_mut() else { return };
+        let Some(surface) = w.surface.as_ref() else { return };
+        let hz = super::draw::display_hz(w);
+        w.native.dxgi_present.poll_surface(surface, &mut self.frame_presented, crate::time::now(), hz);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn poll_wayland_present(&mut self) {
+        if !self.wayland || !self.frame_presented.wanted() {
+            return;
+        }
+        let Some(wp) = self.win.as_mut().and_then(|w| w.native.wayland_present.as_mut()) else {
+            return;
+        };
+        let mut completions = Vec::new();
+        wp.poll(&mut completions);
+        if !completions.is_empty() {
+            self.frame_presented.apply_completions(completions);
+        }
+    }
 }

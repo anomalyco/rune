@@ -748,6 +748,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 {
                     crate::platform::wayland::drop::shutdown();
                     crate::platform::wayland::backdrop::shutdown();
+                    crate::platform::wayland::presentation::shutdown();
                 }
                 crate::marks::mark("windows.dropped");
                 crate::clipboard::shutdown();

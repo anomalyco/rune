@@ -512,7 +512,14 @@ impl Host {
             let last_maximized = window.is_maximized();
             Native { cloak, frame, mode, a11y_start, last_maximized, ..Default::default() }
         };
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let native = Native {
+            wayland_present: (self.wayland && self.frame_presented.wanted())
+                .then(|| crate::platform::wayland::presentation::SurfacePresentation::for_window(&window))
+                .flatten(),
+            ..Default::default()
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
         let native = Native::default();
         let initial_mode = if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu) {
             crate::gpu::fallback::GpuMode::Software
@@ -691,8 +698,13 @@ impl Host {
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         self.app.rt_mut().paint.set_windows_acrylic_materials(false);
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
+        #[cfg(target_os = "windows")]
+        w.native.dxgi_present.reset();
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(wp) = w.native.wayland_present.as_mut() {
+            wp.reset();
+        }
         drop(w.surface.take());
-        #[cfg(target_os = "macos")]
         self.frame_presented.reset();
         self.gpu = None;
         self.app.release_compositor_gpu();
@@ -783,7 +795,7 @@ impl Host {
         w.surface_ok = true;
         w.alpha = alpha;
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.damage.reset(); }
+        { w.native.slot.reset(); w.native.dxgi_present.reset(); w.native.damage.reset(); }
         #[cfg(target_os = "windows")]
         w.native.mode.rebind();
         #[cfg(target_os = "macos")]
@@ -822,8 +834,10 @@ impl Host {
         // The old surface goes first: a DX12 surface takes the visual's content, and the
         // committed tree keeps showing its last frame until the new one commits.
         w.native.slot.reset();
+        w.native.dxgi_present.reset();
         w.native.damage.reset();
         drop(w.surface.take());
+        self.frame_presented.reset();
         // SAFETY: the window keeps the visual's `Handover` as long as it keeps this surface.
         let surface = unsafe { gpu.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }.map_err(|e| e.to_string())?;
         let mut config = w.config.clone();

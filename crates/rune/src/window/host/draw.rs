@@ -216,7 +216,6 @@ struct FrameState {
     deferred: bool,
     #[cfg(target_os = "macos")]
     shown: Option<crate::platform::macos::PresumeShown>,
-    #[cfg(target_os = "macos")]
     drawable: Option<u64>,
     #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
     materials_checked: bool,
@@ -746,7 +745,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn submit_and_present(&mut self, prepared: PreparedWindowFrame, info: &StepInfo) -> Instant {
-        submit_and_present_window(self.host, prepared, self.state.looped.as_ref(), &mut self.state.profile, &mut self.state.encoded, info)
+        submit_and_present_window(self.host, prepared, self.state.looped.as_ref(), &mut self.state.profile, &mut self.state.encoded, &mut self.state.drawable, info)
     }
 
     fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
@@ -760,6 +759,7 @@ impl FrameHost for WindowFrame<'_> {
             self.state.redraw_stage.end();
             #[cfg(target_os = "windows")]
             self.host.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
+            self.host.reset_frame_presented();
             let outcome = if let Some(l) = self.host.win.as_mut() {
                 #[cfg(target_os = "windows")]
                 l.native.slot.reset();
@@ -802,17 +802,25 @@ impl FrameHost for WindowFrame<'_> {
         self.state.redraw_stage.end();
         let frame_seq = self.host.frame_reports.drawn(self.state.encoded, info.presents_at, now, info.update_ms);
         self.host.app.inspect_frame();
-        #[cfg(target_os = "macos")]
         let drawable = self.state.drawable;
-        #[cfg(not(target_os = "macos"))]
-        let drawable = None;
-        #[cfg(target_os = "macos")]
         if let (Some(frame_seq), Some(drawable_seq)) = (frame_seq, drawable) {
+            #[cfg(target_os = "macos")]
             self.host.frame_presented.push_and_drain(drawable_seq, frame_seq);
+            #[cfg(target_os = "windows")]
+            {
+                self.host.frame_presented.push_pending(drawable_seq, frame_seq);
+                self.host.poll_dxgi_present();
+            }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            {
+                self.host.frame_presented.push_pending(drawable_seq, frame_seq);
+                self.host.poll_wayland_present();
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
+            let _ = (frame_seq, drawable_seq);
         }
-        #[cfg(not(target_os = "macos"))]
-        let _ = frame_seq;
-        if record_trace_frame(self.host, now, submitted, self.state.target, drawable) {
+        let trace_drawable = if cfg!(target_os = "macos") { drawable } else { None };
+        if record_trace_frame(self.host, now, submitted, self.state.target, trace_drawable) {
             return;
         }
         let Some(l) = self.host.win.as_mut() else { return };

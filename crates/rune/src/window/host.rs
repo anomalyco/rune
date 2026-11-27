@@ -80,7 +80,6 @@ pub(in crate::window) struct Host {
     pub(in crate::window) on_ready: Option<crate::app::OnWindow>,
     pub(in crate::window) frame_reports: crate::frame::encoded::FrameReports,
     pub(in crate::window) observability: crate::frame::stage::HostObservability,
-    #[cfg(target_os = "macos")]
     pub(in crate::window) frame_presented: crate::frame::presented::FramePresentReports,
     #[cfg(target_os = "macos")]
     pub(in crate::window) ambient_period: Option<std::time::Duration>,
@@ -234,7 +233,6 @@ struct HostInit {
     on_ready: Option<crate::app::OnWindow>,
     on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     observability: crate::frame::stage::HostObservability,
-    #[cfg(target_os = "macos")]
     on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     #[cfg(target_os = "macos")]
     ambient_period: Option<std::time::Duration>,
@@ -289,7 +287,6 @@ impl Host {
             app.observability.take(),
             Some(native_handle.key()),
         );
-        #[cfg(target_os = "macos")]
         let on_frame_presented = app.on_frame_presented.take();
         #[cfg(target_os = "macos")]
         let ambient_period = app.ambient_period;
@@ -355,7 +352,6 @@ impl Host {
             on_ready,
             on_frame_encoded,
             observability,
-            #[cfg(target_os = "macos")]
             on_frame_presented,
             #[cfg(target_os = "macos")]
             ambient_period,
@@ -410,7 +406,6 @@ impl Host {
             on_ready,
             on_frame_encoded,
             observability,
-            #[cfg(target_os = "macos")]
             on_frame_presented,
             #[cfg(target_os = "macos")]
             ambient_period,
@@ -442,12 +437,9 @@ impl Host {
         // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
         // focus and keyboard where they are, as `App::open_inactive` does.
         let open_inactive = open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some();
-        #[cfg(target_os = "macos")]
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut frame_presented = crate::frame::presented::FramePresentReports::new(on_frame_presented, Some(native_handle.key()));
-        #[cfg(target_os = "macos")]
         let track_presented = frame_presented.wanted();
-        #[cfg(not(target_os = "macos"))]
-        let track_presented = false;
         let frame_reports = crate::frame::encoded::FrameReports::with_presented_seq(
             on_frame_encoded,
             track_presented || observability.wants_stages(),
@@ -531,7 +523,6 @@ impl Host {
             on_ready,
             frame_reports,
             observability,
-            #[cfg(target_os = "macos")]
             frame_presented,
             #[cfg(target_os = "macos")]
             ambient_period,
