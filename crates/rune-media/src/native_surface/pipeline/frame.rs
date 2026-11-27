@@ -68,7 +68,7 @@ impl SurfaceRenderer {
             let key = d.surface.key();
             let changed = self.cache.get(&key).is_none_or(|v| !Arc::ptr_eq(&v.frame, &frame));
             if changed {
-                match self.import(device, queue, frame) {
+                match self.import(device, queue, key, frame) {
                     Ok(imported) => {
                         self.cache.insert(key, Arc::new(imported));
                         d.surface.0.lock().unwrap().error = None;
@@ -122,13 +122,26 @@ impl SurfaceRenderer {
                     None => queue.write_buffer(&p.uniform, 0, bytemuck::bytes_of(&u)),
                 }
                 if !Arc::ptr_eq(&p.imported, &imported) && p.imported.textures != imported.textures {
-                    let old = std::mem::replace(&mut p.bind, match p.binds.iter().position(|(t, _)| *t == imported.textures) {
-                        Some(i) => p.binds.remove(i).1,
-                        None => bind_group(device, &self.layout, &self.sampler, &p.uniform, &imported.textures),
-                    });
-                    p.binds.push((p.imported.textures.clone(), old));
-                    if p.binds.len() > KEPT_BINDS {
-                        p.binds.remove(0);
+                    let same_stream = p.imported.frame.size == imported.frame.size
+                        && p.imported.frame.format == imported.frame.format
+                        && std::mem::discriminant(&p.imported.frame.source) == std::mem::discriminant(&imported.frame.source);
+                    if !same_stream {
+                        p.binds.clear();
+                    }
+                    let next_bind = if same_stream && imported.reusable {
+                        match p.binds.iter().position(|(t, _)| *t == imported.textures) {
+                            Some(i) => p.binds.remove(i).1,
+                            None => bind_group(device, &self.layout, &self.sampler, &p.uniform, &imported.textures),
+                        }
+                    } else {
+                        bind_group(device, &self.layout, &self.sampler, &p.uniform, &imported.textures)
+                    };
+                    let old = std::mem::replace(&mut p.bind, next_bind);
+                    if same_stream && p.imported.reusable {
+                        p.binds.push((p.imported.textures.clone(), old));
+                        if p.binds.len() > KEPT_BINDS {
+                            p.binds.remove(0);
+                        }
                     }
                 }
                 p.imported = imported;
@@ -165,12 +178,16 @@ impl SurfaceRenderer {
         }
         self.draws.truncate(count);
         #[cfg(target_os = "windows")]
-        if let Some(shared) = &mut self.shared {
-            shared.forget_gone();
+        if let Some(shared) = &mut self.shared
+            && shared.forget_gone(|key| self.cache.get(&key).is_some_and(|v| matches!(v.frame.source, Source::Shared(_))))
+        {
+            self.completion.wake();
         }
         #[cfg(target_os = "linux")]
-        if let Some(dmabuf) = &mut self.dmabuf {
-            dmabuf.forget_gone();
+        if let Some(dmabuf) = &mut self.dmabuf
+            && dmabuf.forget_gone(|key| self.cache.get(&key).is_some_and(|v| matches!(v.frame.source, Source::Dmabuf(_))))
+        {
+            self.completion.wake();
         }
         #[cfg(target_os = "macos")]
         if let Some(i) = &self.importer {
@@ -178,11 +195,16 @@ impl SurfaceRenderer {
         }
     }
 
-    fn import(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: Arc<Frame>) -> Result<Imported, String> {
-        let textures = match &frame.source {
+    fn import(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface: usize, frame: Arc<Frame>) -> Result<Imported, String> {
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let _ = surface;
+        let (textures, reusable, lease) = match &frame.source {
             // Checks the size itself, so every failure reaches the producer.
             #[cfg(target_os = "linux")]
-            Source::Dmabuf(d) => linux::import(&mut self.dmabuf, device, queue, d)?,
+            Source::Dmabuf(d) => {
+                let (textures, reusable) = linux::import(&mut self.dmabuf, device, queue, surface, d)?;
+                (textures, reusable, None)
+            }
             _ if frame.size.iter().any(|v| *v > device.limits().max_texture_dimension_2d) => {
                 return Err("video dimensions exceed this GPU device's texture limit".into());
             }
@@ -204,33 +226,36 @@ impl SurfaceRenderer {
                 } else {
                     upload(device, queue, b.width / 2, b.height / 2, wgpu::TextureFormat::Rg8Unorm, &b.planes[1])
                 };
-                [a, b]
+                ([a, b], false, None)
             }
             #[cfg(target_os = "macos")]
             Source::PixelBuffer(b) => {
                 if self.importer.is_none() {
                     self.importer = Some(macos::Importer::new(device)?);
                 }
-                objc2::rc::autoreleasepool(|_| {
+                let textures = objc2::rc::autoreleasepool(|_| {
                     self.importer.as_ref().unwrap().import(b, frame.format, frame.size)
-                })?
+                })?;
+                (textures, false, None)
             }
             #[cfg(target_os = "windows")]
             Source::Shared(t) => {
                 if self.shared.is_none() {
                     self.shared = Some(windows::Importer::new(device)?);
                 }
-                self.shared.as_mut().unwrap().import(queue, t)?
+                let (textures, lease) = self.shared.as_mut().unwrap().import(queue, surface, t)?;
+                let reusable = lease.is_some();
+                (textures, reusable, lease)
             }
             #[cfg(target_os = "windows")]
             Source::Decoded(planes, value) => {
                 if self.shared.is_none() {
                     self.shared = Some(windows::Importer::new(device)?);
                 }
-                self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?
+                (self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?, true, None)
             }
         };
-        Ok(Imported { frame, textures })
+        Ok(Imported { frame, textures, reusable, _lease: lease })
     }
 
     pub fn len(&self) -> usize {

@@ -39,6 +39,13 @@ pub struct Building {
 pub(crate) struct Imported {
     frame: Arc<Frame>,
     textures: [wgpu::Texture; 2],
+    /// Whether `textures` come from a bounded pool or decoder ring that may be returned again,
+    /// so caching their bind group in `Prepared::binds` avoids per-frame reallocation without
+    /// retaining one-shot textures.
+    reusable: bool,
+    /// Keeps a pooled copy target reserved while this `Imported` is live (in `cache`,
+    /// `Prepared`, or an in-flight `SurfaceRenderer::submit` callback).
+    _lease: Option<Arc<()>>,
 }
 struct Prepared {
     drawn: std::sync::atomic::AtomicBool,
@@ -412,6 +419,16 @@ impl SurfaceRenderer {
     #[cfg(all(test, target_os = "macos"))]
     pub(super) fn live_planes(&self) -> usize {
         self.importer.as_ref().map_or(0, |i| i.live_planes.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[cfg(test)]
+    pub(super) fn kept_bind_counts(&self) -> Vec<usize> {
+        self.draws.iter().map(|d| d.binds.len()).collect()
+    }
+
+    #[cfg(all(test, target_os = "windows"))]
+    pub(super) fn windows_importer(&self) -> Option<&windows::Importer> {
+        self.shared.as_ref()
     }
 
     #[cfg(target_os = "windows")]

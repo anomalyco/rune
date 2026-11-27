@@ -277,3 +277,18 @@ fn video_transfers_match_reference_in_linear_and_srgb_blend_on(gpu: Gpu) {
         assert_eq!(srgb_p[3], 128);
     }
 }
+
+on_each_backend!(
+    byte_frames_do_not_retain_stale_binds,
+    byte_frames_do_not_retain_stale_binds_on_metal,
+    byte_frames_do_not_retain_stale_binds_on
+);
+fn byte_frames_do_not_retain_stale_binds_on(gpu: Gpu) {
+    let mut renderer = SurfaceRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let surface = NativeSurface::new();
+    for id in 1..=12u64 {
+        publish(&surface, synthetic(16, 16, id), id, cfg!(target_os = "macos"));
+        let _ = render_into(&gpu, &mut renderer, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16), wgpu::TextureFormat::Rgba8UnormSrgb);
+    }
+    assert_eq!(renderer.kept_bind_counts(), vec![0], "one-shot textures must not be retained in Prepared::binds");
+}
