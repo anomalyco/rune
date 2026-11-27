@@ -39,6 +39,8 @@ extern "C" {
     fn sync_media_keys(handle: &JsValue, enabled: bool);
     #[wasm_bindgen(js_name = syncWheel)]
     fn sync_wheel(handle: &JsValue, used: bool);
+    #[wasm_bindgen(js_name = syncGesture)]
+    fn sync_gesture(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncCaret)]
     fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
     #[wasm_bindgen(js_name = syncVisualViewport)]
@@ -409,6 +411,13 @@ impl Running {
                 self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);
                 return false;
             }
+            Some("gesture_start") => {
+                let point = event["x"].as_f64().zip(event["y"].as_f64())
+                    .map(|(x, y)| crate::input::host_events::window_point(self.app.rt(), x as f32, y as f32));
+                let used = crate::input::host_events::web_gesture_start(self.app.rt(), point, self.input.document, self.input.fit_height);
+                sync_gesture(&self.input.handle, used);
+                return false;
+            }
             Some("touch_hold_confirm") => {
                 let attempt = crate::machine::Attempt(event["attempt"].as_u64().unwrap_or(0) as u32);
                 if !self.app.confirm_touch_hold(attempt) { return false; }
@@ -597,16 +606,11 @@ impl Running {
                 let dy_pages = event["dy"].as_f64().unwrap_or(0.0) as f32;
                 let shift = !self.input.is_mac && mods.shift && !mods.ctrl;
                 let (dx, dy) = crate::input::host_events::wheel_page_delta(self.app.rt(), dx_pages, dy_pages, shift);
-                let (redraw, wheel_used) = crate::input::host_events::web_wheel(
-                    self.app.rt_mut(),
-                    dx,
-                    dy,
-                    mods,
-                    crate::GesturePhase::Moved,
-                    false,
-                    self.input.document,
-                    self.input.fit_height,
-                );
+                let notch = dx_pages.fract() == 0.0 && dy_pages.fract() == 0.0;
+                let input = crate::input::host_events::WheelInput {
+                    dx, dy, ticks: None, mods, phase: crate::GesturePhase::Moved, precise: false, notch, pinch: false,
+                };
+                let (redraw, wheel_used) = crate::input::host_events::web_wheel(self.app.rt_mut(), input, self.input.document, self.input.fit_height);
                 if let Some(used) = wheel_used { sync_wheel(&self.input.handle, used); }
                 return redraw;
             }
@@ -715,19 +719,14 @@ impl Running {
                 let shift = !self.input.is_mac && self.input.mods.shift_key() && !self.input.mods.control_key();
                 let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, shift, crate::runtime::LINE_POINTS);
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
+                let notch = crate::input::host_events::line_delta_is_notch(*delta, self.input.is_mac, !self.input.is_mac);
                 // Browsers give WheelEvent no gesture phase (always Moved), matching unphased
                 // desktop mouse wheels so WheelLock uses its idle timeout.
                 let phase = crate::input::host_events::gesture_phase(*phase);
-                let (redraw, wheel_used) = crate::input::host_events::web_wheel(
-                    self.app.rt_mut(),
-                    dx,
-                    dy,
-                    crate::window::map_mods(self.input.mods),
-                    phase,
-                    precise,
-                    self.input.document,
-                    self.input.fit_height,
-                );
+                let input = crate::input::host_events::WheelInput {
+                    dx, dy, ticks: None, mods: crate::window::map_mods(self.input.mods), phase, precise, notch, pinch: false,
+                };
+                let (redraw, wheel_used) = crate::input::host_events::web_wheel(self.app.rt_mut(), input, self.input.document, self.input.fit_height);
                 if let Some(used) = wheel_used { sync_wheel(&self.input.handle, used); }
                 if !redraw { return false; }
             }

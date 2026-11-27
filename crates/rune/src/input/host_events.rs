@@ -413,6 +413,20 @@ pub(crate) fn wheel_page_delta(rt: &RuntimeCore, dx_pages: f32, dy_pages: f32, s
     }
 }
 
+/// Whether a browser `gesturestart` (Safari/WebKit pinch or rotation) at view point `point`
+/// (falling back to the current pointer when absent) is claimed by a Rune gesture handler.
+/// Document mode and `fit_height` canvases always leave browser pinch-zoom alone.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn web_gesture_start(
+    rt: &RuntimeCore,
+    point: Option<(f32, f32)>,
+    document: bool,
+    fit_height: bool,
+) -> bool {
+    if document || fit_height { return false; }
+    point.or_else(|| rt.pointer()).is_some_and(|(x, y)| rt.has_magnify_or_rotate(x, y))
+}
+
 /// Translates a browser wheel delta in window points through [`wheel_core`], applying browser
 /// policies: Ctrl+wheel only pinches outside document mode (unclaimed Ctrl+wheel stays with
 /// browser zoom), and `fit_height` canvases leave vertical wheel to the page.
@@ -420,35 +434,28 @@ pub(crate) fn wheel_page_delta(rt: &RuntimeCore, dx_pages: f32, dy_pages: f32, s
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
 pub(crate) fn web_wheel(
     rt: &mut RuntimeCore,
-    dx: f32,
-    dy: f32,
-    mods: crate::Mods,
-    phase: crate::GesturePhase,
-    precise: bool,
+    input: WheelInput,
     document: bool,
     fit_height: bool,
 ) -> (bool, Option<bool>) {
     let Some((x, y)) = rt.pointer() else { return (false, None) };
     // A page's pinch is the browser's zoom; elsewhere unclaimed Ctrl+wheel stays with browser
     // zoom instead of falling through to scroll.
-    if mods.ctrl {
-        let used = !document && rt.pinch_wheel(x, y, dy, None);
+    if input.mods.ctrl {
+        let used = !document && rt.pinch_wheel(x, y, input.dy, input.ticks);
         return (used, Some(used));
     }
     // On a content-sized embedded canvas, vertical wheel belongs to the page unless a
     // horizontal strip is being scrolled.
-    if fit_height && dx.abs() <= dy.abs() {
+    if fit_height && input.dx.abs() <= input.dy.abs() {
         return (false, None);
     }
-    let outcome = wheel_core(
-        rt,
-        WheelInput { dx, dy, ticks: None, mods, phase, precise, notch: false, pinch: false },
-    );
+    let outcome = wheel_core(rt, WheelInput { pinch: false, ..input });
     (outcome != WheelOutcome::Ignored, None)
 }
 
 /// Returns whether a winit wheel delta comes from a discrete mouse-wheel notch on a platform
-/// whose browsers ease notched wheels.
+/// whose browsers ease notched wheels (including Firefox's `DOM_DELTA_LINE` on web).
 ///
 /// On macOS, AppKit's `hasPreciseScrollingDeltas == false` (mapped by winit to `LineDelta`)
 /// already isolates discrete physical mouse wheels from trackpads, Magic Mouse, Mighty Mouse,
@@ -457,8 +464,7 @@ pub(crate) fn web_wheel(
 /// and `cc/input/input_handler.cc::ShouldAnimateScroll`), every macOS `LineDelta` is a notch.
 /// On Windows and Linux, whole lines are a notched wheel while a free-spinning wheel or a
 /// precision touchpad sends fractions (the run decides, `WheelLock::notched`).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn line_delta_is_notch(delta: MouseScrollDelta, is_macos: bool, is_win_or_linux: bool) -> bool {
+pub(crate) fn line_delta_is_notch(delta: MouseScrollDelta, is_macos: bool, is_win_or_linux: bool) -> bool {
     match delta {
         MouseScrollDelta::LineDelta(_, _) if is_macos => true,
         MouseScrollDelta::LineDelta(x, y) if is_win_or_linux => x.fract() == 0.0 && y.fract() == 0.0,

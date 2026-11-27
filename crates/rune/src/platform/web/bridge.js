@@ -303,7 +303,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
         visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0, reconcileFollowUp: false,
-        pressedPointers: new Map(), pointerEndTimers: new Map(), pointerGen: 0,
+        pressedPointers: new Map(), pointerEndTimers: new Map(), pointerGen: 0, gestureUsed: false, gestureActive: false,
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
@@ -525,11 +525,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h); });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; h.gestureUsed = false; h.gestureActive = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h); });
     listen(window, 'focus', () => { if (h.key && h.domFocused && document.activeElement !== h.field) scheduleReconcile(false); });
     listen(document, 'visibilitychange', () => {
         if (document.hidden) {
-            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h);
+            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; h.gestureUsed = false; h.gestureActive = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h);
         } else if (h.key && h.domFocused && document.activeElement !== h.field) {
             scheduleReconcile(false);
         }
@@ -869,7 +869,32 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             if (event.ctrlKey && !used) return;
             event.preventDefault();
         }, { passive: false });
-        listen(document, 'gesturestart', event => event.preventDefault(), { passive: false });
+        // Safari/WebKit trackpad and touchscreen pinch-zoom: leave browser zoom alone in document
+        // mode, outside Rune's elements, and whenever no Rune `on_magnify` or `on_rotate` handler
+        // lies under the gesture point (`syncGesture`).
+        if (!page) {
+            listen(document, 'gesturestart', event => {
+                if (!ownsTarget(event.target)) return;
+                h.gestureUsed = false;
+                const payload = { kind: 'gesture_start' };
+                if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+                    const r = canvas.getBoundingClientRect();
+                    payload.x = event.clientX - r.left;
+                    payload.y = event.clientY - r.top;
+                }
+                send(payload);
+                h.gestureActive = !!h.gestureUsed;
+                h.gestureUsed = false;
+                if (h.gestureActive) event.preventDefault();
+            }, { passive: false });
+            listen(document, 'gesturechange', event => {
+                if (h.gestureActive && ownsTarget(event.target)) event.preventDefault();
+            }, { passive: false });
+            listen(document, 'gestureend', () => {
+                h.gestureActive = false;
+                h.gestureUsed = false;
+            }, { passive: true });
+        }
     } else {
         listen(canvas, 'wheel', forwardPageWheel, { passive: true });
     }
@@ -1513,6 +1538,11 @@ export function hideMenu(h) {
 // Whether Rune pinched something with the Ctrl+wheel it just heard.
 export function syncWheel(h, used) {
     h.wheelUsed = used;
+}
+
+// Whether a Rune `on_magnify` or `on_rotate` handler claimed the Safari `gesturestart` it just heard.
+export function syncGesture(h, used) {
+    h.gestureUsed = !!used;
 }
 
 // Vertical CSS shift (px, >= 0) to lift a focused field into the visible part of `visualViewport`

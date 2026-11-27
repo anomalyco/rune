@@ -4640,3 +4640,81 @@ test('sync clearing text focus tears down IME composition, ignores trailing comp
         bridge.destroy(h);
     }
 });
+
+test('Safari gesturestart and gesturechange only prevent native pinch-zoom when Rune claims it', () => {
+    const { doc, win, body } = installDom({ platform: 'MacIntel' });
+    const canvas = doc.createElement('canvas');
+    canvas.getBoundingClientRect = () => ({ left: 10, top: 20, right: 410, bottom: 320, width: 400, height: 300 });
+    body.append(canvas);
+    const events = [];
+    let shouldClaim = false;
+    let h;
+    h = bridge.mount(canvas, msg => {
+        const ev = JSON.parse(msg);
+        events.push(ev);
+        if (ev.kind === 'gesture_start') bridge.syncGesture(h, shouldClaim);
+    }, false, false, false);
+    const dispatchGesture = (type, target, extra = {}) => {
+        let prevented = false;
+        doc.dispatchEvent({ type, target, preventDefault() { prevented = true; }, ...extra });
+        return prevented;
+    };
+    try {
+        // 1. Unclaimed gesturestart/gesturechange on canvas leaves Safari pinch-zoom untouched.
+        shouldClaim = false;
+        assert.equal(dispatchGesture('gesturestart', canvas, { clientX: 60, clientY: 90 }), false);
+        assert.deepEqual(events, [{ kind: 'gesture_start', x: 50, y: 70 }]);
+        assert.equal(dispatchGesture('gesturechange', canvas), false);
+        dispatchGesture('gestureend', canvas);
+
+        // 2. Claimed gesturestart/gesturechange prevents Safari zoom until gestureend.
+        events.length = 0;
+        shouldClaim = true;
+        assert.equal(dispatchGesture('gesturestart', canvas, { clientX: 110, clientY: 120 }), true);
+        assert.deepEqual(events, [{ kind: 'gesture_start', x: 100, y: 100 }]);
+        assert.equal(dispatchGesture('gesturechange', canvas), true);
+        dispatchGesture('gestureend', canvas);
+        assert.equal(dispatchGesture('gesturechange', canvas), false, 'gestureend clears active claim');
+
+        // 3. Window blur clears active gesture claim so stray gesturechange is not prevented.
+        assert.equal(dispatchGesture('gesturestart', canvas, { clientX: 50, clientY: 50 }), true);
+        win.dispatchEvent({ type: 'blur' });
+        assert.equal(dispatchGesture('gesturechange', canvas), false);
+
+        // 4. Armed a11y child is owned by Rune; missing clientX/clientY omits x/y so Rust uses pointer().
+        events.length = 0;
+        const link = doc.createElement('a');
+        h.a11y.append(link);
+        shouldClaim = true;
+        assert.equal(dispatchGesture('gesturestart', link), true);
+        assert.deepEqual(events, [{ kind: 'gesture_start' }]);
+        dispatchGesture('gestureend', link);
+
+        // 5. Gesture outside Rune's elements (host page in embedded mode) never queries or prevents.
+        events.length = 0;
+        const hostDiv = doc.createElement('div');
+        body.append(hostDiv);
+        shouldClaim = true;
+        assert.equal(dispatchGesture('gesturestart', hostDiv, { clientX: 15, clientY: 25 }), false);
+        assert.deepEqual(events, []);
+        assert.equal(dispatchGesture('gesturechange', hostDiv), false);
+    } finally {
+        bridge.destroy(h);
+    }
+
+    // 6. Document mode (page=true) and fitHeight=true never install gesturestart blockers.
+    for (const opts of [{ embedded: false, fitHeight: false, page: true }, { embedded: true, fitHeight: true, page: false }]) {
+        const s = setup(opts);
+        try {
+            let prevented = false;
+            s.doc.dispatchEvent({
+                type: 'gesturestart', target: s.canvas, clientX: 40, clientY: 40,
+                preventDefault() { prevented = true; },
+            });
+            assert.equal(prevented, false);
+            assert.equal(s.events.some(e => e.kind === 'gesture_start'), false);
+        } finally {
+            bridge.destroy(s.h);
+        }
+    }
+});
