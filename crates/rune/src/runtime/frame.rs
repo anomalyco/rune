@@ -458,7 +458,8 @@ impl RuntimeCore {
         let mut end_of_frame = EndOfFrameRequests::take_from(&mut tx);
         self.latch_requests(app, &mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
-        if self.release_pointer_for_popup() {
+        // An open in-window fallback menu takes clicks on its items, so it keeps the pointer.
+        if !self.host.popup_fallback.is_active() && self.release_pointer_for_popup() {
             let mut popup_handler_ran = false;
             for queued in std::mem::take(&mut self.frame.queue) {
                 if !matches!(queued.action, Action::HoverChange(..) | Action::LinkHover(..)) { self.frame.queue.push_queued(queued); continue; }

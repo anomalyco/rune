@@ -440,3 +440,63 @@ fn default_link_context_menu_from_2339_routes_through_on_popup_menu_with_zero_sp
     rt.frame(0.0);
     assert_eq!(rt.state.opened, ["https://example.com/rune"]);
 }
+
+/// A click on an item of the in-window menu fires when it arrives as a window delivers it, with
+/// frames between press and release, while a native menu still takes the mouse: a press made
+/// while one waits is cancelled by the next frame, as before.
+#[test]
+fn a_click_on_a_fallback_menu_item_fires_across_frames_and_a_native_menu_still_takes_the_pointer() {
+    #[derive(Default)]
+    struct S { request: Option<PopupMenuRequest>, picks: Vec<Option<String>>, presses: usize }
+
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        let area = el().key("area").absolute(0.0, 0.0).size(300.0, 200.0).on_secondary_press(|_: &mut S, p: PointerPress, tx: &mut Tx| {
+            let menu = PopupMenu::new().item(PopupItem::new("a", "Alpha")).item(PopupItem::new("b", "Beta"));
+            tx.popup_menu(menu, p, |s: &mut S, picked, _| s.picks.push(picked.map(str::to_owned)));
+        });
+        // Stands in for the app's drawn menu (rune-kit's `Menu::from_popup_menu`): its item resolves the request.
+        let item = el().key("item-b").absolute(100.0, 100.0).size(80.0, 24.0).on_press_tx(|s: &mut S, tx: &mut Tx| {
+            s.presses += 1;
+            s.request = None;
+            tx.resolve_popup_menu(Some("b"));
+        });
+        col().size(300.0, 200.0).child(area).child(item)
+    }
+
+    /// Moves to `key`, presses and releases, a frame after each, as a window's events arrive.
+    fn click(rt: &mut Runtime<S>, key: &str) {
+        let (x, y) = rt.find(key).unwrap();
+        rt.pointer_move(x, y);
+        rt.frame(0.0);
+        rt.pointer_down(x, y);
+        rt.frame(0.0);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+    }
+
+    // In-window fallback: the menu stays queued while it's open, and its item still takes the click.
+    let mut rt = App::new(AppSpec::new("fallback-click", (300.0, 200.0), S::default, view))
+        .on_popup_menu(|s: &mut S, req: PopupMenuRequest, _| s.request = Some(req))
+        .headless_runtime((300.0, 200.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_popup_menu_fallback = true;
+    rt.frame(0.0);
+    rt.secondary_down(20.0, 20.0);
+    rt.secondary_up(20.0, 20.0);
+    rt.frame(0.0);
+    assert!(rt.state.request.is_some(), "the menu went to on_popup_menu");
+    click(&mut rt, "item-b");
+    assert_eq!(rt.state.presses, 1, "the item's press survived the frames while the menu was open");
+    assert_eq!(rt.state.picks, [Some("b".into())]);
+    assert!(rt.popup_menu().is_none(), "and the pick closed the menu");
+
+    // A native menu (no on_popup_menu) waiting for the shell takes the mouse: the press is cancelled.
+    let mut rt = App::new(AppSpec::new("native-click", (300.0, 200.0), S::default, view))
+        .headless_runtime((300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.popup_menu(PopupMenu::new().item(PopupItem::new("a", "A")), (20.0, 20.0), |s: &mut S, p, _| s.picks.push(p.map(str::to_owned))));
+    rt.frame(0.0);
+    assert!(rt.popup_menu().is_some());
+    click(&mut rt, "item-b");
+    assert_eq!(rt.state.presses, 0, "a native menu still releases the pointer every frame");
+    assert!(rt.state.picks.is_empty());
+}
