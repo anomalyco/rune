@@ -290,6 +290,12 @@ impl RuntimeCore {
         }
     }
 
+    /// Returns and clears whether the most recently dispatched key press was consumed by Rune.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn take_key_consumed(&mut self) -> bool {
+        self.kbd.take_key_consumed()
+    }
+
     /// Blurs the focused editable field when the browser's hidden input lost DOM focus externally
     /// (for example, iOS keyboard dismissal or focus moving outside the canvas). Matches `key` so
     /// a stale blur never clears a field that took focus afterwards.

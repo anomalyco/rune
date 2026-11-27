@@ -625,9 +625,14 @@ impl RuntimeCore {
             }
             Action::Files(event) => self.run_files(app, event, &mut one),
             Action::Key { ev, repeat, stage } => {
-                if self.kbd.held_gate(None, Some(&ev.key), repeat) { return false; }
+                if self.kbd.held_gate(None, Some(&ev.key), repeat) {
+                    self.kbd.note_key_consumed(false);
+                    return false;
+                }
                 if ! matches!(ev.key, crate::Key::Modifier { .. }) { self.note_key_down(app, repeat); }
-                if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) }
+                let ran = if stage { self.route_stage_key(app, &ev, &mut one) } else { self.route_key(app, &ev, repeat, &mut one) };
+                self.kbd.note_key_consumed(ran);
+                ran
             }
             Action::KeyUp(ev) => self.route_key_up(app, &ev, &mut one),
             Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(app, gesture, chain, ev, phased, &mut one),
