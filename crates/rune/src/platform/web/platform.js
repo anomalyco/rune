@@ -1,14 +1,132 @@
+function captureControlSelection(el) {
+    if (!el || typeof el.setSelectionRange !== 'function') return null;
+    try {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        if (typeof start !== 'number' || typeof end !== 'number') return null;
+        return { start, end, dir: el.selectionDirection ?? 'none' };
+    } catch {
+        return null;
+    }
+}
+
+function restoreControlSelection(el, saved) {
+    if (!el || !saved || typeof el.setSelectionRange !== 'function') return;
+    try {
+        if (el.selectionStart === saved.start
+            && el.selectionEnd === saved.end
+            && (el.selectionDirection ?? 'none') === saved.dir) {
+            return;
+        }
+        el.setSelectionRange(saved.start, saved.end, saved.dir);
+    } catch {}
+}
+
+function writeClipboardFallback(text) {
+    if (typeof document === 'undefined' || !document.body || typeof document.execCommand !== 'function') {
+        throw new Error('Clipboard copy failed.');
+    }
+    const active = document.activeElement ?? null;
+    const savedControlSel = captureControlSelection(active);
+    const selection = typeof document.getSelection === 'function' ? document.getSelection() : null;
+    const ranges = [];
+    if (selection) {
+        for (let i = 0; i < selection.rangeCount; i++) {
+            ranges.push(selection.getRangeAt(i).cloneRange());
+        }
+    }
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.readOnly = true;
+    field.tabIndex = -1;
+    field.setAttribute('aria-hidden', 'true');
+    field.setAttribute('data-rune-clipboard', '');
+    field.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;pointer-events:none;font-size:16px;';
+    document.body.append(field);
+    try {
+        if (typeof field.focus === 'function') field.focus({ preventScroll: true });
+        if (typeof field.select === 'function') field.select();
+        if (typeof field.setSelectionRange === 'function') field.setSelectionRange(0, field.value.length);
+        if (!document.execCommand('copy')) {
+            throw new Error('Clipboard copy failed.');
+        }
+    } finally {
+        field.remove();
+        const restoreSelection = () => {
+            if (!selection) return;
+            try {
+                selection.removeAllRanges();
+                for (const range of ranges) selection.addRange(range);
+            } catch {}
+        };
+        const restoreFocus = () => {
+            if (!active || typeof active.focus !== 'function') return;
+            if ((active === document.body || active === document.documentElement) && document.activeElement === active) return;
+            try {
+                active.focus({ preventScroll: true });
+            } catch {}
+        };
+        if (savedControlSel) {
+            restoreSelection();
+            restoreFocus();
+            restoreControlSelection(active, savedControlSel);
+        } else {
+            restoreFocus();
+            restoreSelection();
+        }
+    }
+}
+
 // Plain text, with HTML and a PNG image (a Uint8Array) beside it when there are some (`html`
-// is '' and `png` empty otherwise). Empty text isn't written beside another form.
+// is '' and `png` empty otherwise). Empty text isn't written beside another form. Falls back
+// to a temporary off-screen `<textarea>` and `document.execCommand('copy')` when the async
+// Clipboard API is absent or rejects and plain text is available.
 export async function writeClipboard(text, html, png) {
-    const clipboard = navigator.clipboard;
-    if (!clipboard) throw new Error('Clipboard requires HTTPS.');
-    if ((!html && !png.length) || typeof ClipboardItem === 'undefined') return clipboard.writeText(text);
-    const forms = {};
-    if (text) forms['text/plain'] = new Blob([text], { type: 'text/plain' });
-    if (html) forms['text/html'] = new Blob([html], { type: 'text/html' });
-    if (png.length) forms['image/png'] = new Blob([png], { type: 'image/png' });
-    return clipboard.write([new ClipboardItem(forms)]);
+    const hasHtml = Boolean(html);
+    const hasPng = Boolean(png && png.length);
+    const rich = hasHtml || hasPng;
+    const hasPlain = Boolean(text) || !rich;
+    const clipboard = globalThis.navigator?.clipboard;
+    if (!clipboard) {
+        if (!hasPlain) throw new Error('Clipboard requires HTTPS.');
+        writeClipboardFallback(text);
+        return;
+    }
+    if (rich) {
+        if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
+            try {
+                const forms = {};
+                if (text) forms['text/plain'] = new Blob([text], { type: 'text/plain' });
+                if (hasHtml) forms['text/html'] = new Blob([html], { type: 'text/html' });
+                if (hasPng) forms['image/png'] = new Blob([png], { type: 'image/png' });
+                await clipboard.write([new ClipboardItem(forms)]);
+                return;
+            } catch (err) {
+                if (!hasPlain) throw err;
+                const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
+                if (!denied && typeof clipboard.writeText === 'function') {
+                    try {
+                        await clipboard.writeText(text);
+                        return;
+                    } catch {}
+                }
+                writeClipboardFallback(text);
+                return;
+            }
+        }
+        if (!hasPlain) {
+            throw new Error(typeof ClipboardItem === 'undefined'
+                ? 'ClipboardItem is unavailable in this browser.'
+                : 'Clipboard.write is unavailable in this browser.');
+        }
+    }
+    if (typeof clipboard.writeText === 'function') {
+        try {
+            await clipboard.writeText(text);
+            return;
+        } catch {}
+    }
+    writeClipboardFallback(text);
 }
 
 // Shared PNG encoder source used both inside a Blob Web Worker (off main thread) and as a

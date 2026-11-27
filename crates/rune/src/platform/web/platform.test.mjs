@@ -905,3 +905,325 @@ test('readClipboard and pngBytes transcode non-PNG raster images via createImage
         Object.defineProperty(globalThis, 'OffscreenCanvas', { value: origOffscreen, configurable: true });
     }
 });
+function installClipboardDom({ execResult = true, execError = null } = {}) {
+    const dom = installDom();
+    const { doc, body } = dom;
+    const focusCalls = [];
+    const execCalls = [];
+    const createdFields = [];
+    const ranges = [];
+    const selection = {
+        get rangeCount() { return ranges.length; },
+        getRangeAt(i) { return ranges[i]; },
+        removeAllRanges() { ranges.length = 0; },
+        addRange(r) { ranges.push(r); },
+    };
+
+    const enhanceEl = (el) => {
+        el.value = '';
+        el.readOnly = false;
+        el.tabIndex = 0;
+        el.selectionStart = 0;
+        el.selectionEnd = 0;
+        el.selectionDirection = 'forward';
+        el.selected = false;
+        el.focus = (opts) => {
+            focusCalls.push({ el, opts });
+            doc.activeElement = el;
+        };
+        el.select = () => {
+            el.selected = true;
+            el.selectionStart = 0;
+            el.selectionEnd = String(el.value).length;
+            el.selectionDirection = 'forward';
+            doc.activeElement = el;
+        };
+        el.setSelectionRange = (start, end, dir = 'forward') => {
+            el.selectionStart = start;
+            el.selectionEnd = end;
+            el.selectionDirection = dir;
+        };
+        return el;
+    };
+
+    const origCreate = doc.createElement;
+    doc.createElement = (tag) => {
+        const el = enhanceEl(origCreate(tag));
+        if (tag.toLowerCase() === 'textarea') createdFields.push(el);
+        return el;
+    };
+    doc.activeElement = body;
+    doc.getSelection = () => selection;
+    doc.execCommand = (cmd) => {
+        const active = doc.activeElement;
+        execCalls.push({
+            cmd,
+            active,
+            inBody: body.children.includes(active),
+            value: active?.value,
+            readOnly: active?.readOnly,
+            selectionStart: active?.selectionStart,
+            selectionEnd: active?.selectionEnd,
+            ariaHidden: active?.getAttribute?.('aria-hidden'),
+            hasMarker: active?.hasAttribute?.('data-rune-clipboard'),
+        });
+        if (execError) throw execError;
+        return typeof execResult === 'function' ? execResult(cmd, active) : execResult;
+    };
+    return { ...dom, focusCalls, execCalls, createdFields, ranges, selection, enhanceEl };
+}
+
+test('writeClipboard falls back synchronously when navigator.clipboard is absent, preserving focus and selection', async () => {
+    const origNav = globalThis.navigator;
+    try {
+        const { doc, body, focusCalls, execCalls, createdFields, ranges } = installClipboardDom();
+        const canvas = doc.createElement('canvas');
+        body.append(canvas);
+        doc.activeElement = canvas;
+
+        const savedRange = {
+            id: 'r1',
+            cloneRange() { return { id: 'r1-clone', cloneRange: this.cloneRange }; },
+        };
+        ranges.push(savedRange);
+
+        Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+
+        // Must invoke execCommand('copy') synchronously before the returned promise yields,
+        // so user activation is still active in browsers without navigator.clipboard.
+        const promise = platform.writeClipboard('hello fallback', '', new Uint8Array());
+        assert.equal(execCalls.length, 1, 'fallback must execute synchronously inside the gesture');
+        assert.equal(execCalls[0].cmd, 'copy');
+        assert.equal(execCalls[0].inBody, true);
+        assert.equal(execCalls[0].value, 'hello fallback');
+        assert.equal(execCalls[0].readOnly, true);
+        assert.equal(execCalls[0].selectionStart, 0);
+        assert.equal(execCalls[0].selectionEnd, 'hello fallback'.length);
+        assert.equal(execCalls[0].ariaHidden, 'true');
+        assert.equal(execCalls[0].hasMarker, true);
+        await promise;
+
+        assert.equal(body.children.includes(createdFields[0]), false, 'temporary textarea must be removed');
+        assert.equal(doc.activeElement, canvas, 'previously focused element must be restored');
+        assert.deepEqual(focusCalls.at(-1), { el: canvas, opts: { preventScroll: true } });
+        assert.deepEqual(ranges.map(r => r.id), ['r1-clone']);
+
+        // Rich copy with plain text degrades to plain text when navigator.clipboard is missing.
+        execCalls.length = 0;
+        await platform.writeClipboard('plain degraded', '<b>plain degraded</b>', new Uint8Array([1, 2, 3]));
+        assert.equal(execCalls.length, 1);
+        assert.equal(execCalls[0].value, 'plain degraded');
+
+        // Image-only or HTML-only copy without plain text rejects without touching the DOM.
+        execCalls.length = 0;
+        const fieldsBefore = createdFields.length;
+        await assert.rejects(
+            platform.writeClipboard('', '', new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+            /HTTPS/,
+        );
+        await assert.rejects(
+            platform.writeClipboard('', '<b>html only</b>', new Uint8Array()),
+            /HTTPS/,
+        );
+        assert.equal(execCalls.length, 0);
+        assert.equal(createdFields.length, fieldsBefore);
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+    }
+});
+
+test('writeClipboard preserves text-control selection when restoring focus after legacy fallback', async () => {
+    const origNav = globalThis.navigator;
+    try {
+        const { doc, body, execCalls } = installClipboardDom();
+        const input = doc.createElement('input');
+        input.value = 'abcdef';
+        input.setSelectionRange(1, 4, 'backward');
+        const origFocus = input.focus;
+        // Simulate a browser that collapses control selection to 0 on refocus.
+        input.focus = (opts) => {
+            origFocus(opts);
+            input.selectionStart = 0;
+            input.selectionEnd = 0;
+            input.selectionDirection = 'forward';
+        };
+        body.append(input);
+        doc.activeElement = input;
+
+        Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+        await platform.writeClipboard('copied text', '', new Uint8Array());
+
+        assert.equal(execCalls.length, 1);
+        assert.equal(doc.activeElement, input);
+        assert.equal(input.selectionStart, 1);
+        assert.equal(input.selectionEnd, 4);
+        assert.equal(input.selectionDirection, 'backward');
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+    }
+});
+
+test('writeClipboard keeps async Clipboard API first, degrades rejected writes to plain text, and cleans up on refusal', async () => {
+    const origNav = globalThis.navigator;
+    const origCI = globalThis.ClipboardItem;
+    try {
+        class FakeClipboardItem {
+            constructor(forms) { this.forms = forms; }
+        }
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: FakeClipboardItem, configurable: true });
+
+        // 1. Async writeText success never touches the DOM fallback.
+        {
+            const { execCalls } = installClipboardDom();
+            const written = [];
+            Object.defineProperty(globalThis, 'navigator', {
+                value: { clipboard: { writeText: async (t) => { written.push(t); } } },
+                configurable: true,
+            });
+            await platform.writeClipboard('modern plain', '', new Uint8Array());
+            assert.deepEqual(written, ['modern plain']);
+            assert.equal(execCalls.length, 0);
+        }
+
+        // 2. Async write success for rich content never touches writeText or DOM fallback.
+        {
+            const { execCalls } = installClipboardDom();
+            let writeItems = null;
+            let writeTextCalled = false;
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        write: async (items) => { writeItems = items; },
+                        writeText: async () => { writeTextCalled = true; },
+                    },
+                },
+                configurable: true,
+            });
+            await platform.writeClipboard('hi', '<b>hi</b>', new Uint8Array([1, 2]));
+            assert.equal(writeItems.length, 1);
+            assert.ok(writeItems[0].forms['text/plain'] instanceof Blob);
+            assert.ok(writeItems[0].forms['text/html'] instanceof Blob);
+            assert.ok(writeItems[0].forms['image/png'] instanceof Blob);
+            assert.equal(writeTextCalled, false);
+            assert.equal(execCalls.length, 0);
+        }
+
+        // 3. Rejected async writeText falls back to temporary textarea copy.
+        {
+            const { doc, body, execCalls, createdFields } = installClipboardDom();
+            const btn = doc.createElement('button');
+            body.append(btn);
+            doc.activeElement = btn;
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        writeText: () => Promise.reject(Object.assign(new Error('denied'), { name: 'NotAllowedError' })),
+                    },
+                },
+                configurable: true,
+            });
+            await platform.writeClipboard('after reject', '', new Uint8Array());
+            assert.equal(execCalls.length, 1);
+            assert.equal(execCalls[0].value, 'after reject');
+            assert.equal(body.children.includes(createdFields[0]), false);
+            assert.equal(doc.activeElement, btn);
+        }
+
+        // 4. Rich write rejected with NotAllowedError skips redundant writeText and degrades directly to DOM fallback.
+        {
+            const { execCalls } = installClipboardDom();
+            let writeTextCalled = false;
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        write: () => Promise.reject(Object.assign(new Error('denied'), { name: 'NotAllowedError' })),
+                        writeText: async () => { writeTextCalled = true; },
+                    },
+                },
+                configurable: true,
+            });
+            await platform.writeClipboard('rich denied', '<i>rich denied</i>', new Uint8Array());
+            assert.equal(writeTextCalled, false);
+            assert.equal(execCalls.length, 1);
+            assert.equal(execCalls[0].value, 'rich denied');
+        }
+
+        // 5. Rich write rejected with non-permission error tries writeText first, then falls back if writeText rejects too.
+        {
+            const { execCalls } = installClipboardDom();
+            const written = [];
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        write: () => Promise.reject(Object.assign(new Error('unsupported mime'), { name: 'DataError' })),
+                        writeText: async (t) => { written.push(t); },
+                    },
+                },
+                configurable: true,
+            });
+            await platform.writeClipboard('mime fallback', '<p>mime fallback</p>', new Uint8Array());
+            assert.deepEqual(written, ['mime fallback']);
+            assert.equal(execCalls.length, 0);
+
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        write: () => Promise.reject(Object.assign(new Error('unsupported mime'), { name: 'DataError' })),
+                        writeText: () => Promise.reject(new Error('writeText rejected too')),
+                    },
+                },
+                configurable: true,
+            });
+            await platform.writeClipboard('double fallback', '<p>double fallback</p>', new Uint8Array());
+            assert.equal(execCalls.length, 1);
+            assert.equal(execCalls[0].value, 'double fallback');
+        }
+
+        // 6. Image-only rich write rejected by clipboard.write rethrows without falling back to empty plain text.
+        {
+            const { execCalls } = installClipboardDom();
+            let writeTextCalled = false;
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    clipboard: {
+                        write: () => Promise.reject(new Error('image denied')),
+                        writeText: async () => { writeTextCalled = true; },
+                    },
+                },
+                configurable: true,
+            });
+            await assert.rejects(
+                platform.writeClipboard('', '', new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+                /image denied/,
+            );
+            assert.equal(writeTextCalled, false);
+            assert.equal(execCalls.length, 0);
+        }
+
+        // 7. Refused execCommand('copy') (false or throw) rejects while still removing the temporary textarea
+        //    and restoring focus and document selection.
+        for (const mode of [{ execResult: false }, { execError: new Error('execCommand blocked') }]) {
+            const { doc, body, createdFields, ranges } = installClipboardDom(mode);
+            const canvas = doc.createElement('canvas');
+            body.append(canvas);
+            doc.activeElement = canvas;
+            ranges.push({ id: 'keep', cloneRange() { return { id: 'keep-clone', cloneRange: this.cloneRange }; } });
+
+            Object.defineProperty(globalThis, 'navigator', {
+                value: { clipboard: { writeText: () => Promise.reject(new Error('NotAllowedError')) } },
+                configurable: true,
+            });
+            await assert.rejects(
+                platform.writeClipboard('cannot copy', '', new Uint8Array()),
+                mode.execError ? /execCommand blocked/ : /Clipboard copy failed/,
+            );
+            assert.equal(createdFields.length, 1);
+            assert.equal(body.children.includes(createdFields[0]), false, 'textarea must be removed on failure');
+            assert.equal(doc.activeElement, canvas, 'focus must be restored on failure');
+            assert.deepEqual(ranges.map(r => r.id), ['keep-clone'], 'selection must be restored on failure');
+        }
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: origCI, configurable: true });
+    }
+});

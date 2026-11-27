@@ -468,7 +468,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     };
     listen(document, 'focusin', event => {
         if (h.disposed || h.syncing || !h.key || !h.domFocused || typeof h.menu?.done === 'function') return;
-        if (event.target === h.field) return;
+        if (event.target === h.field || event.target?.hasAttribute?.('data-rune-clipboard')) return;
         h.pendingFieldBlur = true;
         queueMicrotask(checkFieldBlur);
     });
@@ -717,16 +717,18 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
                 cancelReconcile();
             }
         });
-        const onFieldLostFocus = () => {
-            if (h.disposed || h.syncing || !h.key || field !== h.field) return;
+        const isTempClipboard = event => !!event?.relatedTarget?.hasAttribute?.('data-rune-clipboard');
+        const onFieldLostFocus = event => {
+            if (h.disposed || h.syncing || !h.key || field !== h.field || isTempClipboard(event)) return;
             h.pendingFieldBlur = true;
             queueMicrotask(checkFieldBlur);
         };
-        listen(field, 'blur', () => { h.shift = false; onFieldLostFocus(); });
+        listen(field, 'blur', event => { if (isTempClipboard(event)) return; h.shift = false; onFieldLostFocus(event); });
         listen(field, 'focusout', onFieldLostFocus);
     }
     // Synchronous copy support for read-only `El::selectable` selections (`Edit › Copy` / ⌘C).
     listen(document, 'copy', event => {
+        if (event.target?.hasAttribute?.('data-rune-clipboard')) return;
         const active = document.activeElement;
         if (!h.key && h.copyText && event.clipboardData && (active === canvas || active === document.body)) {
             event.preventDefault();
