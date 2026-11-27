@@ -682,3 +682,70 @@ fn credential_peer_pairs_within_form_and_web_autofill_updates_unfocused_sibling(
     assert_eq!(rt.state.email.text.as_str(), "ada@example.com");
     assert_eq!(rt.state.email_changes, 1);
 }
+
+#[test]
+fn web_key_delivers_space_and_printable_keys_to_focused_controls_after_text_focus_ends() {
+    #[derive(Default)]
+    struct S {
+        edit: crate::TextEdit,
+        presses: usize,
+        keys: Vec<(crate::Key, Option<crate::PhysicalKeyCode>, Option<char>)>,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col()
+            .child(
+                crate::text_input(&s.edit, crate::tok::type_::BODY)
+                    .key("input")
+                    .label("Input")
+                    .on_edit(|s: &mut S| &mut s.edit),
+            )
+            .child(
+                crate::el()
+                    .key("btn")
+                    .role("button")
+                    .size(80.0, 28.0)
+                    .focusable(true)
+                    .on_press(|s: &mut S| s.presses += 1),
+            )
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 120.0), Env::default());
+    rt.on_key = Some(|s, ev, tx| {
+        s.keys.push((ev.key.clone(), tx.physical_key(), tx.key_base()));
+        true
+    });
+    rt.frame(0.0);
+    let input_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+    let btn_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().path.clone();
+
+    // While an editable text input has focus, plain printable web_key events stay ignored
+    // (ordinary typing arrives via web_edit) and Enter does not force activate().
+    rt.set_focus(Some(input_path), true);
+    rt.frame(0.0);
+    assert!(!rt.web_key(&json!({"kind":"key", "key":"a", "code":"KeyA"})));
+    assert!(!rt.web_key(&json!({"kind":"key", "key":"Enter", "code":"Enter"})));
+    rt.frame(0.0);
+    assert_eq!(rt.state.edit.text, "");
+    assert!(rt.state.keys.iter().all(|(k, _, _)| *k != crate::Key::Text("a".into())));
+
+    // Focus moves from the text input to the button: Space activates the button and returns
+    // true so the web host reclaims DOM focus off any stray editing proxy.
+    rt.state.keys.clear();
+    rt.set_focus(Some(btn_path), true);
+    rt.frame(0.0);
+    assert!(rt.web_key(&json!({"kind":"key", "key":" ", "code":"Space"})));
+    rt.frame(0.0);
+    assert_eq!(rt.state.presses, 1);
+
+    // Printable shortcut keys also deliver cleanly when no text field is focused, while Dead,
+    // Unidentified, and control bytes remain ignored.
+    assert!(rt.web_key(&json!({"kind":"key", "key":"j", "code":"KeyJ"})));
+    assert!(rt.web_key(&json!({"kind":"key", "key":"A", "code":"KeyA", "shift":true})));
+    assert!(!rt.web_key(&json!({"kind":"key", "key":"Dead", "code":"Quote"})));
+    assert!(!rt.web_key(&json!({"kind":"key", "key":"Unidentified", "code":"KeyA"})));
+    assert!(!rt.web_key(&json!({"kind":"key", "key":"\x03", "code":"KeyC"})));
+    rt.frame(0.0);
+    assert_eq!(rt.state.keys, [
+        (crate::Key::Text("j".into()), Some(crate::PhysicalKeyCode::KeyJ), Some('j')),
+        (crate::Key::Text("A".into()), Some(crate::PhysicalKeyCode::KeyA), Some('a')),
+    ]);
+}
