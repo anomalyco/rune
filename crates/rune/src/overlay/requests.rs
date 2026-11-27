@@ -10,6 +10,52 @@ use super::OverlayCore;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
 
+/// One-shot callback queued through `OverlayHandle::after_hidden`.
+pub(super) type AfterHidden<T> = Box<dyn FnOnce(&mut T, &mut Tx) + Send>;
+
+/// Pending `OverlayHandle::after_hidden` callbacks, plus whether the overlay is still open to
+/// receive them. Once `Closed` (when the overlay closes, terminates, or drops, or on a
+/// disconnected web handle), late callers drop `f` outside the mutex unrun.
+pub(super) enum AfterHiddenQueue<T> {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Open(Vec<AfterHidden<T>>),
+    Closed,
+}
+
+impl<T> Default for AfterHiddenQueue<T> {
+    fn default() -> Self { Self::Open(Vec::new()) }
+}
+
+impl<T> AfterHiddenQueue<T> {
+    /// Queues `f` while open, or returns it back when closed so the caller drops it outside the
+    /// mutex without running it.
+    pub(super) fn push(&mut self, f: AfterHidden<T>) -> Option<AfterHidden<T>> {
+        match self {
+            Self::Open(pending) => {
+                pending.push(f);
+                None
+            }
+            Self::Closed => Some(f),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn take(&mut self) -> Vec<AfterHidden<T>> {
+        match self {
+            Self::Open(pending) => std::mem::take(pending),
+            Self::Closed => Vec::new(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn close(&mut self) -> Vec<AfterHidden<T>> {
+        match std::mem::replace(self, Self::Closed) {
+            Self::Open(pending) => pending,
+            Self::Closed => Vec::new(),
+        }
+    }
+}
+
 /// `OverlayHandle::request_keys` or `release_keys`; the latest of the two in a turn wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum KeyRequest {

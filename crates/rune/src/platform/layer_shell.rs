@@ -35,9 +35,11 @@ use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 mod activation;
 mod compose;
 mod dead;
+mod sync;
 mod text_input;
 pub(crate) use dead::display_error;
 use dead::{classify_turn_error, format_wayland_error};
+pub(crate) use sync::{HideSync, SyncPoll};
 
 pub(crate) enum Input {
     Move(f32, f32), Leave, Button(bool), Secondary(bool), ExtraButton(crate::PointerButton, bool),

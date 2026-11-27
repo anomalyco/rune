@@ -72,6 +72,7 @@ impl OverlayCore {
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.after_hidden_shown(app);
         self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);
@@ -262,7 +263,12 @@ impl OverlayCore {
         for effect in effects {
             match effect {
                 presence::Effect::StopDrawing => self.stop_drawing(app),
-                presence::Effect::HideWindow { fade } => self.hide_window(app, fade),
+                presence::Effect::HideWindow { fade } => {
+                    let surface_destroyed = self.hide_window(app, fade);
+                    if !self.presence.drawing() {
+                        self.after_hidden_did_hide(app, surface_destroyed);
+                    }
+                }
                 presence::Effect::ReleaseGpu => {
                     app.release_compositor_gpu();
                     self.park();
@@ -329,8 +335,9 @@ impl OverlayCore {
     }
 
     /// Input stops, and the native window hides over `fade`. A fading window stays up while
-    /// `presence_due` steps its alpha (Windows), then hides it.
-    fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) {
+    /// `presence_due` steps its alpha (Windows), then hides it. Returns whether a live Wayland
+    /// surface was destroyed as part of the hide.
+    fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) -> bool {
         // A hide need not report a blur (a Wayland surface goes without `wl_keyboard.leave`),
         // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
         // and the next show's focus is a change; what it held is released.
@@ -368,9 +375,14 @@ impl OverlayCore {
                 if fading { native.fade(255) } else { native.hide() }
             }
             if !fading { self.on_hide_cpu(); }
-            return;
+            return false;
         }
-        let Some(live) = self.surface.live() else { return };
+        let Some(live) = self.surface.live() else { return false };
+        #[cfg_attr(
+            not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))),
+            allow(unused_mut)
+        )]
+        let mut surface_destroyed = false;
         match &live.backing {
             Backing::Window(window) => {
                 if self.options.keys.takes_keys() {
@@ -403,10 +415,12 @@ impl OverlayCore {
                     rt.set_window_backdrop_supported_mask(0);
                     rt.set_wayland_blur_materials(false);
                     self.drop_hidden_images(app);
+                    surface_destroyed = true;
                 }
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
+                let is_layer = matches!(live.backing, Backing::Layer(_));
                 self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
                 self.surface.take_live();
                 let rt = app.rt_mut();
@@ -414,8 +428,10 @@ impl OverlayCore {
                 rt.set_window_backdrop_supported_mask(0);
                 rt.set_wayland_blur_materials(false);
                 self.drop_hidden_images(app);
+                surface_destroyed = is_layer;
             }
         }
+        surface_destroyed
     }
 
     /// Drops the last shown frame's `Pixels` references, CPU image atlas pages and GPU image

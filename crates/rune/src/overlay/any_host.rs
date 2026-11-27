@@ -134,6 +134,7 @@ impl OverlayCore {
 impl AnyHost for OverlayHost {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if self.core.poll_terminal_gpu_loss(&mut *self.app) { return; }
+        self.core.after_hidden_new_turn(&mut *self.app);
         self.core.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         self.core.turn_frame.step(frame::TurnEvent::NewEvents);
         #[cfg(target_os = "macos")]
@@ -157,7 +158,14 @@ impl AnyHost for OverlayHost {
         self.core.sync(&mut *self.app, event_loop);
     }
 
-    fn vanish(&mut self) { self.core.hide(&mut *self.app); }
+    fn vanish(&mut self) {
+        self.core.cancel_after_hidden(&mut *self.app);
+        self.core.hide(&mut *self.app);
+    }
+
+    fn terminate(&mut self) {
+        self.core.close_after_hidden(&mut *self.app);
+    }
 
     #[cfg(target_os = "macos")]
     fn stop_pacing(&mut self) {
@@ -190,6 +198,7 @@ impl AnyHost for OverlayHost {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         if self.core.poll_terminal_gpu_loss(&mut *self.app) {
             self.core.drain_tokens_none();
+            self.core.close_after_hidden(&mut *self.app);
             return;
         }
         self.core.meter.waited();
@@ -470,6 +479,7 @@ impl AnyHost for OverlayHost {
             let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
             #[cfg(not(target_os = "windows"))]
             let more = core.draw(app, Some(_event_loop));
+            core.poll_after_hidden(app);
             return core.a11y_turn(app.rt_mut()) || more;
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -512,7 +522,8 @@ impl AnyHost for OverlayHost {
     fn has_live_wayland_layer(&self) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.is_live())
-            || self.core.has_live_wayland_backdrop_watch();
+            || self.core.has_live_wayland_backdrop_watch()
+            || self.core.has_live_wayland_hide_sync();
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
@@ -520,7 +531,8 @@ impl AnyHost for OverlayHost {
     fn has_pending_platform_events(&self) -> bool {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.has_pending_events())
-            || self.core.has_pending_wayland_backdrop_events();
+            || self.core.has_pending_wayland_backdrop_events()
+            || self.core.has_pending_wayland_hide_sync_events();
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
