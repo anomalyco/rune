@@ -1969,6 +1969,13 @@ without walking font directories, caches the result in a `OnceLock` on first cal
 cost), and returns `&[]` on web/Android. Pass any family's `name()` straight to
 `tx.set_font_families`, `AppSpec::families`, or `Family::Named`.
 
+`rune::text::prewarm_system_fonts()` starts building Linux/Unix's shared process-wide fontconfig
+collection on a background thread (returning immediately and doing nothing if already started,
+already initialized, on platforms without a fontconfig build, or while `RUNE_SYSTEM_FONTS=off` /
+`set_system_fonts(false)`), so the first character outside the bundled faces does not stall the
+UI thread while fontconfig builds. Any thread needing fallback while warm-up is in flight waits
+for that single build rather than starting a second one.
+
 `rune::text::add_font(bytes)`, `tx.add_font(bytes)`, and `rt.add_font(bytes)` register font
 bytes (TTF, OTF, TTC, or variable fonts) into the process-wide font collection while the app
 runs, returning the registered family names in registration order so they can be selected with

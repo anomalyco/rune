@@ -19,6 +19,7 @@ mod direct_write;
 mod fontconfig;
 mod installed;
 mod switch;
+mod warm;
 #[cfg(target_vendor = "apple")]
 use core_text as platform;
 #[cfg(windows)]
@@ -31,10 +32,29 @@ mod platform {
     pub(crate) fn family_files(_: &[&str]) -> Vec<std::path::PathBuf> { Vec::new() }
     pub(crate) fn fallback_family_files(_: &[char], _: Option<&str>) -> Vec<std::path::PathBuf> { Vec::new() }
     pub(super) fn installed_families() -> Vec<super::installed::RawFamily> { Vec::new() }
+    pub(super) fn prewarm() {}
 }
 
 pub use installed::{InstalledFamily, installed_families};
 pub use switch::{set_system_fonts, system_fonts_enabled};
+
+/// Starts initializing the process-wide system font registry on a background thread so the first
+/// fallback lookup does not stall the UI or layout thread.
+///
+/// Safe and cheap to call from `main`, `on_ready`, or any thread; subsequent calls do nothing
+/// once warm-up has started or the registry is already initialized. If layout or another thread
+/// needs system fonts while warm-up is still in progress, it waits for that in-flight build
+/// rather than starting a second one.
+///
+/// Does nothing when system fonts are disabled (`RUNE_SYSTEM_FONTS=off` or
+/// [`set_system_fonts`]`(false)`), or on platforms whose system font registry needs no eager
+/// process-wide build (Apple platforms, Windows, Android, and `wasm32`).
+pub fn prewarm_system_fonts() {
+    if !system_fonts_enabled() {
+        return;
+    }
+    platform::prewarm();
+}
 
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.

@@ -2,7 +2,7 @@
 //! test binary so the process-wide switch never reaches the unit tests that load system fonts.
 
 use rune_core::tok::{Family, TextStyle};
-use rune_text::{TextSystem, measure, set_system_fonts, system_fonts_enabled};
+use rune_text::{TextSystem, measure, prewarm_system_fonts, set_system_fonts, system_fonts_enabled};
 
 const INTER: &[u8] = include_bytes!("../../rune/assets/Inter-Regular.ttf");
 
@@ -10,6 +10,7 @@ const INTER: &[u8] = include_bytes!("../../rune/assets/Inter-Regular.ttf");
 fn system_fonts_off_measures_with_registered_fonts_only() {
     set_system_fonts(false);
     assert!(!system_fonts_enabled());
+    prewarm_system_fonts();
     let _text = TextSystem::new(&[INTER], ("Inter", "ui-monospace"));
     let sans = TextStyle::new(14.0, 400.0);
     let sample = "iiii mmmm 0123";

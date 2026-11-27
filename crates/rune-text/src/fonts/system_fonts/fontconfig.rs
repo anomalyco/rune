@@ -8,12 +8,23 @@ use std::path::PathBuf;
 
 use parley::fontique::{Collection, CollectionOptions, FallbackKey, FamilyId, GenericFamily, Language, Script, SourceKind};
 
-thread_local! {
-    static SYSTEM: std::cell::RefCell<Option<Collection>> = const { std::cell::RefCell::new(None) };
+use super::warm::WarmSlot;
+
+/// Process-wide fontconfig system collection so building it on any thread (or via
+/// `prewarm_system_fonts`) serves every thread without repeating the fontconfig load.
+static SYSTEM: WarmSlot<Collection> = WarmSlot::new();
+
+fn build_system() -> Collection {
+    Collection::new(CollectionOptions { shared: false, system_fonts: true })
 }
 
 fn with_system<R>(f: impl FnOnce(&mut Collection) -> R) -> R {
-    SYSTEM.with_borrow_mut(|system| f(system.get_or_insert_with(|| Collection::new(CollectionOptions { shared: false, system_fonts: true }))))
+    SYSTEM.with(build_system, f)
+}
+
+/// Starts building fontconfig's process-wide system collection on a background thread.
+pub(super) fn prewarm() {
+    SYSTEM.prewarm("rune-font-prewarm", super::system_fonts_enabled, build_system);
 }
 
 /// Every file of family `id` in the system collection.
@@ -30,6 +41,9 @@ fn files_of(system: &mut Collection, id: FamilyId, out: &mut Vec<PathBuf>) {
 
 /// The files of the installed families `names` (any of their names, case aside), in order.
 pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
+    if names.is_empty() {
+        return Vec::new();
+    }
     with_system(|system| {
         let mut out = Vec::new();
         for name in names {
@@ -115,6 +129,9 @@ pub(super) fn fallback_family_files(chars: &[char], locale: Option<&str>) -> Vec
         let Some(tag) = names.get_locale_script(script) else { continue };
         let Ok(bytes) = <[u8; 4]>::try_from(tag.as_str().as_bytes()) else { continue };
         if !scripts.contains(&bytes) { scripts.push(bytes); }
+    }
+    if scripts.is_empty() {
+        return Vec::new();
     }
     with_system(|system| {
         let mut out = Vec::new();
