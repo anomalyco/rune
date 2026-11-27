@@ -4718,3 +4718,155 @@ test('Safari gesturestart and gesturechange only prevent native pinch-zoom when 
         }
     }
 });
+
+test('keydown leaves browser shortcuts un-prevented in focused text inputs unless Rune consumes them', () => {
+    const { doc, body } = installDom({ platform: 'Linux x86_64' });
+    const canvas = doc.createElement('canvas');
+    body.append(canvas);
+    const events = [];
+    let consumeKeys = new Set();
+    let h;
+    h = bridge.mount(canvas, msg => {
+        const ev = JSON.parse(msg);
+        events.push(ev);
+        if (ev.kind === 'key') bridge.syncKey(h, consumeKeys.has(ev.key.toLowerCase()));
+    }, false, false, false);
+    try {
+        const activeConfigs = [
+            { field: h.textarea, args: ['plain', 'hello', 0, 2, 2, false] },
+            { field: h.input, args: ['single', 'hello', 0, 2, 2, false, true, 'search', ''] },
+            { field: h.password, args: ['secret', '', 0, 0, 0, true] },
+        ];
+        const browserChords = [
+            { key: 'l', code: 'KeyL', ctrlKey: true },
+            { key: 'r', code: 'KeyR', ctrlKey: true },
+            { key: 'R', code: 'KeyR', ctrlKey: true, shiftKey: true },
+            { key: 'f', code: 'KeyF', ctrlKey: true },
+            { key: 'g', code: 'KeyG', ctrlKey: true },
+            { key: 'G', code: 'KeyG', ctrlKey: true, shiftKey: true },
+            { key: 't', code: 'KeyT', ctrlKey: true },
+            { key: 'w', code: 'KeyW', ctrlKey: true },
+            { key: 'n', code: 'KeyN', ctrlKey: true },
+            { key: '=', code: 'Equal', ctrlKey: true },
+            { key: '+', code: 'Equal', ctrlKey: true, shiftKey: true },
+            { key: '-', code: 'Minus', ctrlKey: true },
+            { key: '0', code: 'Digit0', ctrlKey: true },
+            { key: 'i', code: 'KeyI', ctrlKey: true, altKey: true },
+            { key: 'j', code: 'KeyJ', ctrlKey: true, altKey: true },
+            { key: 'u', code: 'KeyU', ctrlKey: true, altKey: true },
+            { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true },
+            { key: 'J', code: 'KeyJ', ctrlKey: true, shiftKey: true },
+            { key: 'C', code: 'KeyC', ctrlKey: true, shiftKey: true },
+        ];
+        for (const { field, args } of activeConfigs) {
+            bridge.sync(h, ...args);
+            bridge.activate(h);
+            consumeKeys = new Set();
+            events.length = 0;
+            for (const chord of browserChords) {
+                assert.equal(
+                    dispatchKeydown(field, chord),
+                    false,
+                    `${field.tagName} unconsumed browser shortcut ${chord.key} must not call preventDefault`,
+                );
+            }
+            assert.equal(events.length, browserChords.length, 'browser chords still offer app handlers a turn');
+
+            // When an app handler explicitly consumes a browser shortcut (e.g. in-app Cmd/Ctrl+F or zoom),
+            // syncKey(h, true) prevents the browser's default action.
+            consumeKeys = new Set(['f', 'l', '+', '0']);
+            assert.equal(dispatchKeydown(field, { key: 'f', code: 'KeyF', ctrlKey: true }), true);
+            assert.equal(dispatchKeydown(field, { key: 'l', code: 'KeyL', ctrlKey: true }), true);
+            assert.equal(dispatchKeydown(field, { key: '+', code: 'Equal', ctrlKey: true, shiftKey: true }), true);
+            assert.equal(dispatchKeydown(field, { key: '0', code: 'Digit0', ctrlKey: true }), true);
+            assert.equal(dispatchKeydown(field, { key: 'r', code: 'KeyR', ctrlKey: true }), false);
+
+            // Text-editing and non-browser chords stay prevented even when consumeKeys is empty.
+            consumeKeys = new Set();
+            const editingChords = [
+                { key: 'a', code: 'KeyA', ctrlKey: true },
+                { key: 'c', code: 'KeyC', ctrlKey: true },
+                { key: 'x', code: 'KeyX', ctrlKey: true },
+                { key: 'z', code: 'KeyZ', ctrlKey: true },
+                { key: 'Z', code: 'KeyZ', ctrlKey: true, shiftKey: true },
+                { key: 'y', code: 'KeyY', ctrlKey: true },
+                { key: 'b', code: 'KeyB', ctrlKey: true },
+                { key: 'i', code: 'KeyI', ctrlKey: true },
+                { key: 'u', code: 'KeyU', ctrlKey: true },
+                { key: 'k', code: 'KeyK', ctrlKey: true },
+                { key: 'w', code: 'KeyW', ctrlKey: true, altKey: true },
+                { key: 'ArrowLeft', code: 'ArrowLeft', ctrlKey: true },
+                { key: 'Enter', code: 'Enter', ctrlKey: true },
+            ];
+            for (const chord of editingChords) {
+                assert.equal(
+                    dispatchKeydown(field, chord),
+                    true,
+                    `${field.tagName} editing/app chord ${chord.key} must stay prevented`,
+                );
+            }
+            // Cmd/Ctrl+V stays un-prevented in focused fields so the browser fires paste.
+            events.length = 0;
+            assert.equal(dispatchKeydown(field, { key: 'v', code: 'KeyV', ctrlKey: true }), false);
+            assert.equal(events.length, 0);
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('keydown handles macOS DevTools, PWA window shortcuts, and canvas synchronous copy cleanly', () => {
+    // macOS DevTools chords (including Option-transformed glyphs) vs non-DevTools chords.
+    const mac = setup({ platform: 'MacIntel' });
+    try {
+        bridge.sync(mac.h, 'field', 'hello', 0, 5, 5, false);
+        bridge.activate(mac.h);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'l', code: 'KeyL', metaKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'f', code: 'KeyF', metaKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'c', code: 'KeyC', metaKey: true, altKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'Dead', code: 'KeyI', metaKey: true, altKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: '∆', code: 'KeyJ', metaKey: true, altKey: true }), false);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'ç', code: 'KeyC', metaKey: true, altKey: true }), false);
+        // Plain Cmd+C in a focused field stays prevented for Rune text copy.
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'c', code: 'KeyC', metaKey: true }), true);
+        // Cmd+Shift+I is not macOS DevTools; Cmd+Option+G (Dvorak physical KeyU) is not View Source.
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'I', code: 'KeyI', metaKey: true, shiftKey: true }), true);
+        assert.equal(dispatchKeydown(mac.h.textarea, { key: 'g', code: 'KeyU', metaKey: true, altKey: true }), true);
+
+        // Installed app window (PWA): Cmd/Ctrl+T/W/N belong to the app even inside a text field,
+        // while Cmd/Ctrl+L/R/F still pass through to the browser unless consumed.
+        const origNav = globalThis.navigator;
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { platform: 'MacIntel', standalone: true },
+            configurable: true,
+        });
+        try {
+            assert.equal(dispatchKeydown(mac.h.textarea, { key: 't', code: 'KeyT', metaKey: true }), true);
+            assert.equal(dispatchKeydown(mac.h.textarea, { key: 'w', code: 'KeyW', metaKey: true }), true);
+            assert.equal(dispatchKeydown(mac.h.textarea, { key: 'n', code: 'KeyN', metaKey: true }), true);
+            assert.equal(dispatchKeydown(mac.h.textarea, { key: 'r', code: 'KeyR', metaKey: true }), false);
+            assert.equal(dispatchKeydown(mac.h.textarea, { key: 'f', code: 'KeyF', metaKey: true }), false);
+        } finally {
+            Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        }
+
+        // Unfocused canvas: browser shortcuts stay un-prevented until syncKey(h, true), and plain
+        // Cmd+C with read-only El::selectable copyText stays un-prevented so document copy fires.
+        bridge.sync(mac.h, '', '', 0, 0, 0, false);
+        assert.equal(dispatchKeydown(mac.canvas, { key: 'f', code: 'KeyF', metaKey: true }), false);
+        bridge.syncKey(mac.h, true);
+        assert.equal(dispatchKeydown(mac.canvas, { key: 'f', code: 'KeyF', metaKey: true }), true);
+        // syncKey resets after each keydown so it never leaks to the next key.
+        assert.equal(dispatchKeydown(mac.canvas, { key: 'r', code: 'KeyR', metaKey: true }), false);
+
+        bridge.syncCopy(mac.h, 'selected text');
+        bridge.syncKey(mac.h, true);
+        assert.equal(dispatchKeydown(mac.canvas, { key: 'c', code: 'KeyC', metaKey: true }), false);
+        bridge.syncCopy(mac.h, '');
+        bridge.syncKey(mac.h, true);
+        assert.equal(dispatchKeydown(mac.canvas, { key: 'c', code: 'KeyC', metaKey: true }), true);
+    } finally {
+        bridge.destroy(mac.h);
+    }
+});

@@ -83,20 +83,44 @@ function domToRaw(offset, crlfs) {
     return offset + lo;
 }
 
-function browserShortcut(event) {
+function isPlainCopyChord(event) {
+    const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
+    return chord && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c';
+}
+
+function browserShortcut(event, inField = false) {
     const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
     if (event.key === 'F5' || event.key === 'F12') return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
     // With Alt only the developer tools' chords are the browser's: Ctrl+Alt+W and the like are
-    // the app's (its Close tab, where the browser keeps Ctrl+W).
-    if (event.altKey) return ['i', 'j', 'u'].includes(k);
+    // the app's (its Close tab, where the browser keeps Ctrl+W). On macOS Option+I/J/U/C can
+    // produce Dead or accented glyphs in `event.key`, so fall back to `event.code`.
+    if (event.altKey) {
+        if (['i', 'j', 'u'].includes(k)) return true;
+        if (isMac()) {
+            if (k === 'c') return true;
+            if (!/^[a-z]$/i.test(event.key) && ['KeyI', 'KeyJ', 'KeyU', 'KeyC'].includes(event.code)) return true;
+        }
+        return false;
+    }
+    // DevTools chords with Shift: Ctrl+Shift+I/J/C off macOS, Cmd+Shift+C on macOS.
+    if (event.shiftKey && (k === 'c' || (!isMac() && ['i', 'j'].includes(k)))) return true;
     // An installed app's window gives the page every key first (Chromium: "In Apps mode, no keys
     // are reserved"), and closes itself on a Ctrl+W the page lets through: there the tab, window
     // and new-session keys are the app's, as in its desktop build.
     if (['t', 'w', 'n'].includes(k) && appWindow()) return false;
-    // Leave copy ('c') un-prevented too so the browser fires its synchronous `copy` event.
-    return ['c', 'r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k);
+    // Outside focused text fields, leave copy ('c') un-prevented so the browser fires its
+    // synchronous `copy` event for read-only `El::selectable` selections. Inside a focused text
+    // field, plain Cmd/Ctrl+C is a text-editing command handled by Rune.
+    if (k === 'c') return !inField;
+    return ['r', 'l', 't', 'w', 'n', 'f', 'g', '=', '+', '-', '0'].includes(k);
+}
+
+function shouldPreventKeydown(event, inField, used, copyText) {
+    if (!browserShortcut(event, inField)) return true;
+    if (!inField && copyText && isPlainCopyChord(event)) return false;
+    return Boolean(used);
 }
 
 function appWindow() {
@@ -301,7 +325,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
         hoverLink: null, hoverLinkLeave: null, hoverLinkBefore: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
-        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
+        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false, keyUsed: false,
         visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0, reconcileFollowUp: false,
         pressedPointers: new Map(), pointerEndTimers: new Map(), pointerGen: 0, gestureUsed: false, gestureActive: false,
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
@@ -706,10 +730,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             if (h.key && field !== h.field) return;
             h.shift = event.shiftKey;
             if (event.isComposing || h.composing || event.keyCode === 229) return;
+            const inField = !!h.key;
             // On Windows European layouts AltGr sets both ctrlKey and altKey; let those characters type.
             const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
-            if (!h.key) {
+            if (!inField) {
                 // A hidden proxy can still hold DOM focus for a turn after Rune focus leaves text
                 // (including an inactive <input> or password proxy after h.field resets). There
                 // Space and editing keys are control keys, not text input for a mirrored field.
@@ -725,16 +750,23 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             }
             // Forward function keys other than what `browserShortcut` leaves to the browser so
             // focused fields receive them as canvas focus does.
-            const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event);
+            const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event, inField);
             const mediaKey = h.mediaKeys && MEDIA_KEYS.includes(event.key);
             // When no Rune text field is active, single printable characters are control/shortcut
             // keys (matching canvas focus) rather than text input for the hidden proxy.
-            const printableKey = !h.key && !chord && typeof event.key === 'string'
+            const printableKey = !inField && !chord && typeof event.key === 'string'
                 && Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f-\u009f]/.test(event.key);
             if (!chord && !functionKey && !mediaKey && !printableKey && !editing.includes(event.key)) return;
-            if (h.key && chord && event.key.toLowerCase() === 'v') return;
-            if (h.key || !browserShortcut(event)) event.preventDefault();
-            key(event.key, event, !h.key ? () => releaseProxyFocus(field) : undefined);
+            if (inField && chord && event.key.toLowerCase() === 'v') return;
+            // Browser-reserved chords stay un-prevented unless a Rune handler consumes them
+            // synchronously (signaled via `syncKey`), while text-editing chords always preventDefault.
+            const browser = browserShortcut(event, inField);
+            if (!browser) event.preventDefault();
+            h.keyUsed = false;
+            key(event.key, event, !inField ? () => releaseProxyFocus(field) : undefined);
+            const used = h.keyUsed;
+            h.keyUsed = false;
+            if (browser && shouldPreventKeydown(event, inField, used, h.copyText)) event.preventDefault();
         });
         listen(field, 'keyup', event => { h.shift = event.shiftKey; });
         listen(field, 'focus', () => {
@@ -820,9 +852,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }
     }, { passive: true });
     listen(canvas, 'keydown', event => {
+        const used = h.keyUsed;
+        h.keyUsed = false;
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
         if (!h.mediaKeys && MEDIA_KEYS.includes(event.key)) return;
-        if (!browserShortcut(event)) event.preventDefault();
+        if (shouldPreventKeydown(event, false, used, h.copyText)) event.preventDefault();
     });
     if (embedded && !page) {
         listen(window, 'scroll', () => { if (!h.disposed && h.key && h.caret && !h.fieldArmed) placeCaretFields(h); }, { passive: true });
@@ -1543,6 +1577,11 @@ export function syncWheel(h, used) {
 // Whether a Rune `on_magnify` or `on_rotate` handler claimed the Safari `gesturestart` it just heard.
 export function syncGesture(h, used) {
     h.gestureUsed = !!used;
+}
+
+// Whether a Rune handler consumed the keydown it just heard.
+export function syncKey(h, used) {
+    h.keyUsed = !!used;
 }
 
 // Vertical CSS shift (px, >= 0) to lift a focused field into the visible part of `visualViewport`

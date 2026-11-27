@@ -108,9 +108,9 @@ impl RuntimeCore {
     /// `unhandled` happens when no handler takes the logical key.
     pub(crate) fn physical_then(&mut self, app: &mut dyn AppDriver, mut event: PhysicalInput, key: Option<KeyEvent>, base: Option<char>, unhandled: Option<Unhandled>) -> bool {
         pair_text(&mut event, key.as_ref());
-        if self.cancel_drag_key(&event) { return true; }
+        if self.cancel_drag_key(&event) { self.kbd.note_key_consumed(true); return true; }
         // A key ends a middle-click autoscroll, and does nothing else.
-        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { return true; }
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { self.kbd.note_key_consumed(true); return true; }
         if key.is_none() && matches!(event, PhysicalInput::Modifiers(_) | PhysicalInput::Key { pressed: false, .. }) {
             return self.physical_observation(app, event);
         }
@@ -152,7 +152,10 @@ impl RuntimeCore {
             | Code::CapsLock | Code::Fn);
         match event {
             PhysicalInput::Key { key, pressed: true, repeat, .. } => {
-                if self.kbd.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) { return false; }
+                if self.kbd.held_gate(Some(key), fallback.as_ref().map(|f| &f.key.key), repeat) {
+                    self.kbd.note_key_consumed(false);
+                    return false;
+                }
                 if !is_mod(key) { self.note_key_down(app, repeat); }
             }
             PhysicalInput::Key { key, pressed: false, .. } => {
@@ -178,7 +181,7 @@ impl RuntimeCore {
         let consumed = self.offer_physical(app, &event, tx, &mut live);
         let observed = matches!(event, PhysicalInput::FocusLost) && self.observe_focus_lost(app, tx, &mut live);
         let modifier = self.modifier_dispatch(app, &event, consumed, tx, &mut live);
-        let ran = consumed || observed || chord || modifier | match fallback {
+        let key_ran = consumed || observed || chord || modifier | match fallback {
             // A release's logical key, for `on_key_up`.
             Some(Fallback { key, base, .. }) if matches!(event, PhysicalInput::Key { pressed: false, .. }) => {
                 let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
@@ -206,7 +209,10 @@ impl RuntimeCore {
             }
             None => false,
         };
-        let ran = self.dispatch_mods(app, tx, &mut live) || ran;
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) {
+            self.kbd.note_key_consumed(key_ran);
+        }
+        let ran = self.dispatch_mods(app, tx, &mut live) || key_ran;
         tx.live_only = ran && live == Some(true);
         ran
     }

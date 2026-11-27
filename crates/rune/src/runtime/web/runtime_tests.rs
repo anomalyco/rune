@@ -749,3 +749,87 @@ fn web_key_delivers_space_and_printable_keys_to_focused_controls_after_text_focu
         (crate::Key::Text("A".into()), Some(crate::PhysicalKeyCode::KeyA), Some('a')),
     ]);
 }
+
+#[test]
+fn web_key_reports_consumed_for_editing_and_app_handled_chords_but_not_unhandled_browser_shortcuts() {
+    #[derive(Default)]
+    struct S {
+        edit: crate::TextEdit,
+        consume_find: bool,
+        seen: Vec<crate::Key>,
+        mods_seen: usize,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::text_input(&s.edit, crate::tok::type_::BODY)
+            .key("input")
+            .on_edit(|s: &mut S| &mut s.edit)
+    }
+    let mut rt = Runtime::new(
+        S { edit: crate::TextEdit::new("hello"), ..S::default() },
+        view,
+        (300.0, 100.0),
+        Env::default(),
+    );
+    rt.hooks.on_mods = Some(|s, _, _| { s.mods_seen += 1; });
+    rt.on_key = Some(|s, ev, _| {
+        s.seen.push(ev.key.clone());
+        s.consume_find && ev.is_command('f')
+    });
+    rt.frame(0.0);
+    let input_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("input")).unwrap().path.clone();
+    rt.set_focus(Some(input_path), true);
+    rt.frame(0.0);
+
+    // Unhandled browser shortcuts while a text input is focused must report consumed = false
+    // (even when on_modifiers runs), letting bridge.js leave them to the browser.
+    for (key, code, shift, alt) in [
+        ("l", "KeyL", false, false),
+        ("r", "KeyR", false, false),
+        ("f", "KeyF", false, false),
+        ("t", "KeyT", false, false),
+        ("w", "KeyW", false, false),
+        ("n", "KeyN", false, false),
+        ("=", "Equal", false, false),
+        ("+", "Equal", true, false),
+        ("-", "Minus", false, false),
+        ("0", "Digit0", false, false),
+        ("I", "KeyI", true, false),
+        ("C", "KeyC", true, false),
+        ("i", "KeyI", false, true),
+        ("Dead", "KeyI", false, true),
+    ] {
+        rt.core_mut().take_key_consumed();
+        rt.web_key(&json!({"kind":"key", "key":key, "code":code, "ctrl":true, "shift":shift, "alt":alt}));
+        rt.frame(0.0);
+        assert!(
+            !rt.core_mut().take_key_consumed(),
+            "unhandled browser shortcut {key} (shift={shift}, alt={alt}) must not report consumed"
+        );
+    }
+    assert_eq!(rt.state.edit.text, "hello");
+
+    // Standard editing shortcuts in the focused text input are consumed by Rune.
+    rt.core_mut().take_key_consumed();
+    rt.web_key(&json!({"kind":"key", "key":"a", "code":"KeyA", "ctrl":true}));
+    rt.frame(0.0);
+    assert!(rt.core_mut().take_key_consumed(), "Ctrl+A select-all must report consumed");
+    assert!(!rt.core_mut().take_key_consumed(), "take_key_consumed must clear after reading");
+
+    rt.core_mut().take_key_consumed();
+    rt.web_key(&json!({"kind":"key", "key":"c", "code":"KeyC", "ctrl":true}));
+    rt.frame(0.0);
+    assert!(rt.core_mut().take_key_consumed(), "Ctrl+C with selection must report consumed");
+
+    // When the app explicitly consumes Cmd/Ctrl+F, consumed becomes true so bridge.js calls preventDefault.
+    rt.state.consume_find = true;
+    rt.core_mut().take_key_consumed();
+    rt.web_key(&json!({"kind":"key", "key":"f", "code":"KeyF", "ctrl":true}));
+    rt.frame(0.0);
+    assert!(rt.core_mut().take_key_consumed(), "app-consumed Ctrl+F must report consumed");
+
+    // Other browser shortcuts remain unconsumed alongside it.
+    rt.core_mut().take_key_consumed();
+    rt.web_key(&json!({"kind":"key", "key":"r", "code":"KeyR", "ctrl":true}));
+    rt.frame(0.0);
+    assert!(!rt.core_mut().take_key_consumed(), "declined Ctrl+R must remain unconsumed");
+}

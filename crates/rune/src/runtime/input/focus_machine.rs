@@ -303,6 +303,8 @@ pub(crate) struct KeyboardState {
     /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
     /// doesn't take as where focus was.
     focus_returned: bool,
+    /// Whether the most recently dispatched key press was consumed by a Rune handler or editor.
+    last_key_consumed: bool,
 }
 
 impl KeyboardState {
@@ -329,9 +331,21 @@ impl KeyboardState {
             focus_request: None,
             focus_owed: None,
             focus_returned: false,
+            last_key_consumed: false,
             unmounted_focused: Vec::new(),
             modal_scope: None,
         }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn note_key_consumed(&mut self, consumed: bool) {
+        self.last_key_consumed = consumed;
+    }
+
+    #[inline]
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(in crate::runtime) fn take_key_consumed(&mut self) -> bool {
+        std::mem::take(&mut self.last_key_consumed)
     }
 
     #[inline]

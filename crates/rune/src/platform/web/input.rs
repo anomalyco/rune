@@ -41,6 +41,8 @@ extern "C" {
     fn sync_wheel(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncGesture)]
     fn sync_gesture(handle: &JsValue, used: bool);
+    #[wasm_bindgen(js_name = syncKey)]
+    fn sync_key(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncCaret)]
     fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
     #[wasm_bindgen(js_name = syncVisualViewport)]
@@ -440,9 +442,8 @@ impl Running {
             _ => {}
         }
         self.full_redraw = true;
-        let mut activate = false;
-        let mut a11y_press = false;
-        let mut flush_a11y = false;
+        let (mut activate, mut a11y_press, mut flush_a11y) = (false, false, false);
+        let is_key = event["kind"].as_str() == Some("key");
         // What a person typed, scrolled, hovered, pasted or activated through the page's own
         // elements is live input too: stamp its arrival time (`Tx::input_time`) and `last_input`.
         let _input = event["kind"].as_str().is_some_and(crate::input::time::is_web_dom_input)
@@ -559,7 +560,7 @@ impl Running {
                     self.app.web_autofill(event["key"].as_str().unwrap_or_default(), text, event["secure"].as_bool() == Some(true));
                 }
             }
-            Some("key") => activate = self.app.web_key(event),
+            Some("key") => { self.app.rt_mut().take_key_consumed(); activate = self.app.web_key(event); }
             Some("a11y_press" | "a11y_link" | "a11y_custom") => {
                 let _ = self.app.rt_mut().web_a11y_action(event);
                 a11y_press = matches!(event["kind"].as_str(), Some("a11y_press" | "a11y_custom"));
@@ -633,6 +634,7 @@ impl Running {
         }
         // Commit within the DOM event: clipboard, link and soft-keyboard APIs need activation.
         self.app.frame(0.0);
+        if is_key { sync_key(&self.input.handle, self.app.rt_mut().take_key_consumed()); }
         self.apply_frame_requests(window);
         self.clipboard.flush_core(self.app.rt_mut());
         let activate = (activate || (a11y_press && self.app.rt().web_has_editable_focus()))
@@ -647,7 +649,7 @@ impl Running {
     pub(super) fn window_input(&mut self, event: &WindowEvent, window: &Arc<Window>) -> bool {
         let scale = window.scale_factor() as f32;
         let mut activate = crate::input::host_events::WebActivate::Never;
-        let mut immediate = false;
+        let (mut immediate, mut is_key_down) = (false, false);
         match event {
             WindowEvent::ModifiersChanged(mods) => {
                 return self.app.sync_modifiers(&mut self.input.mods, mods.state());
@@ -743,16 +745,17 @@ impl Running {
                 // Browsers expose no synchronous layout key_without_modifiers, so `key_base`
                 // derives `Tx::key_base` from `KeyboardEvent.key` when unmodified (or for shifted
                 // letters) while physical US positions arrive in `physical_key`.
-                if !self.app.keyboard(event, self.input.mods) { return false; }
+                is_key_down = event.state == ElementState::Pressed;
+                if is_key_down { self.app.rt_mut().take_key_consumed(); }
+                if !self.app.keyboard(event, self.input.mods) {
+                    if is_key_down { sync_key(&self.input.handle, false); }
+                    return false;
+                }
                 immediate = true;
                 // Any key that puts Rune's focus in a field (Tab, or a shortcut such as the
                 // prompt's) hands the page's own field the browser's focus, so a screen reader is
                 // in a real text field with its text, not on the canvas's stand-in for it.
-                activate = if event.state == ElementState::Pressed {
-                    crate::input::host_events::WebActivate::Always
-                } else {
-                    crate::input::host_events::WebActivate::Never
-                };
+                activate = if is_key_down { crate::input::host_events::WebActivate::Always } else { crate::input::host_events::WebActivate::Never };
             }
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.
@@ -780,6 +783,7 @@ impl Running {
         // commit before the DOM handler returns (clipboard, links and keyboard focus).
         if immediate {
             self.app.frame(0.0);
+            if is_key_down { sync_key(&self.input.handle, self.app.rt_mut().take_key_consumed()); }
             self.apply_frame_requests(window);
             self.clipboard.flush_core(self.app.rt_mut());
             let focus = activate.should_activate(self.app.rt());
