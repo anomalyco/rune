@@ -41,6 +41,14 @@ impl AnyHost for Host {
         false
     }
     fn finished(&self) -> bool { self.life.finished() }
+    fn has_pending_overlays(&self) -> bool { self.shared.has_overlays() }
+    fn take_pending_overlays(&mut self) -> Vec<Box<dyn crate::overlay::PendingOverlay>> {
+        self.shared
+            .take_overlays()
+            .into_iter()
+            .filter_map(|build| build(&self.overlay_defaults))
+            .collect()
+    }
     fn has_shown(&self) -> bool { self.shown }
     fn take_startup_error(&mut self) -> Option<String> { self.startup_error.take() }
     fn keeps_loop(&self) -> bool { self.keeps_loop }
@@ -279,6 +287,7 @@ impl Host {
     }
 
     fn terminate_in_turn(&mut self) {
+        self.shared.close_overlays();
         // Once: a window that already closed ran its hook then.
         if !self.closes() { return; }
         self.life.finish();

@@ -49,7 +49,6 @@ impl<T> AfterHiddenQueue<T> {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn close(&mut self) -> Vec<AfterHidden<T>> {
         match std::mem::replace(self, Self::Closed) {
             Self::Open(pending) => pending,

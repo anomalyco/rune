@@ -1026,6 +1026,8 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         on_display_close(f: impl FnOnce() + 'static);
+        /// Runs on the UI thread when connected displays change, like [`App::on_displays`].
+        on_displays(f: impl FnMut(&crate::DisplayEvent, &[crate::Display]) + 'static);
         /// Reports each of this window's frames, like `App::on_frame_encoded`. A spec made with
         /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
         /// adds have their own.

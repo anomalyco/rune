@@ -113,6 +113,152 @@ pub(crate) fn resolve(raw: Option<&RawOutput>, fallback: ResolvedOutput) -> Reso
     ResolvedOutput { position, size, scale }
 }
 
+/// Pure protocol state tracker for long-lived `wl_output` and `zxdg_output_v1` watches.
+///
+/// Staged updates from `wl_output` and `zxdg_output_v1` are promoted into `committed` only when
+/// atomic `done` boundaries arrive (and, when `zxdg_output_manager_v1` is present, once
+/// `zxdg_output_v1` has delivered initial metadata), so callers never observe half-applied
+/// scale, mode, rotation, or position updates.
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+#[derive(Default)]
+pub(crate) struct OutputTracker {
+    has_xdg_manager: bool,
+    entries: std::collections::HashMap<u32, TrackedRaw>,
+}
+
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+#[derive(Clone, Copy, Debug)]
+struct TrackedRaw {
+    version: u32,
+    staged: RawOutput,
+    committed: Option<RawOutput>,
+    wl_done: bool,
+    xdg_seen: bool,
+}
+
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+impl OutputTracker {
+    pub(crate) fn new(has_xdg_manager: bool) -> Self {
+        Self { has_xdg_manager, entries: std::collections::HashMap::new() }
+    }
+
+    pub(crate) fn set_has_xdg_manager(&mut self, has_xdg_manager: bool) {
+        self.has_xdg_manager = has_xdg_manager;
+        if !has_xdg_manager {
+            for entry in self.entries.values_mut() {
+                entry.xdg_seen = true;
+                entry.try_commit();
+            }
+        }
+    }
+
+    pub(crate) fn add_output(&mut self, name: u32, version: u32) {
+        self.entries.insert(
+            name,
+            TrackedRaw {
+                version,
+                staged: RawOutput::default(),
+                committed: None,
+                wl_done: version < 2,
+                xdg_seen: !self.has_xdg_manager,
+            },
+        );
+    }
+
+    pub(crate) fn remove_output(&mut self, name: u32) -> bool {
+        self.entries.remove(&name).is_some()
+    }
+
+    pub(crate) fn on_geometry(&mut self, name: u32, pos: (i32, i32), transform: OutputTransform) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.staged.geometry_position = Some(pos);
+            entry.staged.transform = transform;
+            if entry.version < 2 {
+                entry.try_commit();
+            }
+        }
+    }
+
+    pub(crate) fn on_mode(&mut self, name: u32, width: i32, height: i32) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.staged.mode = Some((width, height));
+            if entry.version < 2 {
+                entry.try_commit();
+            }
+        }
+    }
+
+    pub(crate) fn on_scale(&mut self, name: u32, factor: i32) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.staged.integer_scale = Some(factor);
+        }
+    }
+
+    pub(crate) fn on_wl_done(&mut self, name: u32) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.wl_done = true;
+            entry.try_commit();
+        }
+    }
+
+    pub(crate) fn on_xdg_position(&mut self, name: u32, pos: (i32, i32)) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.staged.logical_position = Some(pos);
+            entry.xdg_seen = true;
+        }
+    }
+
+    pub(crate) fn on_xdg_size(&mut self, name: u32, size: (i32, i32)) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.staged.logical_size = Some(size);
+            entry.xdg_seen = true;
+        }
+    }
+
+    pub(crate) fn on_xdg_done(&mut self, name: u32) {
+        if let Some(entry) = self.entries.get_mut(&name) {
+            entry.xdg_seen = true;
+            entry.try_commit();
+        }
+    }
+
+    /// After an initial startup roundtrip, commits any tracked output that already received
+    /// `wl_output.done` even if the compositor omitted `zxdg_output_v1` events.
+    pub(crate) fn finish_initial_roundtrip(&mut self) {
+        for entry in self.entries.values_mut() {
+            if entry.wl_done {
+                entry.xdg_seen = true;
+                entry.try_commit();
+            }
+        }
+    }
+
+    pub(crate) fn committed(&self, name: u32) -> Option<&RawOutput> {
+        self.entries.get(&name).and_then(|e| e.committed.as_ref())
+    }
+}
+
+#[cfg_attr(
+    not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+    allow(dead_code)
+)]
+impl TrackedRaw {
+    fn try_commit(&mut self) {
+        if self.wl_done && self.xdg_seen {
+            self.committed = Some(self.staged);
+        }
+    }
+}
+
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod wayland {
     use std::collections::HashMap;
@@ -121,14 +267,14 @@ mod wayland {
     use wayland_backend::client::Backend;
     use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
     use wayland_client::protocol::wl_output::{self, WlOutput};
-    use wayland_client::protocol::wl_registry::WlRegistry;
+    use wayland_client::protocol::wl_registry::{self, WlRegistry};
     use wayland_client::{Connection, Dispatch, DispatchError, EventQueue, Proxy, QueueHandle, WEnum};
     use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::{
         self, ZxdgOutputManagerV1,
     };
     use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
-    use super::{OutputTransform, RawOutput};
+    use super::{OutputTracker, OutputTransform, RawOutput};
 
     #[derive(Default)]
     struct State {
@@ -312,10 +458,278 @@ mod wayland {
 
         if ok { state.outputs } else { HashMap::new() }
     }
+
+    struct OutputProxies {
+        wl: WlOutput,
+        xdg: Option<ZxdgOutputV1>,
+    }
+
+    #[derive(Default)]
+    struct WatchState {
+        manager: Option<(u32, ZxdgOutputManagerV1)>,
+        outputs: HashMap<u32, OutputProxies>,
+        tracker: OutputTracker,
+        needs_flush: bool,
+    }
+
+    impl WatchState {
+        fn bind_output(
+            &mut self,
+            registry: &WlRegistry,
+            name: u32,
+            version: u32,
+            qh: &QueueHandle<Self>,
+            conn: &Connection,
+        ) {
+            if let Some(old) = self.outputs.remove(&name) {
+                release_proxies(conn, old);
+            }
+            let ver = version.min(4);
+            let wl = registry.bind::<WlOutput, _, _>(name, ver, qh, name);
+            let xdg = self.manager.as_ref().map(|(_, mgr)| mgr.get_xdg_output(&wl, qh, name));
+            self.outputs.insert(name, OutputProxies { wl, xdg });
+            self.tracker.add_output(name, ver);
+            self.needs_flush = true;
+        }
+    }
+
+    fn release_proxies(conn: &Connection, proxies: OutputProxies) {
+        if let Some(xdg) = proxies.xdg {
+            xdg.destroy();
+        }
+        if proxies.wl.version() >= 3 {
+            proxies.wl.release();
+        } else {
+            conn.backend().destroy_object(&proxies.wl.id()).ok();
+        }
+    }
+
+    impl Dispatch<WlRegistry, GlobalListContents> for WatchState {
+        fn event(
+            state: &mut Self,
+            registry: &WlRegistry,
+            event: wl_registry::Event,
+            _: &GlobalListContents,
+            conn: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
+            match event {
+                wl_registry::Event::Global { name, interface, version } => {
+                    if interface == "zxdg_output_manager_v1" && state.manager.is_none() {
+                        let mgr = registry.bind::<ZxdgOutputManagerV1, _, _>(name, version.min(3), qh, ());
+                        for (&out_name, proxies) in &mut state.outputs {
+                            if proxies.xdg.is_none() {
+                                proxies.xdg = Some(mgr.get_xdg_output(&proxies.wl, qh, out_name));
+                            }
+                        }
+                        state.manager = Some((name, mgr));
+                        state.tracker.set_has_xdg_manager(true);
+                        state.needs_flush = true;
+                    } else if interface == "wl_output" {
+                        state.bind_output(registry, name, version, qh, conn);
+                    }
+                }
+                wl_registry::Event::GlobalRemove { name } => {
+                    if state.manager.as_ref().is_some_and(|(mname, _)| *mname == name) {
+                        if let Some((_, mgr)) = state.manager.take() {
+                            mgr.destroy();
+                        }
+                        state.tracker.set_has_xdg_manager(false);
+                        state.needs_flush = true;
+                    }
+                    if let Some(proxies) = state.outputs.remove(&name) {
+                        release_proxies(conn, proxies);
+                        state.tracker.remove_output(name);
+                        state.needs_flush = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<ZxdgOutputManagerV1, ()> for WatchState {
+        fn event(
+            _: &mut Self,
+            _: &ZxdgOutputManagerV1,
+            _: zxdg_output_manager_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
+    }
+
+    impl Dispatch<WlOutput, u32> for WatchState {
+        fn event(
+            state: &mut Self,
+            _: &WlOutput,
+            event: wl_output::Event,
+            &global_name: &u32,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            match event {
+                wl_output::Event::Geometry { x, y, transform, .. } => {
+                    state.tracker.on_geometry(global_name, (x, y), map_transform(transform));
+                }
+                wl_output::Event::Mode { flags, width, height, .. } => {
+                    let is_current = match flags {
+                        WEnum::Value(bits) => bits.contains(wl_output::Mode::Current),
+                        WEnum::Unknown(raw) => (raw & wl_output::Mode::Current.bits()) != 0,
+                    };
+                    if is_current {
+                        state.tracker.on_mode(global_name, width, height);
+                    }
+                }
+                wl_output::Event::Scale { factor } => {
+                    state.tracker.on_scale(global_name, factor);
+                }
+                wl_output::Event::Done => {
+                    state.tracker.on_wl_done(global_name);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<ZxdgOutputV1, u32> for WatchState {
+        fn event(
+            state: &mut Self,
+            _: &ZxdgOutputV1,
+            event: zxdg_output_v1::Event,
+            &global_name: &u32,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            match event {
+                zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                    state.tracker.on_xdg_position(global_name, (x, y));
+                }
+                zxdg_output_v1::Event::LogicalSize { width, height } => {
+                    state.tracker.on_xdg_size(global_name, (width, height));
+                }
+                zxdg_output_v1::Event::Done => {
+                    state.tracker.on_xdg_done(global_name);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn drain_watch_queue(queue: &mut EventQueue<WatchState>, state: &mut WatchState) {
+        loop {
+            match queue.dispatch_pending(state) {
+                Ok(0) => break,
+                Ok(_) | Err(DispatchError::BadMessage { .. }) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Long-lived Wayland output watch on winit's shared `wl_display`, with no background thread.
+    ///
+    /// Follows `wl_output` and `zxdg_output_v1` additions, removals, and mode/scale/transform/
+    /// position changes on a private `EventQueue`; driven from `Windows::about_to_wait` while
+    /// `window::wayland_wake` enables winit's wake-on-read flag.
+    pub(crate) struct OutputWatch {
+        conn: Connection,
+        globals: Option<GlobalList>,
+        queue: EventQueue<WatchState>,
+        state: WatchState,
+    }
+
+    impl OutputWatch {
+        #[allow(unsafe_code)]
+        pub(crate) fn new(display: RawDisplayHandle) -> Option<Self> {
+            let RawDisplayHandle::Wayland(display) = display else {
+                return None;
+            };
+            // SAFETY: winit owns this `wl_display` for the life of the event loop, and
+            // `DisplayWatch::shutdown` drops `OutputWatch` strictly before teardown closes it.
+            let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
+            let conn = Connection::from_backend(backend);
+            let (globals, mut queue) = registry_queue_init::<WatchState>(&conn).ok()?;
+            let qh = queue.handle();
+
+            let manager = globals.contents().with_list(|list| {
+                list.iter()
+                    .find(|g| g.interface == "zxdg_output_manager_v1")
+                    .map(|g| {
+                        let mgr = globals
+                            .registry()
+                            .bind::<ZxdgOutputManagerV1, _, _>(g.name, g.version.min(3), &qh, ());
+                        (g.name, mgr)
+                    })
+            });
+            let mut state = WatchState {
+                tracker: OutputTracker::new(manager.is_some()),
+                manager,
+                outputs: HashMap::new(),
+                needs_flush: false,
+            };
+
+            let initial: Vec<(u32, u32)> = globals.contents().with_list(|list| {
+                list.iter()
+                    .filter(|g| g.interface == "wl_output")
+                    .map(|g| (g.name, g.version))
+                    .collect()
+            });
+            for (name, version) in initial {
+                state.bind_output(globals.registry(), name, version, &qh, &conn);
+            }
+
+            if !state.outputs.is_empty() && queue.roundtrip(&mut state).is_err() {
+                let watch = Self { conn, globals: Some(globals), queue, state };
+                drop(watch);
+                return None;
+            }
+            state.tracker.finish_initial_roundtrip();
+            state.needs_flush = false;
+            Some(Self { conn, globals: Some(globals), queue, state })
+        }
+
+        /// Dispatches queued Wayland events non-blockingly and flushes any newly bound or
+        /// released output proxies back to the compositor.
+        pub(crate) fn dispatch_pending(&mut self) {
+            drain_watch_queue(&mut self.queue, &mut self.state);
+            if self.state.needs_flush {
+                self.state.needs_flush = false;
+                self.queue.flush().ok();
+            }
+        }
+
+        /// Syscall-free check whether libwayland already has unread events queued for this watch.
+        pub(crate) fn has_pending_events(&self) -> bool {
+            self.queue.prepare_read().is_none()
+        }
+
+        /// Latest committed `RawOutput` for registry global `name`, or `None` if the output is
+        /// gone or has not yet reached its initial atomic `done` boundary.
+        pub(crate) fn committed(&self, name: u32) -> Option<&RawOutput> {
+            self.state.tracker.committed(name)
+        }
+    }
+
+    impl Drop for OutputWatch {
+        fn drop(&mut self) {
+            for (_, proxies) in self.state.outputs.drain() {
+                release_proxies(&self.conn, proxies);
+            }
+            if let Some((_, mgr)) = self.state.manager.take() {
+                mgr.destroy();
+            }
+            if let Some(globals) = self.globals.take() {
+                destroy_globals(&self.conn, globals);
+            }
+            drain_watch_queue(&mut self.queue, &mut self.state);
+            self.queue.flush().ok();
+        }
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-pub(crate) use wayland::query;
+pub(crate) use wayland::{OutputWatch, query};
 
 #[cfg(test)]
 #[path = "output_tests.rs"]

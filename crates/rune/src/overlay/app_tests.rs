@@ -387,3 +387,189 @@ fn overlay_setup_measures_use_overlay_text_system_and_stay_warm_for_first_frame(
     .join()
     .unwrap();
 }
+
+#[test]
+fn an_overlay_added_through_the_handle_is_built_later_for_the_handle_already_given() {
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    fn bar_view(_: &usize, _: &mut Cx<usize>) -> El { col().size(100.0, 24.0) }
+
+    let spec = AppSpec::new("dynamic-overlay", (120.0, 80.0), || (), view);
+    let app = App::new(spec).font_smoothing(FontSmoothing::Off);
+    let app_wakes = Arc::new(AtomicUsize::new(0));
+    let app_wakes_cb = app_wakes.clone();
+    app.shared.core.connect(Arc::new(move || {
+        app_wakes_cb.fetch_add(1, Ordering::Relaxed);
+    }));
+    let wakes_after_connect = app_wakes.load(Ordering::Relaxed);
+
+    let built = Arc::new(AtomicBool::new(false));
+    let built_cb = built.clone();
+    let handle = app.handle();
+    // Queue from a background thread to verify Send + deferred UI-thread construction.
+    let ov_handle = std::thread::spawn(move || {
+        let ov = handle.overlay(move || {
+            built_cb.store(true, Ordering::Release);
+            (OverlaySpec::new("bar", (100.0, 24.0), bar_view), 7usize)
+        });
+        // Requests queued immediately on the returned handle before build runs.
+        ov.show();
+        ov.update(|n, _| *n = 99);
+        ov
+    })
+    .join()
+    .unwrap();
+
+    assert!(!built.load(Ordering::Acquire), "builder must wait for the UI thread turn");
+    assert!(app.shared.core.has_overlays());
+    assert!(app_wakes.load(Ordering::Relaxed) > wakes_after_connect, "AppHandle::overlay wakes the loop");
+
+    let defaults = super::OverlayDefaults::from_spec(
+        &app.spec,
+        super::AppOverlayDefaults {
+            font_smoothing: app.runtime.font_smoothing,
+            wheel_glide: app.runtime.wheel_glide,
+            wheel_line: app.runtime.wheel_line,
+        },
+        app.runtime.emoji_family.clone(),
+        app.prewarm_effects,
+        app.gpu_loss_latch.clone(),
+    );
+    let builders = app.shared.core.take_overlays();
+    assert_eq!(builders.len(), 1);
+    let mut overlay = builders
+        .into_iter()
+        .next()
+        .unwrap()(&defaults)
+        .expect("builder constructs overlay");
+    assert!(built.load(Ordering::Acquire));
+    assert_eq!(overlay.font_smoothing(), FontSmoothing::Off, "inherits app font_smoothing");
+    assert!(!overlay.finished());
+
+    let ov_wakes = Arc::new(AtomicUsize::new(0));
+    let ov_wakes_cb = ov_wakes.clone();
+    overlay.connect(
+        Arc::new(move || { ov_wakes_cb.fetch_add(1, Ordering::Relaxed); }),
+        Arc::new(|| {}),
+        Arc::new(|| {}),
+        Rc::default(),
+    );
+    let after_connect = ov_wakes.load(Ordering::Relaxed);
+    assert!(after_connect >= 1, "connect wakes the loop to drain pre-build requests");
+
+    // Further calls on the already-given handle wake the connected overlay.
+    ov_handle.resize((200.0, 32.0));
+    assert_eq!(ov_wakes.load(Ordering::Relaxed), after_connect + 1);
+}
+
+#[test]
+fn a_closed_overlay_is_finished_for_the_loop_to_drop_and_its_handle_wakes_nothing() {
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::overlay::{Availability, PendingOverlay};
+    use crate::window::AnyHost;
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = AppSpec::new("close-overlay", (120.0, 80.0), || (), view);
+    let (mut host, handle) = OverlayHost::new(OverlaySpec::new("bar", app.size, view), (), &app, super::AppOverlayDefaults::default());
+
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wakes_cb = wakes.clone();
+    host.connect(
+        Arc::new(move || { wakes_cb.fetch_add(1, Ordering::Relaxed); }),
+        Arc::new(|| {}),
+        Arc::new(|| {}),
+        Rc::default(),
+    );
+    let wakes_before_close = wakes.load(Ordering::Relaxed);
+
+    let token_answer = Arc::new(Mutex::new(Some(Some("pending".to_owned()))));
+    let token_cb = token_answer.clone();
+    handle.activation_token(move |tok| *token_cb.lock().unwrap() = Some(tok));
+
+    let after_hidden_ran = Arc::new(AtomicBool::new(false));
+    let after_hidden_cb = after_hidden_ran.clone();
+    handle.after_hidden(move |_, _| after_hidden_cb.store(true, Ordering::Release));
+
+    let wakes_before = wakes.load(Ordering::Relaxed);
+    assert!(wakes_before > wakes_before_close);
+
+    // Closing wakes the loop once so the host can finish, answers pending tokens None,
+    // and drops pending after_hidden callbacks unrun.
+    handle.close();
+    assert_eq!(wakes.load(Ordering::Relaxed), wakes_before + 1);
+    assert_eq!(*token_answer.lock().unwrap(), Some(None));
+    assert!(!after_hidden_ran.load(Ordering::Acquire));
+
+    // Further calls on the closed handle (or clones) wake nothing.
+    let wakes_after_close = wakes.load(Ordering::Relaxed);
+    let clone = handle.clone();
+    clone.close();
+    clone.show();
+    clone.hide();
+    clone.resize((300.0, 40.0));
+    clone.update(|_, _| {});
+    clone.after_hidden(|_, _| panic!("after_hidden on closed handle must not run"));
+    let late_token = Arc::new(AtomicBool::new(false));
+    let late_token_cb = late_token.clone();
+    clone.activation_token(move |tok| {
+        assert!(tok.is_none());
+        late_token_cb.store(true, Ordering::Release);
+    });
+    assert!(late_token.load(Ordering::Acquire));
+    assert_eq!(wakes.load(Ordering::Relaxed), wakes_after_close, "closed handle must wake nothing");
+
+    // Processing the close on the UI thread finishes the host for cleanup to drop.
+    assert!(!host.finished());
+    host.core.close_host(&mut *host.app);
+    assert!(host.finished());
+    assert_eq!(host.wake_deadline(), None);
+    assert_eq!(handle.availability(), Availability::Unavailable);
+}
+
+#[test]
+fn an_overlay_closed_before_build_is_skipped_and_drops_its_builder() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+    }
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = App::new(AppSpec::new("close-before-build", (120.0, 80.0), || (), view));
+    let handle = app.handle();
+    let ran = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let ran_cb = ran.clone();
+    let guard = DropFlag(dropped.clone());
+
+    let ov = handle.overlay(move || {
+        let _keep = guard;
+        ran_cb.store(true, Ordering::Release);
+        (OverlaySpec::new("gone", (100.0, 20.0), view), ())
+    });
+    ov.close();
+
+    let defaults = super::OverlayDefaults::from_spec(
+        &app.spec,
+        super::AppOverlayDefaults {
+            font_smoothing: app.runtime.font_smoothing,
+            wheel_glide: app.runtime.wheel_glide,
+            wheel_line: app.runtime.wheel_line,
+        },
+        app.runtime.emoji_family.clone(),
+        app.prewarm_effects,
+        app.gpu_loss_latch.clone(),
+    );
+    let builders = app.shared.core.take_overlays();
+    assert_eq!(builders.len(), 1);
+    assert!(builders.into_iter().next().unwrap()(&defaults).is_none());
+    assert!(!ran.load(Ordering::Acquire), "builder closure must not run after close");
+    assert!(dropped.load(Ordering::Acquire), "builder closure must be dropped cleanly");
+}
