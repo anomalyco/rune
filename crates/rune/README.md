@@ -1808,8 +1808,10 @@ rune::App::new(spec).fit_content_height().run();
 
 ### Finite choreography
 
-`El::sequence` uses the same render-clock tracks as loops, then holds the final pose
-and sleeps. No app phases, poll callback, or `wake_after` calls are needed.
+`El::sequence` uses the same render-clock tracks as loops, holding the final pose
+by default (or returning to the element's own pose with `Sequence::release()`, like CSS
+`animation-fill-mode: none`) and sleeping once finished. No app phases, poll callback, or
+`wake_after` calls are needed.
 
 ```rust,ignore
 use rune::{Beat, Sequence, el};

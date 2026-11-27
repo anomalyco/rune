@@ -473,14 +473,14 @@ impl MotionState {
                 let live = |p: crate::live::Property| n.live.iter().any(|b| b.property == p);
                 if !live(crate::live::Property::Offset) {
                     let offset = rune_motion::Vec2::new(n.vis.offset[0] + x, n.vis.offset[1] + y);
-                    let due = if playing { scene.get(*id, prop::OFFSET) } else { scene.store().target(*id, prop::OFFSET) };
+                    let due = if playing { (!scene.store().is_animating(*id, prop::OFFSET)).then(|| scene.get(*id, prop::OFFSET)).flatten() } else { scene.store().target(*id, prop::OFFSET) };
                     if due != Some(offset) {
                         scene.set(*id, prop::OFFSET, offset);
                     }
                 }
                 if !live(crate::live::Property::Rotation) {
                     let turn = n.vis.rotate + turn;
-                    let due = if playing { scene.get(*id, prop::ROTATION) } else { scene.store().target(*id, prop::ROTATION) };
+                    let due = if playing { (!scene.store().is_animating(*id, prop::ROTATION)).then(|| scene.get(*id, prop::ROTATION)).flatten() } else { scene.store().target(*id, prop::ROTATION) };
                     if due != Some(turn) {
                         scene.set(*id, prop::ROTATION, turn);
                     }

@@ -415,12 +415,17 @@ impl RuntimeCore {
             let shift = nodes[i].vis.offset;
             if !slid.is_empty() && nodes[i].parent.is_some_and(|p| slid[p]) { slid[i] = true; }
             // A moving sequence plays on top of `El::offset` and `El::rotate`; between plays they
-            // aim at its resting pose so a change still springs (`step_loops_into_scene`).
+            // aim at its resting pose so a change still springs (`step_loops_into_scene`). While
+            // the sequence actively plays, `step_loops_into_scene` owns both channels so an
+            // unrelated commit doesn't start a spring back toward `rest`.
             let sequence_rest = match nodes[i].looping.as_deref().map(|l| l.kind) {
                 Some(rune_motion::LoopKind::Sequence(q)) if q.moves() => Some(q.rest()),
                 _ => None,
             };
-            if (nodes[i].looping.is_none() || sequence_rest.is_some()) && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
+            let sequence_playing = sequence_rest.is_some()
+                && !self.reduced_motion
+                && self.motion.loop_active(id, self.scene.store().node_time(id));
+            if (nodes[i].looping.is_none() || (sequence_rest.is_some() && !sequence_playing)) && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
                 let lift = sequence_rest.map_or([0.0; 2], |b| b.translate);
@@ -469,7 +474,8 @@ impl RuntimeCore {
                 }
             }
             let turn = nodes[i].vis.rotate + sequence_rest.map_or(0.0, |b| b.rotate);
-            if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rotation)
+            if !sequence_playing
+                && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rotation)
                 && (turn != 0.0 || self.scene.store().has(id, prop::ROTATION))
             {
                 self.snap_or_animate(id, prop::ROTATION, turn, rest_quiet, 0.0, nodes[i].vis.rotate_motion.as_deref().copied(), spring_l);

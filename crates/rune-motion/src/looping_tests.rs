@@ -361,3 +361,73 @@ fn a_sequence_blends_translate_and_rotate_and_only_moving_ones_report_motion() {
     looping.enabled(true, 0.2);
     assert!(looping.motion(0.25, false).is_some());
 }
+#[test]
+fn releasing_sequence_returns_to_neutral_rest_when_not_playing_and_leaves_default_unchanged() {
+    const FLOURISH: &[Beat] = &[
+        Beat::new(0.0).opacity(0.4).scale(0.8).translate(-4.0, 2.0).rotate(-0.5),
+        Beat::new(0.4).opacity(0.6).scale(1.2).translate(8.0, -6.0).rotate(core::f32::consts::PI).easing(Easing::LINEAR),
+    ];
+    let held = Sequence::new(FLOURISH).delay(0.2);
+    let released = Sequence::new(FLOURISH).delay(0.2).release();
+    // Default one-shot still rests at its last beat; release rests at neutral.
+    assert_eq!(held.rest(), FLOURISH[1]);
+    let rest = released.rest();
+    assert_eq!((rest.opacity, rest.scale, rest.translate, rest.rotate), (1.0, 1.0, [0.0, 0.0], 0.0));
+    assert!(released.moves());
+
+    let spec = LoopSpec::sequence(released);
+    let mut track = LoopTrack::new(spec, 1.0);
+    assert!(track.is_finite());
+    // Before delay (CSS animation-fill-mode: none): neutral rest pose, asleep with one wake.
+    assert_eq!(track.pending_start(1.0), Some(1.2));
+    assert!(!track.active(1.1));
+    assert_eq!(track.pose(1.1, false), Some(rest));
+    assert_eq!(track.sample(1.1, false), 1.0);
+    assert_eq!(track.motion(1.1, false), Some(([0.0, 0.0], 0.0)));
+    // At start and mid-play: active and sampling beats.
+    assert!(track.active(1.2));
+    assert_eq!(track.pose(1.2, false), Some(FLOURISH[0]));
+    let mid = track.pose(1.4, false).unwrap();
+    assert!((mid.opacity - 0.5).abs() < 1e-5 && (mid.scale - 1.0).abs() < 1e-5);
+    assert!((mid.translate[0] - 2.0).abs() < 1e-5 && (mid.translate[1] + 2.0).abs() < 1e-5);
+    assert!((mid.rotate - (core::f32::consts::PI - 0.5) * 0.5).abs() < 1e-5);
+    // Unchanged spec does not restart.
+    track.retime(spec, 1.4);
+    assert_eq!(track.pose(1.4, false).unwrap(), mid);
+    // At and after end: inactive, phase rests at 1.0, pose returns to neutral.
+    assert!(!track.active(1.6));
+    assert_eq!(track.pending_start(1.6), None);
+    assert_eq!(track.phase(1.6), 1.0);
+    assert_eq!(track.pose(1.6, false), Some(rest));
+    assert_eq!(track.sample(1.6, false), 1.0);
+    assert_eq!(track.motion(1.6, false), Some(([0.0, 0.0], 0.0)));
+    // Reduce Motion rests immediately at neutral at any time.
+    assert_eq!(track.pose(1.4, true), Some(rest));
+    assert_eq!(track.sample(1.4, true), 1.0);
+    assert_eq!(track.motion(1.4, true), Some(([0.0, 0.0], 0.0)));
+    // finish() lands immediately at neutral and stays done when re-enabled.
+    let mut settled = LoopTrack::new(spec, 1.0);
+    settled.finish();
+    assert!(!settled.active(1.4));
+    assert_eq!(settled.pending_start(1.0), None);
+    assert_eq!(settled.pose(1.4, false), Some(rest));
+    settled.enabled(false, 1.4);
+    settled.enabled(true, 1.5);
+    assert!(!settled.active(1.5));
+    assert_eq!(settled.pose(1.5, false), Some(rest));
+    // Cooling mid-play lets go, re-enabling before end resumes and still releases on end.
+    let mut cooled = LoopTrack::new(spec, 1.0);
+    cooled.enabled(false, 1.3);
+    assert!(!cooled.active(1.3));
+    assert_eq!(cooled.pose(1.3, false), Some(rest));
+    assert_eq!(cooled.motion(1.3, false), None);
+    cooled.enabled(true, 1.4);
+    assert!(cooled.active(1.4));
+    assert!((cooled.pose(1.4, false).unwrap().opacity - 0.5).abs() < 1e-5);
+    assert!(!cooled.active(1.6));
+    assert_eq!(cooled.pose(1.6, false), Some(rest));
+    // Switching between hold and release restarts the finite track.
+    track.retime(LoopSpec::sequence(held), 2.0);
+    assert_eq!(track.pending_start(2.0), Some(2.2));
+    assert_eq!(track.pose(3.0, false), Some(FLOURISH[1]));
+}
