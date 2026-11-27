@@ -98,3 +98,45 @@ fn with_no_scope_or_handler_an_unsupported_call_panics_naming_it() {
     let message = payload.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(message.contains("indirect draws"), "{message}");
 }
+/// `target` is reserved in WGSL: wgpu and this backend both refuse the module.
+const RESERVED: &str = r#"
+struct S { target: vec2<f32>, n: u32 }
+@group(0) @binding(0) var<storage, read_write> s: array<S>;
+@compute @workgroup_size(1) fn main() { s[0].target = vec2<f32>(1.0); }
+"#;
+
+/// The errors making `RESERVED`'s module report, then making a pipeline from it and dispatching
+/// that (wgpu reports the dispatch at `finish`).
+fn refused(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<String> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("reserved"), source: wgpu::ShaderSource::Wgsl(RESERVED.into()) });
+    let module_error = pollster::block_on(scope.pop());
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("reserved"), layout: None, module: &module, entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    queue.submit([encoder.finish()]);
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let pipeline_error = pollster::block_on(scope.pop());
+    [module_error, pipeline_error].into_iter().map(|e| e.map_or_else(String::new, |e| e.to_string())).collect()
+}
+
+#[test]
+fn a_pipeline_from_a_module_that_failed_is_invalid_as_in_wgpu() {
+    let (device, queue) = gpu();
+    let ours = refused(&device, &queue);
+    assert!(ours[0].contains("name `target` is a reserved keyword"), "the module's error: {ours:?}");
+    assert!(!ours[1].is_empty(), "and the pipeline's, instead of a panic: {ours:?}");
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::METAL;
+    let adapter = pollster::block_on(wgpu::Instance::new(descriptor).request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let theirs = refused(&device, &queue);
+    assert!(theirs[0].contains("name `target` is a reserved keyword") && !theirs[1].is_empty(), "wgpu refuses it the same way: {theirs:?}");
+}

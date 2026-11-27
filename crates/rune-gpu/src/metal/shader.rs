@@ -124,9 +124,9 @@ impl Ir {
         self.try_parsed().unwrap_or_else(|error| panic!("{error}"))
     }
 
-    pub(super) fn parts(&self) -> (&naga::Module, &naga::valid::ModuleInfo) {
-        let (module, info) = self.parsed();
-        (module, info)
+    /// The module and its validation, or why the WGSL didn't parse or validate.
+    pub(super) fn parts(&self) -> Result<(&naga::Module, &naga::valid::ModuleInfo), String> {
+        self.try_parsed().map(|(module, info)| (module, info))
     }
 
     #[cfg(test)]

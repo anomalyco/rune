@@ -36,7 +36,8 @@ pub(crate) struct ComputePipeline {
 
 #[derive(Debug)]
 pub(crate) struct ComputeRaw {
-    state: Obj<dyn MTLComputePipelineState>,
+    /// None for a pipeline that didn't build: it dispatches nothing.
+    state: Option<Obj<dyn MTLComputePipelineState>>,
     layout: Arc<LayoutRaw>,
     /// The storage bindings whose sizes the shader reads, in order.
     sized: Vec<naga::ResourceBinding>,
@@ -54,27 +55,32 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::ComputePipelineDescriptor<'_>
     };
     let stage = Stage { module: desc.module, entry: desc.entry_point, constants: desc.compilation_options.constants,
         kind: naga::ShaderStage::Compute };
-    let cs = compile(shared, &stage, &layout.stages[COMPUTE], false).unwrap_or_else(|e| panic!("{label}: {e}"));
-    let d = MTLComputePipelineDescriptor::new();
-    d.setComputeFunction(Some(&cs.function));
-    #[cfg(debug_assertions)]
-    if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
-    let make = |options| shared.device.newComputePipelineStateWithDescriptor_options_reflection_error(&d, options, None);
-    let state = match PipelineCache::of(desc.cache) {
-        Some(cache) => cache.make(|archives| d.setBinaryArchives(Some(archives)), |archive| archive.addComputePipelineFunctionsWithDescriptor_error(&d).is_ok(), make),
-        None => make(MTLPipelineOption::empty()),
-    }.unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
-    let [x, y, z] = cs.workgroup.map(|n| n as usize);
-    let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
-    ComputePipeline {
-        raw: Arc::new(ComputeRaw {
-            state,
-            layout,
-            sized: cs.sized,
-            workgroup_memory,
-            workgroup: MTLSize { width: x, height: y, depth: z },
-        }),
-    }
+    let built = (|| {
+        let cs = compile(shared, &stage, &layout.stages[COMPUTE], false)?;
+        let d = MTLComputePipelineDescriptor::new();
+        d.setComputeFunction(Some(&cs.function));
+        #[cfg(debug_assertions)]
+        if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
+        let make = |options| shared.device.newComputePipelineStateWithDescriptor_options_reflection_error(&d, options, None);
+        let state = match PipelineCache::of(desc.cache) {
+            Some(cache) => cache.make(|archives| d.setBinaryArchives(Some(archives)), |archive| archive.addComputePipelineFunctionsWithDescriptor_error(&d).is_ok(), make),
+            None => make(MTLPipelineOption::empty()),
+        }.map_err(|e| e.localizedDescription().to_string())?;
+        Ok::<_, String>((state, cs))
+    })();
+    // A pipeline that didn't build is reported as wgpu reports it and dispatches nothing.
+    let raw = match built {
+        Ok((state, cs)) => {
+            let [x, y, z] = cs.workgroup.map(|n| n as usize);
+            let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
+            ComputeRaw { state: Some(state), layout, sized: cs.sized, workgroup_memory, workgroup: MTLSize { width: x, height: y, depth: z } }
+        }
+        Err(error) => {
+            shared.report(wgpu::ErrorFilter::Validation, format!("{label}: {error}"));
+            ComputeRaw { state: None, layout, sized: Vec::new(), workgroup_memory: Box::default(), workgroup: MTLSize { width: 1, height: 1, depth: 1 } }
+        }
+    };
+    ComputePipeline { raw: Arc::new(raw) }
 }
 
 impl ComputePipelineInterface for ComputePipeline {
@@ -195,6 +201,7 @@ impl ComputePassInterface for MetalComputePass {
     fn set_pipeline(&mut self, pipeline: &DispatchComputePipeline) {
         let next = &pipeline.as_custom::<ComputePipeline>().expect("a Metal compute pipeline").raw;
         if self.pipeline.as_ref().is_some_and(|p| Arc::ptr_eq(p, next)) { return }
+        let Some(state) = &next.state else { self.pipeline = None; return };
         if self.pipeline.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.layout, &next.layout)) {
             self.dirty = self.bound();
             // Zeroed for a new layout, as wgpu-core does.
@@ -202,7 +209,7 @@ impl ComputePassInterface for MetalComputePass {
             self.immediates.resize(next.layout.immediates as usize, 0);
             self.immediates_dirty = true;
         }
-        self.raw.setComputePipelineState(&next.state);
+        self.raw.setComputePipelineState(state);
         for (index, &size) in next.workgroup_memory.iter().enumerate() {
             // SAFETY: `index` and 16-byte-aligned `size` match the `threadgroup` arguments Naga
             // emitted for this compute function.

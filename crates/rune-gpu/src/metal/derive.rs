@@ -24,8 +24,10 @@ pub(super) fn layout(label: &str, uses: &[Use<'_>]) -> PipelineLayout {
         let Some(ShaderModule::Naga(ir)) = point.module.as_custom::<ShaderModule>() else {
             super::unsupported!("{label}: a layout derived from a precompiled library's entry points")
         };
-        let (module, info) = ir.parts();
-        let index = entry(module, point).unwrap_or_else(|e| panic!("{label}: {e}"));
+        // A module that didn't parse, or lacks the entry point, adds nothing: making the
+        // pipeline reports it.
+        let Ok((module, info)) = ir.parts() else { continue };
+        let Ok(index) = entry(module, point) else { continue };
         let used = info.get_entry_point(index);
         let visibility = match point.kind {
             naga::ShaderStage::Vertex => wgpu::ShaderStages::VERTEX,
