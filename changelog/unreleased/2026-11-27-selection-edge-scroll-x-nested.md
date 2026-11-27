@@ -1,0 +1,1 @@
+- Selection horizontal edge-scrolling now continues past left or right edges when a `scroll_x` sits inside a vertical `scroll` (or uses `scroll_xy`) whose vertical axis has no remaining room in that direction; a vertical edge only takes precedence while it can still scroll.
