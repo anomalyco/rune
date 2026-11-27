@@ -8,7 +8,7 @@ use std::io::Cursor;
 #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 use image::{AnimationDecoder, ImageDecoder};
 
-use super::{Decoded, ImageError, Mip};
+use super::{Decoded, ImageError, ImageLimits, Mip};
 #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 use super::{icc, mip_chain};
 
@@ -50,7 +50,7 @@ impl Motion {
 /// Without the `png` feature on `wasm32`, animated formats decode their first frame in the
 /// browser (`createImageBitmap`).
 #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
-pub(super) fn decode(_bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
+pub(super) fn decode_with_limits(_bytes: &[u8], _limits: ImageLimits) -> Option<Result<Decoded, ImageError>> {
     None
 }
 
@@ -78,7 +78,7 @@ fn sniff(bytes: &[u8]) -> Option<Kind> {
 /// An animation of more than one frame, or `None` for a still (or a format that isn't
 /// animated), which decodes as any image does.
 #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
-pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
+pub(super) fn decode_with_limits(bytes: &[u8], limits: ImageLimits) -> Option<Result<Decoded, ImageError>> {
     let kind = sniff(bytes)?;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let cursor = Cursor::new(bytes);
@@ -113,9 +113,10 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
         }
     };
     let (w, h) = size;
-    if w == 0 || h == 0 || w > super::MAX_SIDE || h > super::MAX_SIDE { return Some(Err(ImageError("animation is too large".into()))); }
+    if !limits.fits(w, h, 4) { return Some(Err(ImageError("animation is too large".into()))); }
     let transform = icc_profile.as_deref().and_then(icc::Transform::to_srgb);
     let per_frame = w as usize * h as usize * 16 / 3;
+    let budget = BUDGET.min(usize::try_from(limits.max_alloc()).unwrap_or(BUDGET));
     let mut chains = Vec::new();
     let mut ends = Vec::new();
     let mut elapsed = 0.0;
@@ -126,7 +127,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
             Err(_) if !chains.is_empty() => break,
             Err(e) => return Some(Err(error(e))),
         };
-        if !chains.is_empty() && (chains.len() + 1) * per_frame > BUDGET { return Some(still(chains)); }
+        if !chains.is_empty() && (chains.len() + 1) * per_frame > budget { return Some(still(chains)); }
         let (numer, denom) = frame.delay().numer_denom_ms();
         let ms = f64::from(numer) / f64::from(denom.max(1));
         // Browsers show a frame of 10 ms or less for 100 ms: such files mean "as fast as you

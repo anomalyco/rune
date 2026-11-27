@@ -14,7 +14,7 @@ mod imp {
 
     use resvg::{tiny_skia, usvg};
 
-    use crate::{ImageError, MAX_ALLOC, MAX_SIDE, gzip, header};
+    use crate::{ImageError, ImageLimits, MAX_SIDE, gzip, header};
 
     const SVG_NS: &str = "http://www.w3.org/2000/svg";
     const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
@@ -433,9 +433,10 @@ mod imp {
         root_transform: tiny_skia::Transform,
         canvas_w: u32,
         canvas_h: u32,
+        limits: ImageLimits,
     ) -> Result<(), ImageError> {
-        let max_alloc = MAX_ALLOC as f64;
-        let max_side = f64::from(MAX_SIDE);
+        let max_alloc = limits.max_alloc() as f64;
+        let max_side = f64::from(limits.max_side());
         let mut nodes = 0usize;
         let mut bytes = f64::from(canvas_w) * f64::from(canvas_h) * 4.0;
         if !bytes.is_finite() || bytes > max_alloc {
@@ -607,6 +608,14 @@ mod imp {
     }
 
     pub(super) fn svg_rgba_with_size(bytes: &[u8], px: u32) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
+        svg_rgba_with_size_and_limits(bytes, px, ImageLimits::new())
+    }
+
+    pub(super) fn svg_rgba_with_size_and_limits(
+        bytes: &[u8],
+        px: u32,
+        limits: ImageLimits,
+    ) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
         let tree = svg_tree(bytes)?;
         let size = tree.size();
         let intrinsic = [size.width(), size.height()];
@@ -620,8 +629,11 @@ mod imp {
             ((size.width() * k).round() as u32).clamp(1, px),
             ((size.height() * k).round() as u32).clamp(1, px),
         );
+        if !limits.fits(w, h, 4) {
+            return Err(ImageError("SVG exceeds decoded pixel budget".into()));
+        }
         let t = tiny_skia::Transform::from_scale(k, k);
-        check_tree_budget(&tree, t, w, h)?;
+        check_tree_budget(&tree, t, w, h, limits)?;
         let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| ImageError("empty SVG".into()))?;
         resvg::render(&tree, t, &mut pixmap.as_mut());
         Ok((w, h, intrinsic, demultiply_rgba(&pixmap)))
@@ -647,7 +659,7 @@ mod imp {
             (px as f32 - size.width() * k) / 2.0,
             (px as f32 - size.height() * k) / 2.0,
         );
-        check_tree_budget(&tree, t, px, px)?;
+        check_tree_budget(&tree, t, px, px, ImageLimits::new())?;
         let mut pixmap = tiny_skia::Pixmap::new(px, px).ok_or_else(|| ImageError("empty SVG".into()))?;
         resvg::render(&tree, t, &mut pixmap.as_mut());
         Ok(demultiply_rgba(&pixmap))
@@ -677,6 +689,24 @@ pub(crate) fn svg_rgba_with_size(bytes: &[u8], px: u32) -> Result<(u32, u32, [f3
 
 #[cfg(not(feature = "svg"))]
 pub(crate) fn svg_rgba_with_size(_: &[u8], _: u32) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
+    Err(ImageError("SVG images need rune's `svg` feature".into()))
+}
+
+#[cfg(feature = "svg")]
+pub(crate) fn svg_rgba_with_size_and_limits(
+    bytes: &[u8],
+    px: u32,
+    limits: crate::ImageLimits,
+) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
+    imp::svg_rgba_with_size_and_limits(bytes, px, limits)
+}
+
+#[cfg(not(feature = "svg"))]
+pub(crate) fn svg_rgba_with_size_and_limits(
+    _: &[u8],
+    _: u32,
+    _: crate::ImageLimits,
+) -> Result<(u32, u32, [f32; 2], Vec<u8>), ImageError> {
     Err(ImageError("SVG images need rune's `svg` feature".into()))
 }
 

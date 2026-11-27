@@ -734,3 +734,28 @@ fn real_encoded_images_in_every_raster_format_pass_header_check() {
     rgb.write_to(&mut jpg, image::ImageFormat::Jpeg).unwrap();
     assert_eq!(check(&jpg.into_inner()), Ok(()), "Jpeg");
 }
+
+#[test]
+fn header_check_with_limits_enforces_caller_pixel_budget_across_formats() {
+    use super::check_with_limits;
+    use crate::ImageLimits;
+
+    let tight_side = ImageLimits::new().with_max_side(15);
+    let tight_px = ImageLimits::new().with_max_pixels(16 * 16 - 1);
+    let exact = ImageLimits::new().with_max_side(16).with_max_pixels(16 * 16).with_max_alloc(16 * 16 * 4);
+    let small_av1 = av1_reduced_seq_hdr(16, 16, false);
+
+    let cases: &[(&str, Vec<u8>)] = &[
+        ("PNG", png_header(16, 16)),
+        ("JPEG", jpeg_header(0xc0, 16, 16)),
+        ("GIF", gif_header(b"GIF89a", 16, 16)),
+        ("WebP", riff_webp(&[(b"VP8L", &webp_vp8l_payload(16, 16))])),
+        ("AVIF still", minimal_avif(b"avif", (16, 16), &small_av1)),
+        ("JPEG XL", jxl_codestream(16, 16)),
+    ];
+    for (name, bytes) in cases {
+        assert_eq!(check_with_limits(bytes, exact), Ok(()), "{name} should pass exact budget");
+        assert!(check_with_limits(bytes, tight_side).is_err(), "{name} should fail max_side");
+        assert!(check_with_limits(bytes, tight_px).is_err(), "{name} should fail max_pixels");
+    }
+}

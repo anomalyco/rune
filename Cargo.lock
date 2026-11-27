@@ -420,23 +420,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "avif-decode"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1eee11893966d77d3e18c66fdcfb1c30e2d8df050346609c775ce8eec3390344"
-dependencies = [
- "avif-parse",
- "bytemuck",
- "imgref",
- "lodepng",
- "log",
- "quick-error 2.0.1",
- "rav1d",
- "rgb",
- "yuv",
-]
-
-[[package]]
 name = "avif-parse"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1978,12 +1961,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
 
 [[package]]
-name = "imgref"
-version = "1.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
-
-[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2318,18 +2295,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
-]
-
-[[package]]
-name = "lodepng"
-version = "3.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe7982db11054edc023a1b424dddcc65be18f71fa46ec6bde2efcfc1fb6b22da"
-dependencies = [
- "crc32fast",
- "flate2",
- "libc",
- "rgb",
 ]
 
 [[package]]
@@ -4003,19 +3968,22 @@ dependencies = [
 name = "rune-image"
 version = "0.0.1"
 dependencies = [
- "avif-decode",
+ "avif-parse",
  "blake3",
  "image",
  "js-sys",
+ "libc",
  "moxcms",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
  "png 0.18.1",
+ "rav1d",
  "resvg",
  "rune-core",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "windows-sys 0.61.2",
+ "yuv",
 ]
 
 [[package]]
