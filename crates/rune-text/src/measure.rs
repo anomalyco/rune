@@ -286,7 +286,7 @@ pub struct FamiliesGuard {
 impl Drop for FamiliesGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
-        OVERRIDE.with_borrow_mut(|o| *o = previous);
+        let _ = OVERRIDE.try_with(|o| *o.borrow_mut() = previous);
     }
 }
 
@@ -348,7 +348,7 @@ pub struct FontsGuard {
 impl Drop for FontsGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
-        OVERRIDE.with_borrow_mut(|o| *o = previous);
+        let _ = OVERRIDE.try_with(|o| *o.borrow_mut() = previous);
     }
 }
 
@@ -1015,5 +1015,29 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn dropping_override_guards_at_thread_exit_after_override_destroyed_does_not_abort() {
+        thread_local! {
+            static HELD_FAMILIES: RefCell<Option<FamiliesGuard>> = const { RefCell::new(None) };
+            static HELD_FONTS: RefCell<Option<FontsGuard>> = const { RefCell::new(None) };
+        }
+
+        std::thread::spawn(|| {
+            HELD_FAMILIES.with(|slot| assert!(slot.borrow().is_none()));
+            let guard = with_families("Inter", "ui-monospace");
+            HELD_FAMILIES.with(|slot| *slot.borrow_mut() = Some(guard));
+        })
+        .join()
+        .expect("thread with TLS FamiliesGuard exited cleanly");
+
+        std::thread::spawn(|| {
+            HELD_FONTS.with(|slot| assert!(slot.borrow().is_none()));
+            let guard = with_fonts(&[], ("Inter", "ui-monospace"));
+            HELD_FONTS.with(|slot| *slot.borrow_mut() = Some(guard));
+        })
+        .join()
+        .expect("thread with TLS FontsGuard exited cleanly");
     }
 }

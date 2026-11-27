@@ -311,8 +311,12 @@ impl Bridge {
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
-        if let Some(entry) = WINDOWS.with(|w| w.borrow_mut().remove(&self.source)) { LOST.with(|lost| lost.borrow_mut().remove(&entry.panel)); }
-        if let Some(view) = self.view { VIEWS.with(|v| v.borrow_mut().remove(&view)); }
+        if let Some(entry) = WINDOWS.try_with(|w| w.borrow_mut().remove(&self.source)).ok().flatten() {
+            let _ = LOST.try_with(|lost| lost.borrow_mut().remove(&entry.panel));
+        }
+        if let Some(view) = self.view {
+            let _ = VIEWS.try_with(|v| v.borrow_mut().remove(&view));
+        }
     }
 }
 

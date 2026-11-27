@@ -378,3 +378,18 @@ fn real_libwayland_foreign_queue_dispatches_wl_callback_through_watch_display_qu
     Ok(())
 }
 
+#[test]
+fn dropping_watch_at_thread_exit_after_registry_destroyed_does_not_abort() {
+    thread_local! {
+        static HELD: RefCell<Option<DisplayQueueWatch>> = const { RefCell::new(None) };
+    }
+
+    let handle = std::thread::spawn(|| {
+        // Initialize HELD before REGISTRY so Rust destroys REGISTRY first at thread exit.
+        HELD.with(|slot| assert!(slot.borrow().is_none()));
+        let watch = watch_display_queue(|| false, || {});
+        HELD.with(|slot| *slot.borrow_mut() = Some(watch));
+    });
+    handle.join().expect("thread with TLS DisplayQueueWatch exited cleanly");
+}
+
