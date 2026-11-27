@@ -197,7 +197,13 @@ impl Host {
         self.native_handle.native.number.store(native_window_number(&window).unwrap_or(0), Ordering::Release);
         self.win = Some(Win {
             a11y,
-            native: Native { mode: SurfaceMode::Cpu { cpu, job }, ..Default::default() },
+            native: Native {
+                mode: SurfaceMode::Cpu { cpu, job },
+                wayland_present: (self.wayland && self.frame_presented.wanted())
+                    .then(|| crate::platform::wayland::presentation::SurfacePresentation::for_window(&window))
+                    .flatten(),
+                ..Default::default()
+            },
             first_frame: FirstFrame::opened(crate::time::now()),
             surface: None,
             config,

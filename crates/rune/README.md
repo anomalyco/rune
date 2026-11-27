@@ -1551,9 +1551,13 @@ For an app's own perf log, with nothing changed about how its windows draw:
   `p.presented_at() == None`). `p.seq()` matches `FrameEncoded::seq()` for that `Drawn` frame (and
   `on_frame_encoded` always runs before `on_frame_presented` for the same `seq`), so apps can measure real
   input-to-photon latency and detect missed vsyncs against `FrameEncoded::presents_at()`. Called on platforms with
-  reliable actual presentation timestamps (macOS Metal via `MTLDrawable::addPresentedHandler`); Windows, Linux,
-  headless runs, overlays and the web never call it. Without it, no layer hook is attached; once in-flight drawables
-  land, the wake watch clears automatically so an idle window never wakes or draws.
+  reliable actual presentation timestamps: macOS Metal (`MTLDrawable::addPresentedHandler`), Windows DX12/DXGI
+  flip-model swap chains (`IDXGISwapChain::GetFrameStatistics` / `GetFrameStatisticsMedia`, reporting `None` if an
+  older frame was skipped or overwritten before polling), and Linux Wayland compositors advertising `wp_presentation`
+  (`wp_presentation_feedback.presented` / `discarded`). Linux X11, Wayland without `wp_presentation`, Windows
+  CPU-first / bitblt / unsupported DXGI, web (browsers do not expose canvas scanout timestamps), overlays, and
+  headless runs never call it instead of faking submit or target times. Without it, no platform hook is attached;
+  once in-flight frames land (or settle), watches and poll timers clear automatically so an idle window never wakes.
 - **`App::on_frame_drawn(|rt: &Runtime<S>| ..)`** runs on the UI thread after each `Drawn` frame (on desktop
   windows and in the web runner, and not on unchanged or skipped frames) with the runtime as it presented that frame,
   so an app can watch its own motion, query the focused presented element without building the tree

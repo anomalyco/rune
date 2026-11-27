@@ -87,6 +87,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) drag_serial: Option<crate::platform::wayland::serial::wire::SerialGuard>,
     /// Per-surface Wayland behind-window blur controller, dropped strictly before `wl_surface`.
     pub(in crate::window) wayland_backdrop: Option<crate::platform::wayland::backdrop::SurfaceBlur>,
+    /// Per-surface Wayland `wp_presentation` feedback handle, dropped strictly before `wl_surface`.
+    pub(in crate::window) wayland_present: Option<crate::platform::wayland::presentation::SurfacePresentation>,
 }
 
 #[cfg(target_os = "windows")]
@@ -105,6 +107,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) look: crate::window::win32::look::Look,
     /// Whether its swap chain can take the next frame (`slot`).
     pub(in crate::window) slot: crate::window::win32::slot::Slot,
+    /// DXGI swap-chain presentation timestamp tracker for `App::on_frame_presented`.
+    pub(in crate::window) dxgi_present: crate::window::win32::present_time::DxgiPresentTracker,
     /// Paces sub-frame `poll` wakes onto the display's vblank grid (`poll_pace`).
     pub(in crate::window) poll_pace: crate::window::win32::poll_pace::PollPace,
     /// What its last frames changed, so the next redraws only that (`damage`).

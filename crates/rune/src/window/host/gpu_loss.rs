@@ -275,8 +275,7 @@ impl Host {
             }
             drop(w.surface.take());
         }
-        #[cfg(target_os = "macos")]
-        self.frame_presented.reset();
+        self.reset_frame_presented();
         self.gpu = None;
         self.app.release_compositor_gpu();
         #[cfg(any(test, target_os = "macos"))]
@@ -478,7 +477,7 @@ impl Host {
         w.alpha = alpha;
         w.backoff_step(BackoffEvent::Lapsed);
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.damage.reset(); w.native.mode.rebind(); }
+        { w.native.slot.reset(); w.native.dxgi_present.reset(); w.native.damage.reset(); w.native.mode.rebind(); }
         #[cfg(target_os = "macos")]
         { w.native.present = present; w.native.prime.stop(); }
         self.sync_window_backdrop(true);

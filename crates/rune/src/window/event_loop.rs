@@ -221,6 +221,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     {
         crate::platform::wayland::drop::shutdown();
         crate::platform::wayland::backdrop::shutdown();
+        crate::platform::wayland::presentation::shutdown();
     }
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();

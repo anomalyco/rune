@@ -22,7 +22,7 @@ cargo run -p motion-bento --profile perf -- --seed 7 --duration 30 --intensity 1
 | `--variant NAME` | `default` | Spring tuning: `default`, `bouncy` or `stiff`. |
 | `--metrics PATH` | | Write the frame meter's JSON when the run ends (a headless run: at `--duration` + 1 s). |
 | `--hud` | off | Show the frame meter from the start. `H` toggles it. |
-| `--present-times` | off | Opt into `App::on_frame_presented` to show actual macOS Metal encode-to-present latency and skipped-drawable counts in `--hud` and `--metrics`. |
+| `--present-times` | off | Opt into `App::on_frame_presented` to show actual encode-to-present latency and skipped-frame counts in `--hud` and `--metrics` (macOS Metal, Windows DX12/DXGI, and Linux Wayland `wp_presentation`). |
 | `--stay` | off | Keep the window open after the schedule ends. |
 | `--emit-script PATH` | | Write the schedule as a Rune headless script and exit. |
 | `--load N` | | Stress mode: a wall of N live controls instead of the bento. |

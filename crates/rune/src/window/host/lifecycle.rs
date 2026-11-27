@@ -840,11 +840,10 @@ impl Host {
         self.app.set_live_visible(false);
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
-        #[cfg(target_os = "macos")]
         if self.keep_running {
-            self.frame_presented.drain();
+            self.drain_frame_presented();
         } else {
-            self.frame_presented.reset();
+            self.reset_frame_presented();
         }
         if let Some(after) = self.app.rt_mut().shell_request.take().and_then(Shell::after) {
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
@@ -895,6 +894,7 @@ impl Host {
             self.release();
         } else if is_wayland(event_loop) {
             // Wayland has no hidden toplevel: unmap by destroying, recreate on open.
+            self.reset_frame_presented();
             self.win = None;
             self.native_handle.native.ready.store(false, Ordering::Release);
             self.native_handle.native.number.store(0, Ordering::Release);
@@ -914,6 +914,7 @@ impl Host {
             w.presented = None;
             // Its hidden frame delivers the focus loss.
             if launcher { w.request_redraw(); }
+            self.reset_frame_presented();
         }
     }
 
@@ -976,11 +977,10 @@ impl Host {
             let native = &mut w.native;
             native.materials.teardown(native.mode.handover_mut());
         }
+        self.reset_frame_presented();
         self.win = None;
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         self.app.rt_mut().paint.set_windows_acrylic_materials(false);
-        #[cfg(target_os = "macos")]
-        self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);
         self.native_handle.native.number.store(0, Ordering::Release);
         self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| g));

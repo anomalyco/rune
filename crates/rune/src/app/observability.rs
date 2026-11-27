@@ -29,12 +29,14 @@ impl<S: 'static> App<S> {
     /// Pair them to measure real input-to-photon latency or detect missed vsyncs against
     /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at).
     ///
-    /// Only platforms with reliable actual presentation timestamps call it (currently macOS
-    /// Metal, via `MTLDrawable::addPresentedHandler`). Windows, Linux, the web, overlays, and
-    /// headless runs never call it, matching
-    /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at). Without it, no layer
-    /// hook is attached and each frame pays only an `Option` check; once in-flight drawables
-    /// finish presenting, the watch clears automatically so an idle window never wakes or draws.
+    /// Reports real presentation timestamps on macOS Metal (`MTLDrawable::addPresentedHandler`),
+    /// Windows DX12/DXGI flip-model swap chains (`IDXGISwapChain::GetFrameStatistics` /
+    /// `GetFrameStatisticsMedia`), and Linux Wayland compositors advertising `wp_presentation`.
+    /// Platforms without a reliable scanout clock (Linux X11, Wayland without `wp_presentation`,
+    /// Windows CPU-first / bitblt / unsupported DXGI, web, overlays, and headless runs) never
+    /// call it instead of faking submit or target times. Without it, no platform hook is
+    /// attached and each frame pays only an `Option` check; once in-flight frames land or
+    /// settle, watches and poll timers clear automatically so an idle window never wakes.
     ///
     /// ```no_run
     /// use rune::{App, AppSpec, el};

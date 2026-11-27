@@ -393,6 +393,7 @@ pub(super) fn submit_and_present_window(
     looped: Option<&Vec<u32>>,
     profile: &mut FrameProfile,
     encoded: &mut Option<Instant>,
+    drawable: &mut Option<u64>,
     info: &StepInfo,
 ) -> Instant {
     // macOS: the first frame of a window already on screen is taken as finished when it is
@@ -484,6 +485,15 @@ pub(super) fn submit_and_present_window(
             false,
         );
     }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    if host.wayland
+        && host.frame_presented.wanted()
+        && let Some(wp) = l.native.wayland_present.as_mut()
+    {
+        *drawable = wp.request_feedback();
+    }
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+    let _ = drawable;
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     let materials_ok = {
         let rt = host.app.rt();
@@ -512,6 +522,14 @@ pub(super) fn submit_and_present_window(
     crate::window::linux::handover::handed(l, gpu, readback);
     #[cfg(target_os = "windows")]
     l.native.slot.presented();
+    #[cfg(target_os = "windows")]
+    if host.frame_presented.wanted()
+        && !gpu.is_lost()
+        && let Some(surface) = l.surface.as_ref()
+    {
+        let hz = super::draw::display_hz(l);
+        *drawable = l.native.dxgi_present.record_present(surface, crate::time::now(), hz);
+    }
     // A swap chain made again on a handed-over window's visual takes over now (`cpu_frame`).
     #[cfg(target_os = "windows")]
     if matches!(l.native.mode, handover::SurfaceMode::Rebinding { .. }) {
