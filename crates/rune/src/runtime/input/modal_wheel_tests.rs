@@ -312,9 +312,9 @@ fn zero_delta_and_momentum_wheels_do_not_dismiss_modal() {
         assert!(rt.state.open && rt.state.dismisses == 0, "zero-delta wheel ({phase:?}) must not dismiss");
     }
 
-    // 2. Explicit WheelEvent { momentum: true, .. } never dismisses.
+    // 2. Explicit WheelEvent::momentum(true) never dismisses.
     rt.frame(0.2);
-    rt.wheel_event(WheelEvent { momentum: true, ..WheelEvent::new(0.0, -40.0).at(50.0, 50.0) });
+    rt.wheel_event(WheelEvent::new(0.0, -40.0).at(50.0, 50.0).momentum(true));
     rt.frame(0.016);
     assert!(rt.state.open && rt.state.dismisses == 0, "explicit momentum wheel must not dismiss");
     assert_eq!(scroll_offset(&rt, "bg").0, 0.0);

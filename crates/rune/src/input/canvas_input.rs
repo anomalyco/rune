@@ -52,6 +52,17 @@ impl WheelEvent {
     pub fn at(mut self, x: f32, y: f32) -> Self { self.x = x; self.y = y; self }
     pub fn mods(mut self, mods: Mods) -> Self { self.mods = mods; self }
     pub fn phase(mut self, phase: GesturePhase) -> Self { self.phase = phase; self }
+    /// Marks this event as post-lift coasting momentum (`WheelEvent::momentum`), such as macOS
+    /// trackpad inertia.
+    ///
+    /// ```
+    /// use rune::{GesturePhase, WheelEvent};
+    ///
+    /// let ev = WheelEvent::new(0.0, -4.0).phase(GesturePhase::Moved).momentum(true);
+    /// assert!(ev.momentum);
+    /// assert!(!WheelEvent::new(0.0, -4.0).momentum);
+    /// ```
+    pub fn momentum(mut self, momentum: bool) -> Self { self.momentum = momentum; self }
     pub fn precise(mut self, precise: bool) -> Self { self.precise = precise; self }
     pub fn notch(mut self, notch: bool) -> Self { self.notch = notch; self }
     /// Marks this event as a two-finger touchscreen pan delta (`WheelEvent::touch`).
@@ -90,6 +101,17 @@ impl MagnifyEvent {
     pub fn new(delta: f32) -> Self { Self { delta, ..Self::default() } }
     pub fn at(mut self, x: f32, y: f32) -> Self { self.x = x; self.y = y; self }
     pub fn phase(mut self, phase: GesturePhase) -> Self { self.phase = phase; self }
+    /// Marks this event as coming from Ctrl + wheel (`MagnifyEvent::wheel`) rather than a
+    /// trackpad or touchscreen pinch gesture.
+    ///
+    /// ```
+    /// use rune::MagnifyEvent;
+    ///
+    /// let ev = MagnifyEvent::new(0.2).wheel(true);
+    /// assert!(ev.wheel);
+    /// assert!(!MagnifyEvent::new(0.2).wheel);
+    /// ```
+    pub fn wheel(mut self, wheel: bool) -> Self { self.wheel = wheel; self }
 }
 
 /// A two-finger rotation an [`El::on_rotate`] handler sees.
@@ -409,3 +431,7 @@ impl Tx {
     /// Other handlers see `Primary`.
     pub fn button(&self) -> PointerButton { self.button }
 }
+
+#[cfg(test)]
+#[path = "canvas_input_tests.rs"]
+mod tests;

@@ -1,0 +1,1 @@
+- Input: added `WheelEvent::momentum(bool)` and `MagnifyEvent::wheel(bool)` builders so external callers and tests can construct `#[non_exhaustive]` momentum scroll and Ctrl + wheel magnify events without mutating fields after construction.

@@ -771,14 +771,12 @@ fn on_wheel_any_declines_to_native_scroll_and_momentum_or_consumes_and_bubbles()
     rt.frame(1.0 / 60.0);
     rt.wheel_event(WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).precise(true));
     rt.frame(1.0 / 60.0);
-    rt.wheel_event(WheelEvent {
-        momentum: true,
-        ..WheelEvent::new(-20.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Began).precise(true)
-    });
-    rt.wheel_event(WheelEvent {
-        momentum: true,
-        ..WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).precise(true)
-    });
+    rt.wheel_event(
+        WheelEvent::new(-20.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Began).momentum(true).precise(true),
+    );
+    rt.wheel_event(
+        WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).momentum(true).precise(true),
+    );
     rt.frame(1.0 / 60.0);
 
     assert_eq!(inner_log.borrow().len(), 1, "once scroll owns the phased gesture, native scroll + momentum run");
