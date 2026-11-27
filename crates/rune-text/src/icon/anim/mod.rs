@@ -18,10 +18,11 @@ use swash::zeno::{Cap, Fill, Join, Point, Transform};
 
 use super::area;
 use super::convex;
+use super::dash::{self, DashArray, MAX_DASH_VAL, StrokeDashSpec};
 use super::{Facing, Icon, then, union};
 use crate::atlas::{ATLAS_SIZE, Atlas, AtlasGlyph, GlyphQuad, InPlaceAtlas};
 use parse::{
-    AttrKind, BaseGeom, CalcMode, CompiledAnim, KeyVal, MAX_COORD, MAX_LAYERS, MAX_SCALE, MAX_SKEW_DEG, MAX_STROKE_WIDTH, Op, PaintProps, Track, TransformKind, rotate_transform,
+    AttrKind, BaseGeom, CalcMode, CompiledAnim, KeyVal, MAX_COORD, MAX_LAYERS, MAX_SCALE, MAX_SKEW_DEG, MAX_STROKE_WIDTH, Op, PaintProps, Track, TrackValues, TransformKind, rotate_transform,
 };
 pub(crate) use parse::{CompileOutcome, compile, may_be_animated};
 
@@ -521,7 +522,9 @@ fn make_quad(a: AtlasGlyph, origin: [f32; 2], px: u32) -> GlyphQuad {
 #[derive(Default)]
 struct NodeOverrides {
     /// Numeric attribute overrides: `(AttrKind, value, additive_sum)`.
-    nums: [Option<(f32, bool)>; 17],
+    nums: [Option<(f32, bool)>; 18],
+    /// Animated `stroke-dasharray` override: `(DashArray, additive_sum)`.
+    dash_array: Option<(DashArray, bool)>,
     /// Transform tracks applied in document order: `(Transform, additive_sum)`.
     transforms: Vec<(Transform, bool)>,
     has_any: bool,
@@ -530,7 +533,8 @@ struct NodeOverrides {
 impl NodeOverrides {
     fn clear(&mut self) {
         if self.has_any {
-            self.nums = [None; 17];
+            self.nums = [None; 18];
+            self.dash_array = None;
             self.transforms.clear();
             self.has_any = false;
         }
@@ -545,10 +549,28 @@ impl NodeOverrides {
         };
     }
 
+    fn apply_dash(&mut self, val: DashArray, sum: bool) {
+        self.has_any = true;
+        self.dash_array = match (self.dash_array, sum) {
+            (Some((prev, prev_sum)), true) => {
+                Some((dash::add_dash_array(prev, val, !prev_sum).unwrap_or(prev), prev_sum))
+            }
+            _ => Some((val, sum)),
+        };
+    }
+
     fn resolve(&self, attr: AttrKind, base: f32) -> f32 {
         let Some(slot) = attr_slot(attr) else { return base };
         match self.nums[slot] {
             Some((v, true)) => base + v,
+            Some((v, false)) => v,
+            None => base,
+        }
+    }
+
+    fn resolve_dash(&self, base: DashArray) -> DashArray {
+        match self.dash_array {
+            Some((v, true)) => dash::add_dash_array(base, v, true).unwrap_or(base),
             Some((v, false)) => v,
             None => base,
         }
@@ -597,11 +619,24 @@ fn attr_slot(attr: AttrKind) -> Option<usize> {
         AttrKind::FillOpacity => 14,
         AttrKind::StrokeOpacity => 15,
         AttrKind::StrokeWidth => 16,
-        AttrKind::Transform(_) => return None,
+        AttrKind::StrokeDashoffset => 17,
+        AttrKind::StrokeDasharray | AttrKind::Transform(_) => return None,
     })
 }
 
 impl CompiledAnim {
+    #[cfg(test)]
+    pub(crate) fn render_test(&self, px: u32, t: f64) -> (Vec<u8>, AnimState) {
+        let len = (px as usize) * (px as usize);
+        let mut acc = vec![0u8; len];
+        let mut buf = vec![0u8; len];
+        let mut layers = Vec::new();
+        let mut overrides = Vec::new();
+        let mut scopes = Vec::with_capacity(parse::MAX_DEPTH);
+        let st = self.render_into(px, px as f32, Point::new(0.0, 0.0), t, t, &mut acc, &mut buf, &mut layers, &mut overrides, &mut scopes);
+        (acc, st)
+    }
+
     fn state_at(&self, sample_t: f64, runtime_t: f64) -> AnimState {
         let mut state = AnimState::Finished;
         for tr in &self.tracks {
@@ -639,15 +674,19 @@ impl CompiledAnim {
         for tr in &self.tracks {
             let (val, st) = tr.sample(sample_t, runtime_t);
             combined_state = merge_state(combined_state, st);
-            if let Some(kv) = val
+            if let Some(sampled) = val
                 && let Some(ov) = overrides.get_mut(tr.target as usize)
             {
-                match tr.attr {
-                    AttrKind::Transform(tk) => {
+                match (tr.attr, sampled) {
+                    (AttrKind::Transform(tk), SampledVal::Scalar(kv)) => {
                         ov.has_any = true;
                         ov.transforms.push((key_val_to_transform(tk, kv), tr.additive_sum));
                     }
-                    other => ov.apply_num(other, kv.v[0], tr.additive_sum),
+                    (AttrKind::StrokeDasharray, SampledVal::Dash(da)) => {
+                        ov.apply_dash(da, tr.additive_sum);
+                    }
+                    (other, SampledVal::Scalar(kv)) => ov.apply_num(other, kv.v[0], tr.additive_sum),
+                    _ => {}
                 }
             }
         }
@@ -685,7 +724,7 @@ impl CompiledAnim {
                         union(layers.last_mut().map_or(acc, |l| &mut l.0), &top, alpha);
                     }
                 }
-                Op::DrawShape { node_id, geom, transform, opacity, display_none, paint } => {
+                Op::DrawShape { node_id, geom, transform, opacity, display_none, paint, path_length } => {
                     let up_ctm = scope_stack.last().map_or(root_ctm, |sc| sc.ctm);
                     let up_paints = scope_stack.last().is_none_or(|sc| sc.paints);
                     if !up_paints || *display_none {
@@ -704,7 +743,7 @@ impl CompiledAnim {
                     let up_paint = scope_stack.last().map_or(root_paint, |sc| sc.paint);
                     let resolved = up_paint.inherit(*paint, ov);
                     let into = layers.last_mut().map_or(&mut *acc, |l| &mut l.0);
-                    draw_compiled_shape(geom, ov, ctm, origin, px, whole, resolved, buf, into);
+                    draw_compiled_shape(geom, *path_length, ov, ctm, origin, px, whole, resolved, buf, into);
                 }
             }
         }
@@ -735,6 +774,8 @@ struct ResolvedPaint {
     miter_limit: f32,
     fill_opacity: f32,
     stroke_opacity: f32,
+    stroke_dasharray: DashArray,
+    stroke_dashoffset: f32,
 }
 
 impl Default for ResolvedPaint {
@@ -749,6 +790,8 @@ impl Default for ResolvedPaint {
             miter_limit: 4.0,
             fill_opacity: 1.0,
             stroke_opacity: 1.0,
+            stroke_dasharray: DashArray::NONE,
+            stroke_dashoffset: 0.0,
         }
     }
 }
@@ -764,6 +807,10 @@ impl ResolvedPaint {
         let stroke_opacity = ov
             .resolve(AttrKind::StrokeOpacity, props.stroke_opacity.unwrap_or(self.stroke_opacity))
             .clamp(0.0, 1.0);
+        let stroke_dasharray = ov.resolve_dash(props.stroke_dasharray.unwrap_or(self.stroke_dasharray));
+        let stroke_dashoffset = ov
+            .resolve(AttrKind::StrokeDashoffset, props.stroke_dashoffset.unwrap_or(self.stroke_dashoffset))
+            .clamp(-MAX_DASH_VAL, MAX_DASH_VAL);
         Self {
             fill: props.fill.or(self.fill),
             stroke: props.stroke.unwrap_or(self.stroke),
@@ -774,6 +821,8 @@ impl ResolvedPaint {
             miter_limit: props.miter_limit.unwrap_or(self.miter_limit),
             fill_opacity,
             stroke_opacity,
+            stroke_dasharray,
+            stroke_dashoffset,
         }
     }
 }
@@ -781,6 +830,7 @@ impl ResolvedPaint {
 #[allow(clippy::too_many_arguments)]
 fn draw_compiled_shape(
     geom: &BaseGeom,
+    path_length: Option<f32>,
     ov: &NodeOverrides,
     ctm: Transform,
     origin: Point,
@@ -862,7 +912,12 @@ fn draw_compiled_shape(
         super::paint_shape(&shape, ctm, origin, px, None, p.fill_rule, whole * p.fill_opacity, buf, into);
     }
     if p.stroke && p.stroke_width > 0.0 {
-        let pen = area::Pen { width: p.stroke_width, cap: p.cap, join: p.join, miter_limit: p.miter_limit };
+        let dash = (!p.stroke_dasharray.is_none()).then_some(StrokeDashSpec {
+            array: p.stroke_dasharray,
+            offset: p.stroke_dashoffset,
+            path_length,
+        });
+        let pen = area::Pen { width: p.stroke_width, cap: p.cap, join: p.join, miter_limit: p.miter_limit, dash };
         super::paint_shape(&shape, ctm, origin, px, Some(&pen), Fill::NonZero, whole * p.stroke_opacity, buf, into);
     }
 }
@@ -878,10 +933,44 @@ fn merge_state(a: AnimState, b: AnimState) -> AnimState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SampledVal {
+    Scalar(KeyVal),
+    Dash(DashArray),
+}
+
 impl Track {
+    fn first_val(&self) -> Option<SampledVal> {
+        match &self.values {
+            TrackValues::Scalar(v) => v.first().copied().map(SampledVal::Scalar),
+            TrackValues::Dash(v) => v.first().copied().map(SampledVal::Dash),
+        }
+    }
+
+    fn val_at(&self, i: usize) -> SampledVal {
+        match &self.values {
+            TrackValues::Scalar(v) => SampledVal::Scalar(v[i]),
+            TrackValues::Dash(v) => SampledVal::Dash(v[i]),
+        }
+    }
+
+    fn seg_is_flat(&self, seg: usize) -> bool {
+        match &self.values {
+            TrackValues::Scalar(v) => key_val_eq(v[seg], v[seg + 1]),
+            TrackValues::Dash(v) => dash::dash_eq(v[seg], v[seg + 1]),
+        }
+    }
+
+    fn lerp_seg(&self, seg: usize, frac: f32) -> SampledVal {
+        match &self.values {
+            TrackValues::Scalar(v) => SampledVal::Scalar(lerp_key_val(v[seg], v[seg + 1], frac)),
+            TrackValues::Dash(v) => SampledVal::Dash(dash::lerp_dash_array(v[seg], v[seg + 1], frac, self.additive_sum)),
+        }
+    }
+
     /// Evaluates the track at `sample_t` (with `runtime_t` used to express `WaitingUntil` in the
     /// runtime clock domain).
-    fn sample(&self, sample_t: f64, runtime_t: f64) -> (Option<KeyVal>, AnimState) {
+    fn sample(&self, sample_t: f64, runtime_t: f64) -> (Option<SampledVal>, AnimState) {
         let begin = self.begin as f64;
         if sample_t < begin {
             let delta = (begin - sample_t).max(0.0);
@@ -891,13 +980,13 @@ impl Track {
 
         if self.is_set {
             return match self.dur {
-                None => (self.values.first().copied(), AnimState::Finished),
+                None => (self.first_val(), AnimState::Finished),
                 Some(d) => {
                     let dur = d as f64;
                     if elapsed < dur {
-                        (self.values.first().copied(), AnimState::WaitingUntil(runtime_t + (dur - elapsed)))
+                        (self.first_val(), AnimState::WaitingUntil(runtime_t + (dur - elapsed)))
                     } else if self.freeze {
-                        (self.values.first().copied(), AnimState::Finished)
+                        (self.first_val(), AnimState::Finished)
                     } else {
                         (None, AnimState::Finished)
                     }
@@ -927,14 +1016,14 @@ impl Track {
         (Some(val), seg_state)
     }
 
-    fn eval_u(&self, u: f32) -> KeyVal {
+    fn eval_u(&self, u: f32) -> SampledVal {
         let n = self.values.len();
         if n <= 1 {
-            return self.values[0];
+            return self.val_at(0);
         }
         let seg = self.segment_for(u);
         if self.calc_mode == CalcMode::Discrete {
-            return self.values[seg];
+            return self.val_at(seg);
         }
         let t0 = self.key_times[seg];
         let t1 = self.key_times[seg + 1];
@@ -948,31 +1037,29 @@ impl Track {
             CalcMode::Linear | CalcMode::Paced => raw,
             CalcMode::Discrete => 0.0,
         };
-        lerp_key_val(self.values[seg], self.values[seg + 1], frac)
+        self.lerp_seg(seg, frac)
     }
 
-    fn eval_u_with_state(&self, u: f32, cycle_start: f64, dur: f64, sample_t: f64, runtime_t: f64) -> (KeyVal, AnimState) {
+    fn eval_u_with_state(&self, u: f32, cycle_start: f64, dur: f64, sample_t: f64, runtime_t: f64) -> (SampledVal, AnimState) {
         let n = self.values.len();
         if n <= 1 {
-            return (self.values[0], AnimState::Finished);
+            return (self.val_at(0), AnimState::Finished);
         }
         let seg = self.segment_for(u);
         if self.calc_mode == CalcMode::Discrete {
             let next_u = if seg + 1 < n { self.key_times[seg + 1] as f64 } else { 1.0 };
             let next_sample = cycle_start + next_u * dur;
             let wake = self.clamp_wake(next_sample, sample_t, runtime_t);
-            return (self.values[seg], wake);
+            return (self.val_at(seg), wake);
         }
-        let a = self.values[seg];
-        let b = self.values[seg + 1];
         let t0 = self.key_times[seg];
         let t1 = self.key_times[seg + 1];
         let span = t1 - t0;
-        let flat = key_val_eq(a, b) || span <= 1e-6;
+        let flat = self.seg_is_flat(seg) || span <= 1e-6;
         if flat {
             let next_sample = cycle_start + (t1 as f64) * dur;
             let wake = self.clamp_wake(next_sample, sample_t, runtime_t);
-            return (a, wake);
+            return (self.val_at(seg), wake);
         }
         let raw = ((u - t0) / span).clamp(0.0, 1.0);
         let frac = match self.calc_mode {
@@ -983,7 +1070,7 @@ impl Track {
             CalcMode::Linear | CalcMode::Paced => raw,
             CalcMode::Discrete => 0.0,
         };
-        (lerp_key_val(a, b, frac), AnimState::Moving)
+        (self.lerp_seg(seg, frac), AnimState::Moving)
     }
 
     fn clamp_wake(&self, next_sample: f64, sample_t: f64, runtime_t: f64) -> AnimState {
