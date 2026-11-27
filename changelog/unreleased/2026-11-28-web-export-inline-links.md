@@ -1,0 +1,1 @@
+- **`--html` keeps styled spans inside inline links on the same line.** `BASE_CSS` now applies `display: inline; position: static` to all descendants of a text element (`[data-rune-static] .t *`) instead of direct children only, so styled `<span>` runs inside `<a href="…">` stay inline with surrounding prose while standalone link containers keep their flex layout.
