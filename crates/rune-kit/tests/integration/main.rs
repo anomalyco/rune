@@ -18,6 +18,7 @@ mod form_help_wrap;
 mod glyphs;
 mod hover_card;
 mod hover_within;
+mod icon_button_metrics;
 mod image_zoom;
 mod interactive;
 mod keybind;

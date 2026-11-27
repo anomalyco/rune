@@ -69,7 +69,8 @@ impl SidebarToggle {
             hide_label: None,
         }
     }
-    /// The button's size: 16, 20, 24, 28 or 36 points.
+    /// The button's size: 16, 20, 24, 28 or 36 points by default (or the kit's
+    /// [`IconButtonMetrics`](crate::IconButtonMetrics) when themed).
     pub fn size(mut self, s: ControlSize) -> Self {
         self.size = s;
         self
@@ -122,16 +123,6 @@ impl SidebarToggle {
         self.show_label = (!show.trim().is_empty()).then_some(show);
         self.hide_label = (!hide.trim().is_empty()).then_some(hide);
         self
-    }
-
-    fn side(&self) -> f32 {
-        match self.size {
-            ControlSize::Mini => 16.0,
-            ControlSize::Small => 20.0,
-            ControlSize::Large => 28.0,
-            ControlSize::ExtraLarge => 36.0,
-            _ => 24.0,
-        }
     }
 }
 
@@ -294,7 +285,7 @@ impl SplitView {
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let t = self.toggle;
-        let side = t.side();
+        let side = k.icon_button_metrics(t.size).size;
         let frame = self.frame.unwrap_or(if self.flat { 0.0 } else { DEFAULT_FRAME_INSET });
         let top = if self.in_panel { frame } else { 0.0 };
         let sidebar_state = self.sidebar.as_ref().map(|p| p.state);

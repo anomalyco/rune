@@ -179,6 +179,7 @@ pub use tokens::metrics::BySize;
 pub use tokens::metrics::CheckboxColors;
 pub use tokens::metrics::DialogMetrics;
 pub use tokens::metrics::FieldMetrics;
+pub use tokens::metrics::IconButtonMetrics;
 pub use tokens::metrics::KeybindMetrics;
 pub use tokens::metrics::MenuMetrics;
 pub use tokens::metrics::Metrics;

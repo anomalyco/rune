@@ -18,6 +18,7 @@ fn metrics_default_to_the_built_in_ones() {
     let k = Kit::neutral(true);
     assert_eq!(k.metrics, Metrics::default());
     assert_eq!(ButtonMetrics::kit(&k).regular, ButtonMetrics { height: 24.0, padding_x: 12.0, radius: k.radius.md, icon: 16.0 });
+    assert_eq!(IconButtonMetrics::kit(&k).regular, IconButtonMetrics { size: 24.0, radius: k.radius.md, icon: 16.0 });
     assert_eq!(SwitchMetrics::NS_SWITCH.get(ControlSize::Mini).track_width, 36.0);
     assert_eq!(FieldMetrics::kit(&k).height, 28.0);
     assert_eq!(TextAreaMetrics::kit(&k).padding, 8.0);
