@@ -436,7 +436,7 @@ impl Host {
                 return Err(SurfaceSetupError::unsupported("the GPU device is gone"));
             };
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-            let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend)
+            let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend, self.wayland)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
             config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {

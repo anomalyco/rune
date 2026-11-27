@@ -64,6 +64,9 @@ mod backoff_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "surface/occluded_surface_tests.rs"]
 mod occluded_surface_tests;
+#[cfg(test)]
+#[path = "surface/present_mode_tests.rs"]
+mod present_mode_tests;
 
 /// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
 /// frame shows at the first composition after it's done, and the window waits for room itself
@@ -132,10 +135,11 @@ pub(in crate::window) fn drawable_size(current: Option<(u32, u32)>, reported: (u
 }
 
 /// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
-/// first alpha mode it supports that composites translucent pixels.
+/// first alpha mode it supports that composites translucent pixels. `frame_callbacks`: the
+/// window paces its frames on Wayland frame callbacks (`present_mode`).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
-    -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
+pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool,
+    frame_callbacks: bool) -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
     let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
     // The surface is asked what it can do once. A Vulkan driver answers each part of that with a
     // call of its own, and Mesa's Wayland surfaces answer each call by asking the compositor for
@@ -174,9 +178,20 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     // A frame that redrew part of itself is copied in whole from the one the renderer keeps
     // (`render::damaged`).
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
-    config.present_mode = wgpu::PresentMode::AutoVsync;
+    config.present_mode = present_mode(&caps.present_modes, frame_callbacks);
     config.desired_maximum_frame_latency = FRAME_LATENCY;
     Some((config, crate::render::translucency::mode_of(&caps, adapter)))
+}
+
+/// Vsynced (`AutoVsync`, FIFO), or Mailbox for a window that paces its frames on Wayland frame
+/// callbacks (`pre_present_notify`) when its surface offers it. Each such frame already waits for
+/// the compositor's callback; FIFO adds a wait for the compositor to latch the commit (Vulkan
+/// drivers' `wp_fifo_v1` barriers), which a compositor with nothing else to repaint can leave
+/// unanswered: a headless GNOME Shell held an animation's last frames for seconds, until the
+/// pointer moved. Wayland never tears, so Mailbox only stops presenting from waiting on it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::window) fn present_mode(offered: &[wgpu::PresentMode], frame_callbacks: bool) -> wgpu::PresentMode {
+    if frame_callbacks && offered.contains(&wgpu::PresentMode::Mailbox) { wgpu::PresentMode::Mailbox } else { wgpu::PresentMode::AutoVsync }
 }
 
 /// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
@@ -187,7 +202,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
 pub(crate) fn reblend_core(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
     renderer: &mut Renderer, alpha: &mut Option<crate::render::surface_alpha::AlphaSurface>, rt: &mut RuntimeCore) -> bool {
     let srgb = rt.srgb_blend();
-    let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
+    let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb, false) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
         if let Err(error) = configure(surface, gpu, config) {
