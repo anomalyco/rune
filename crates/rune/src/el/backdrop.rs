@@ -90,9 +90,38 @@ impl El {
     ///     .fill(Color::WHITE)
     ///     .system_material(SystemMaterial::Sidebar);
     /// ```
-    pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
+    pub fn system_material(self, material: crate::SystemMaterial) -> Self {
+        self.system_material_with(material, crate::MaterialParams::new())
+    }
+
+    /// Like [`El::system_material`](Self::system_material), with per-element appearance overrides
+    /// ([`MaterialParams`](crate::MaterialParams)).
+    ///
+    /// Leaving a field unset in `params` keeps the platform preset's default. On Windows 11
+    /// (`windows-system-material`), `tint`, `tint_opacity`, `luminosity_opacity`, and `saturation`
+    /// (including `> 1.0` saturation boosts) tune the Acrylic `CompositionEffectBrush` recipe;
+    /// platforms that cannot honour a field ignore it.
+    ///
+    /// ```no_run
+    /// use rune::{El, MaterialParams, SystemMaterial, el};
+    ///
+    /// let _vibrant_glass: El = el()
+    ///     .size(220.0, 48.0).radius(24.0)
+    ///     .system_material_with(
+    ///         SystemMaterial::Glass,
+    ///         MaterialParams::new()
+    ///             .luminosity_opacity(0.65)
+    ///             .tint_opacity(0.08)
+    ///             .saturation(1.6),
+    ///     );
+    /// ```
+    pub fn system_material_with(
+        mut self,
+        material: crate::SystemMaterial,
+        params: crate::MaterialParams,
+    ) -> Self {
         if material == crate::SystemMaterial::Glass { self.vis_flags.set(crate::el::VisualFlags::CONTINUOUS_CORNERS, true); }
-        self.cold_mut().material = Some(material);
+        self.cold_mut().material = Some((material, params));
         self
     }
 

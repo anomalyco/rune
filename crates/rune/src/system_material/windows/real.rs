@@ -20,14 +20,14 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::core::{HRESULT, Interface};
 
-use super::acrylic;
+use super::acrylic::{self, AcrylicBrushKey, AcrylicRecipe, BrushChoice};
 use super::probe::{self, AcrylicBrushCache, HostAvailability, HostProbeSeam};
 use super::{
     ClipKind, Controller, EffectsPolicy, MaterialInputs, State, TintMode, VisualSpec,
     WindowsMaterialSeam,
 };
 use crate::platform::win32::dcomp_handover::Handover;
-use crate::system_material::{MaterialDraw, Mode, SystemMaterial};
+use crate::system_material::{MaterialDraw, Mode};
 
 /// `DispatcherQueueOptions` from `dispatcherqueue.h`.
 #[repr(C)]
@@ -161,10 +161,9 @@ impl probe::AcrylicFactorySeam for RealProbeSeam {
         &mut self,
         compositor: &Self::Compositor,
         backdrop: &Self::BackdropBrush,
-        material: SystemMaterial,
-        dark: bool,
+        recipe: AcrylicRecipe,
     ) -> Result<Self::EffectBrush, String> {
-        acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, material, dark)
+        acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, recipe)
     }
 
     fn close_effect_brush(&mut self, brush: Self::EffectBrush) {
@@ -239,8 +238,8 @@ struct RealSlot {
     visual: SpriteVisual,
     clip: RealClip,
     tint: Option<RealTint>,
-    /// Last applied `(tint_mode, material, dark, used_acrylic)` so springing frames skip `SetBrush`.
-    applied_brush: Option<(TintMode, SystemMaterial, bool, bool)>,
+    /// Last applied [`BrushChoice`] so springing frames skip `SetBrush`.
+    applied_brush: Option<BrushChoice>,
 }
 
 struct TargetState {
@@ -248,7 +247,7 @@ struct TargetState {
     target: DesktopWindowTarget,
     root: ContainerVisual,
     brush: CompositionBackdropBrush,
-    /// At most 6 lazily created Acrylic effect brushes keyed by `(SystemMaterial, dark)`;
+    /// Bounded LRU cache of lazily created Acrylic effect brushes keyed by [`AcrylicBrushKey`];
     /// closes cached brushes and latches flat-tint fallback on failure.
     acrylic_cache: AcrylicBrushCache<CompositionEffectBrush>,
     visuals: HashMap<usize, RealSlot>,
@@ -275,18 +274,24 @@ impl TargetState {
         self.compositor.Close().ok();
     }
 
-    fn ensure_acrylic_brush(
-        &mut self,
-        material: SystemMaterial,
-        dark: bool,
-    ) -> Option<&CompositionEffectBrush> {
+    fn ensure_acrylic_brush(&mut self, key: AcrylicBrushKey) -> Option<&CompositionEffectBrush> {
         let compositor = &self.compositor;
         let backdrop = &self.brush;
+        let visuals = &mut self.visuals;
+        let mut detached = false;
         match self.acrylic_cache.get_or_create(
-            material,
-            dark,
-            |m, d| acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, m, d),
+            key,
+            |k| acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, AcrylicRecipe::from_key(k)),
             |brush| {
+                if !detached {
+                    for slot in visuals.values_mut() {
+                        if matches!(slot.applied_brush, Some(BrushChoice::Acrylic { .. })) {
+                            slot.visual.SetBrush(backdrop).ok();
+                            slot.applied_brush = None;
+                        }
+                    }
+                    detached = true;
+                }
                 brush.Close().ok();
             },
         ) {
@@ -298,6 +303,16 @@ impl TargetState {
                 None
             }
         }
+    }
+
+    fn evict_unused_acrylic_brushes(&mut self) {
+        let visuals = &self.visuals;
+        self.acrylic_cache.evict_unused(
+            |k| visuals.values().any(|s| s.applied_brush == Some(BrushChoice::Acrylic { key: *k })),
+            |brush| {
+                brush.Close().ok();
+            },
+        );
     }
 }
 
@@ -411,32 +426,33 @@ impl WindowsMaterialSeam for RealSeam<'_> {
             return Err("no active DesktopWindowTarget".into());
         };
         // Resolve Acrylic brush before mutably borrowing `slot`.
+        let recipe_key = AcrylicRecipe::resolve(spec.material, spec.dark, spec.params).cache_key();
         let acrylic_brush = if spec.tint_mode == TintMode::Acrylic {
-            ts.ensure_acrylic_brush(spec.material, spec.dark).cloned()
+            ts.ensure_acrylic_brush(recipe_key).cloned()
         } else {
             None
         };
         let choice = acrylic::resolve_brush_choice(
             spec.tint_mode,
             spec.material,
+            spec.params,
             spec.dark,
             acrylic_brush.is_some(),
         );
         let flat_tint = match choice {
-            acrylic::BrushChoice::FlatTint { argb } => Some(argb),
-            acrylic::BrushChoice::Acrylic { .. } | acrylic::BrushChoice::RawHostBackdrop => None,
+            BrushChoice::FlatTint { argb } => Some(argb),
+            BrushChoice::Acrylic { .. } | BrushChoice::RawHostBackdrop => None,
         };
         let Some(slot) = ts.visuals.get_mut(&slot_id) else {
             return Err(format!("missing material slot {slot_id}"));
         };
-        let brush_key = (spec.tint_mode, spec.material, spec.dark, acrylic_brush.is_some());
-        if slot.applied_brush != Some(brush_key) {
+        if slot.applied_brush != Some(choice) {
             if let Some(effect_brush) = acrylic_brush.as_ref() {
                 slot.visual.SetBrush(effect_brush).map_err(|e| format!("SetBrush(Acrylic): {e}"))?;
             } else {
                 slot.visual.SetBrush(&ts.brush).map_err(|e| format!("SetBrush(HostBackdrop): {e}"))?;
             }
-            slot.applied_brush = Some(brush_key);
+            slot.applied_brush = Some(choice);
         }
         let mut offset = Plane::default().Normal;
         offset.X = spec.offset[0];
@@ -555,6 +571,7 @@ impl WindowsMaterialSeam for RealSeam<'_> {
         }
 
         slot.visual.SetIsVisible(true).map_err(|e| format!("SetIsVisible(true): {e}"))?;
+        ts.evict_unused_acrylic_brushes();
         Ok(())
     }
 
@@ -687,6 +704,11 @@ impl Materials {
 #[cfg(test)]
 pub(super) fn compile_all_acrylic_brushes() -> Result<usize, String> {
     probe::compile_all_acrylic_brushes_with(&mut RealProbeSeam)
+}
+
+#[cfg(test)]
+pub(super) fn compile_acrylic_recipes(recipes: &[AcrylicRecipe]) -> Result<usize, String> {
+    probe::compile_acrylic_recipes_with(&mut RealProbeSeam, recipes)
 }
 
 impl Drop for Materials {

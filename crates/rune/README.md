@@ -3777,9 +3777,12 @@ On Windows 11 Build 22000+, an off-by-default `windows-system-material` Cargo fe
 documented `DWMWA_USE_HOSTBACKDROPBRUSH` and a Windows 11 Acrylic Luminosity + Color
 `CompositionEffectBrush` (built with `IGraphicsEffect` / `IGraphicsEffectD2D1Interop` over
 `Compositor::CreateHostBackdropBrush`, zero Win2D) clipped per frame under Rune's swap-chain
-visual. Each `(SystemMaterial, dark)` pair caches a single brush (`Popover` = Default Acrylic,
-`Sidebar` = Base Acrylic, `Glass` = clearer chromatic Acrylic; at most 6 cached brushes per
-window) and degrades gracefully to a WCAG >=4.5:1 flat tint if effect compilation fails.
+visual. Each resolved Acrylic recipe is cached per target (`Popover` = Default Acrylic,
+`Sidebar` = Base Acrylic, `Glass` = clearer chromatic Acrylic; plain `El::system_material` caches
+at most 6 brushes per window, and `El::system_material_with(material, MaterialParams)` overrides
+optional tint RGB, tint opacity, luminosity opacity, and `0.0..=4.0` backdrop saturation via
+`CLSID_D2D1ColorMatrix` in a bounded LRU cache) and degrades gracefully to a WCAG >=4.5:1 flat
+tint if effect compilation fails.
 Light-theme Acrylic uses Microsoft's WinUI 3 light recipes (`#FCFCFC` / `#F3F3F3`), which are
 designed for dark text chosen from the active theme (`cx.system_dark()`). Windows
 follows the same fill rules as Wayland: opaque fills (`alpha >= 1.0`, such as `rune-kit::Toolbar`)

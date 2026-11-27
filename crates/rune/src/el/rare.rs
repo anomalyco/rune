@@ -107,7 +107,7 @@ pub(crate) struct ElCold {
     pub(crate) help_side: Option<crate::Side>,
     /// `El::help_open`: the tooltip shows whatever the pointer does.
     pub(crate) help_open: bool,
-    pub(crate) material: Option<crate::SystemMaterial>,
+    pub(crate) material: Option<(crate::SystemMaterial, crate::MaterialParams)>,
     /// `El::aspect_fit`'s width over height; 0 when unset.
     pub(crate) aspect_fit: f32,
     /// Outside disc: logical ascent, descent and line height; resolved with this commit's scale.
