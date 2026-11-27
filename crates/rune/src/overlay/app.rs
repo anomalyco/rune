@@ -698,6 +698,8 @@ impl<T: 'static> Overlay<T> {
         with_app!(self, |core, app| core.latch_terminal_loss_latch(&mut app, kind, reason))
     }
     pub(super) fn layer_closed(&mut self, reason: Option<&str>) { with_app!(self, |core, app| core.layer_closed(&mut app, reason)) }
+    pub(super) fn layer_output_gone(&mut self) { with_app!(self, |core, app| core.layer_output_gone(&mut app)) }
+    pub(super) fn finish_prepare_output_gone(&mut self, showing: bool) { with_app!(self, |core, app| core.finish_prepare(&mut app, showing, super::lifetime::PrepareOutcome::OutputGone)) }
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }
     pub(super) fn presence_due(&mut self, now: Instant) { with_app!(self, |core, app| core.presence_due(&mut app, now)) }

@@ -100,19 +100,38 @@ fn every_touch_sequence_matches_what_the_old_finger_did() {
 struct OldReadiness {
     configured: Option<(u32, u32)>,
     scale: Option<i32>,
+    closing: bool,
     closed: bool,
     ever: bool,
 }
 
 impl OldReadiness {
     fn step(&mut self, event: readiness::Event) {
+        if self.closed {
+            return;
+        }
         match event {
-            readiness::Event::Configure { width, height } => {
+            readiness::Event::Configure { width, height } if !self.closing => {
                 self.configured = Some((width, height));
                 self.ever = true;
             }
-            readiness::Event::Scale(scale) => self.scale = Some(scale),
-            readiness::Event::Closed => self.closed = true,
+            readiness::Event::Scale(scale) if !self.closing => self.scale = Some(scale),
+            readiness::Event::Closed => {
+                self.closing = true;
+                self.configured = None;
+                self.scale = None;
+            }
+            readiness::Event::CloseSyncDone if self.closing => {
+                self.closing = false;
+                self.closed = true;
+            }
+            readiness::Event::OutputRemoved | readiness::Event::ConnectionFailed => {
+                self.closing = false;
+                self.closed = true;
+                self.configured = None;
+                self.scale = None;
+            }
+            _ => {}
         }
     }
 }
@@ -144,10 +163,10 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
     use readiness::Event;
     let alphabet = [
         Symbol::Event(Event::Configure { width: 10, height: 20 }),
-        Symbol::Event(Event::Configure { width: 30, height: 40 }),
         Symbol::Event(Event::Scale(2)),
-        Symbol::Event(Event::Scale(3)),
         Symbol::Event(Event::Closed),
+        Symbol::Event(Event::CloseSyncDone),
+        Symbol::Event(Event::OutputRemoved),
         Symbol::Read,
     ];
     each_sequence(&alphabet, 6, &mut Vec::new(), &mut |seq| {
@@ -155,7 +174,7 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
         for (i, symbol) in seq.iter().enumerate() {
             match symbol {
                 Symbol::Event(event) => {
-                    readiness::step(&mut state, *event);
+                    let _ = readiness::step(&mut state, *event);
                     old.step(*event);
                 }
                 Symbol::Read => {
@@ -165,8 +184,9 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
                 }
             }
             assert_eq!(state.closed(), old.closed, "closed after {seq:?}");
-            assert_eq!(state.configured(), old.ever || old.closed, "configured after {seq:?}");
-            assert_eq!(state.is_ready(), old.ever && !old.closed, "is_ready after {seq:?}");
+            assert_eq!(state.closing(), old.closing, "closing after {seq:?}");
+            assert_eq!(state.configured(), (old.ever && !old.closing) || old.closed, "configured after {seq:?}");
+            assert_eq!(state.is_ready(), old.ever && !old.closing && !old.closed, "is_ready after {seq:?}");
         }
     });
 }
@@ -174,19 +194,24 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
 #[test]
 fn a_second_configure_replaces_the_size_nobody_read() {
     let mut state = readiness::State::default();
-    readiness::step(&mut state, readiness::Event::Scale(2));
+    let _ = readiness::step(&mut state, readiness::Event::Scale(2));
     assert!(!state.configured());
     assert_eq!(state.size(), None, "no size before the first configure");
-    readiness::step(&mut state, readiness::Event::Configure { width: 10, height: 20 });
+    let _ = readiness::step(&mut state, readiness::Event::Configure { width: 10, height: 20 });
     assert!(state.configured());
-    readiness::step(&mut state, readiness::Event::Configure { width: 30, height: 40 });
+    let _ = readiness::step(&mut state, readiness::Event::Configure { width: 30, height: 40 });
     assert_eq!(state.size(), Some((30, 40)));
     assert_eq!(state.take_size(), Some((30, 40)));
     assert_eq!(state.take_size(), None, "read once");
     assert!(state.configured(), "reading the size doesn't unconfigure the surface");
     assert_eq!(state.take_scale(), Some(2), "a scale sent before the first configure is kept");
-    readiness::step(&mut state, readiness::Event::Closed);
+    let _ = readiness::step(&mut state, readiness::Event::Closed);
+    assert!(state.closing());
+    assert!(!state.closed());
+    assert_eq!(state.take_size(), None);
+    let _ = readiness::step(&mut state, readiness::Event::CloseSyncDone);
     assert!(state.closed());
+    assert_eq!(state.close_kind(), Some(readiness::CloseKind::Closed));
     assert_eq!(state.take_size(), None);
 }
 

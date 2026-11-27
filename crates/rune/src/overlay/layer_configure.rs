@@ -41,9 +41,12 @@ pub(super) enum Event {
     /// The initial `zwlr_layer_surface_v1.configure` arrived (with optional scale from the same
     /// dispatch).
     Configured { width: u32, height: u32, scale: Option<i32> },
-    /// The compositor sent `closed`, removed the bound `wl_output`, or the display connection
-    /// failed fatally before the initial `configure`.
+    /// The compositor sent `closed` on a live output or the display connection failed fatally
+    /// before the initial `configure`.
     Closed,
+    /// The surface's `wl_output` went away (`wl_registry.global_remove`) before the initial
+    /// `configure`: hide without failing the overlay.
+    OutputGone,
     /// The overlay hid, changed target display, released its surface, closed, or entered terminal
     /// GPU loss before the initial `configure`.
     Cancel,
@@ -60,8 +63,25 @@ pub(super) enum Effect {
     Attach { width: u32, height: u32, scale: i32 },
     /// Drop the unconfigured `LayerSurface` and report it closed/unavailable.
     FailClosed,
+    /// Drop the unconfigured `LayerSurface` and hide without recording a failure.
+    OutputGone,
     /// Drop the unconfigured `LayerSurface` quietly (hidden, recreated, or released).
     DropLayer,
+}
+
+/// Outcome of attempting to start a Wayland layer surface before its initial `configure`.
+#[cfg_attr(
+    not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))),
+    allow(dead_code)
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartLayer {
+    /// Surface created and waiting for its initial `configure`.
+    Started,
+    /// Targeted display is already gone: make no fallback surface and report no failure.
+    OutputGone,
+    /// Compositor lacks layer-shell or display connection failed: fall back to XWayland/toplevel.
+    Fallback,
 }
 
 pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
@@ -90,6 +110,11 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             Effects::one(Effect::FailClosed)
         }
         (Phase::Idle, Event::Closed) => Effects::none(),
+        (Phase::Configuring { .. }, Event::OutputGone) => {
+            *phase = Phase::Idle;
+            Effects::one(Effect::OutputGone)
+        }
+        (Phase::Idle, Event::OutputGone) => Effects::none(),
         (Phase::Configuring { .. }, Event::Cancel) => {
             *phase = Phase::Idle;
             Effects::one(Effect::DropLayer)
@@ -171,25 +196,28 @@ impl OverlayCore {
     }
 
     /// Creates and commits a Wayland layer surface without blocking for its initial `configure`.
-    /// Returns `true` when the surface is now pending its initial `configure`; `false` when the
-    /// compositor lacks layer-shell or the display connection failed so the caller can fall back.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) fn start_layer(&mut self, event_loop: &ActiveEventLoop, showing: bool) -> bool {
+    pub(super) fn start_layer(&mut self, event_loop: &ActiveEventLoop, showing: bool) -> StartLayer {
         use winit::platform::wayland::MonitorHandleExtWayland;
         use winit::raw_window_handle::HasDisplayHandle;
 
-        let Ok(display) = event_loop.display_handle() else { return false };
+        let Ok(display) = event_loop.display_handle() else { return StartLayer::Fallback };
         let display = display.as_raw();
+        // With no target, the compositor chooses an output; global pointer querying is forbidden.
+        // If a specific display was targeted and is already gone, make no surface on another output.
+        let output = match super::lifetime::resolve_wayland_output(
+            &self.options.display,
+            |id| event_loop.available_monitors().any(|m| m == id.0).then(|| id.0.native_id()),
+            |id| event_loop.available_monitors().any(|m| m.native_id() == id),
+        ) {
+            super::lifetime::WaylandOutputTarget::Any => None,
+            super::lifetime::WaylandOutputTarget::Output(id) => Some(id),
+            super::lifetime::WaylandOutputTarget::Gone => return StartLayer::OutputGone,
+        };
         let monitor = monitor(event_loop, &self.options.display);
         let scale = monitor.as_ref().map_or(1.0, |m| m.scale_factor()).ceil() as i32;
-        // With no target, the compositor chooses an output; global pointer querying is forbidden.
-        let output = match &self.options.display {
-            DisplayTarget::Id(id) if event_loop.available_monitors().any(|m| m == id.0) => Some(id.0.native_id()),
-            DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) if event_loop.available_monitors().any(|m| m.native_id() == *id) => Some(*id),
-            _ => None,
-        };
         let hold_keys = showing && self.key_hold.is_held();
-        let Some(layer) = crate::platform::layer_shell::LayerSurface::new(
+        let layer = match crate::platform::layer_shell::LayerSurface::new(
             display,
             self.name,
             self.at,
@@ -197,8 +225,10 @@ impl OverlayCore {
             &self.options,
             output,
             hold_keys,
-        ) else {
-            return false;
+        ) {
+            Ok(layer) => layer,
+            Err(crate::platform::layer_shell::NewError::OutputGone) => return StartLayer::OutputGone,
+            Err(crate::platform::layer_shell::NewError::Unavailable) => return StartLayer::Fallback,
         };
         self.wayland_globals = Some(layer.globals_handle());
         self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(
@@ -211,12 +241,12 @@ impl OverlayCore {
             self.pending_layer.layer = None;
         }
         self.pending_layer.layer = Some(layer);
-        true
+        StartLayer::Started
     }
 
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    pub(super) fn start_layer(&mut self, _event_loop: &ActiveEventLoop, _showing: bool) -> bool {
-        false
+    pub(super) fn start_layer(&mut self, _event_loop: &ActiveEventLoop, _showing: bool) -> StartLayer {
+        StartLayer::Fallback
     }
 
     /// Dispatches queued Wayland events for a pending layer surface without reading the socket.
@@ -227,12 +257,20 @@ impl OverlayCore {
         {
             let Some(layer) = self.pending_layer.layer_mut() else { return };
             let changes = layer.dispatch();
-            if changes.closed {
+            if let Some(kind) = changes.closed {
                 let reason = layer.close_reason().map(str::to_owned);
-                let effects = step(&mut self.pending_layer.phase, Event::Closed);
+                let event = match kind {
+                    crate::platform::layer_shell_machine::readiness::CloseKind::Closed => Event::Closed,
+                    crate::platform::layer_shell_machine::readiness::CloseKind::OutputGone => Event::OutputGone,
+                };
+                let effects = step(&mut self.pending_layer.phase, event);
                 self.pending_layer.layer = None;
-                if effects.into_iter().any(|effect| effect == Effect::FailClosed) {
-                    self.layer_closed(app, reason.as_deref());
+                for effect in effects {
+                    match effect {
+                        Effect::FailClosed => self.layer_closed(app, reason.as_deref()),
+                        Effect::OutputGone => self.layer_output_gone(app),
+                        Effect::Attach { .. } | Effect::DropLayer => {}
+                    }
                 }
                 return;
             }

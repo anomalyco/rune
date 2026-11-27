@@ -234,3 +234,66 @@ fn overlay_without_on_availability_does_not_mark_dirty_on_transition() {
     assert_eq!(handle.failure().as_deref(), Some("boom"));
     assert!(!overlay.dirty && !overlay.rt.stale(), "failure without callback asks for no extra frame");
 }
+
+#[test]
+fn a_layer_surface_whose_output_went_hides_and_stays_available() {
+    let (mut overlay, handle) = watch_overlay(None);
+    overlay.ready(true);
+    overlay.presence = Presence::Shown { occluded: false };
+    assert_eq!(overlay.rt.state.seen, vec![(Availability::Available, Availability::Available, None)]);
+
+    overlay.layer_output_gone();
+    assert!(!overlay.presence.shown(), "output unplug hides the overlay");
+    assert_eq!(handle.availability(), Availability::Available, "output unplug keeps availability Available");
+    assert_eq!(handle.failure(), None, "output unplug records no failure");
+    assert_eq!(
+        overlay.rt.state.seen.len(),
+        1,
+        "output unplug must not fire an Unavailable on_availability transition",
+    );
+}
+
+#[test]
+fn a_show_whose_display_went_before_its_surface_was_made_reads_no_failure() {
+    // 1. First show (Availability::Unknown) aimed at a display that already went.
+    let (mut overlay, handle) = watch_overlay(None);
+    overlay.finish_prepare_output_gone(true);
+    assert!(!overlay.presence.shown());
+    assert_eq!(handle.availability(), Availability::Unknown);
+    assert_eq!(handle.failure(), None);
+    assert!(overlay.rt.state.seen.is_empty(), "gone display must not fire on_availability(Unavailable)");
+
+    // 2. Re-show after an output unplug while Available: stays Available with no failure.
+    overlay.ready(true);
+    overlay.layer_output_gone();
+    overlay.finish_prepare_output_gone(true);
+    assert!(!overlay.presence.shown());
+    assert_eq!(handle.availability(), Availability::Available);
+    assert_eq!(handle.failure(), None);
+    assert_eq!(overlay.rt.state.seen.len(), 1);
+}
+
+#[test]
+fn resolve_wayland_output_returns_gone_for_disconnected_targets() {
+    use super::lifetime::{WaylandOutputTarget, resolve_wayland_output};
+    use crate::{DisplayTarget, NativeDisplayId};
+
+    // Connected Wayland native ID -> Output(id); disconnected -> Gone (never Any).
+    assert_eq!(
+        resolve_wayland_output(&DisplayTarget::Native(NativeDisplayId::Wayland(7)), |_| None, |id| id == 7),
+        WaylandOutputTarget::Output(7),
+    );
+    assert_eq!(
+        resolve_wayland_output(&DisplayTarget::Native(NativeDisplayId::Wayland(9)), |_| None, |id| id == 7),
+        WaylandOutputTarget::Gone,
+    );
+    // Primary and UnderPointer let the compositor choose an output.
+    assert_eq!(
+        resolve_wayland_output(&DisplayTarget::Primary, |_| None, |_| false),
+        WaylandOutputTarget::Any,
+    );
+    assert_eq!(
+        resolve_wayland_output(&DisplayTarget::UnderPointer, |_| None, |_| false),
+        WaylandOutputTarget::Any,
+    );
+}

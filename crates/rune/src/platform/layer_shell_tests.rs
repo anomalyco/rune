@@ -387,12 +387,19 @@ fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_close
         assert!(!layer.has_pending_events(), "dispatch must clear pending events");
 
         // Compositor closes the layer surface (zwlr_layer_surface_v1.closed opcode 1).
+        // It waits for a wl_display.sync roundtrip before reporting Closed so an unplug's
+        // wl_registry.global_remove can overtake it.
         let layer_proto_id = layer.layer.id().protocol_id();
         send_msg(&mut server_tx, layer_proto_id, 1, &[])?;
         host_read_once(&host);
         assert!(layer.has_pending_events());
         let changes = layer.dispatch();
-        assert!(changes.closed);
+        assert_eq!(changes.closed, None, "close waits for the sync sent after it");
+        assert!(layer.is_live(), "surface stays live while waiting for the close sync");
+        host_read_once(&host);
+        assert!(layer.has_pending_events(), "sync answer must register as pending");
+        let changes = layer.dispatch();
+        assert_eq!(changes.closed, Some(crate::platform::layer_shell_machine::readiness::CloseKind::Closed));
         assert!(!layer.is_live());
         assert_eq!(layer.close_reason(), None, "compositor close leaves close_reason None so overlay reports compositor closed");
         assert!(!layer.has_pending_events(), "closed surface must never report pending events");
