@@ -1,0 +1,1 @@
+- Web: kept CPU-first animations, scrolling, and input painting on the CPU 2D canvas throughout `HandoverState::WaitingDone` (swapping canvas visibility atomically on the next `requestAnimationFrame` via `ReadyToFlip` once `onSubmittedWorkDone` resolves), and replaced WebGL2's 8 ms `setTimeout` sync polling with `requestAnimationFrame`-driven `GlSyncPoll`.

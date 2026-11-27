@@ -16,11 +16,14 @@ pub(crate) const TIMEOUT_PAD: Duration = Duration::from_millis(50);
 
 /// Phases of a full-window web page handing over from its CPU 2D canvas to WebGPU/WebGL2.
 ///
-/// Throughout `Building` and `WaitingChecks`, the visible CPU canvas continues answering input
-/// and animating, while zero GPU render passes are submitted until the initial queue barrier
-/// (`built`) and all async browser error-scope checks (`uber_check` and lazy feature `breakers`)
-/// have settled. Once settled, one hand-over frame is submitted (`WaitingDone`) and the loop
-/// waits for `onSubmittedWorkDone` or `FINISH_LIMIT`.
+/// Throughout `Building`, `WaitingChecks`, and `WaitingDone`, the visible CPU canvas continues
+/// answering input and animating so motion never freezes. Zero GPU render passes are submitted
+/// until the initial queue barrier (`built`) and all async browser error-scope checks
+/// (`uber_check` and lazy feature `breakers`) have settled. Once settled, one hand-over frame is
+/// submitted (`WaitingDone`) and the loop waits for `onSubmittedWorkDone` or `FINISH_LIMIT` while
+/// continuing to paint CPU frames (and submitting zero additional GPU frames). Once
+/// `onSubmittedWorkDone` resolves, `ReadyToFlip` requests one `requestAnimationFrame` that draws
+/// an up-to-date GPU frame and atomically reveals the GPU canvas while removing the CPU canvas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HandoverState {
     /// Waiting for the initial empty-queue barrier (`built`) after `Renderer::try_new`, or ready
@@ -31,8 +34,12 @@ pub(crate) enum HandoverState {
     /// are submitted until a browser check wake clears `checking_gpu`.
     WaitingChecks,
     /// The single hand-over GPU frame was submitted; waiting for `onSubmittedWorkDone` or
-    /// `deadline` (`FINISH_LIMIT`). No new frames draw until this resolves.
+    /// `deadline` (`FINISH_LIMIT`). CPU frames continue painting into the visible CPU canvas so
+    /// animations, scroll, and input never freeze, while zero additional GPU frames are submitted.
     WaitingDone { attempt: Attempt, deadline: Instant },
+    /// `onSubmittedWorkDone` resolved for the hand-over frame; waiting for the next rAF to draw
+    /// an up-to-date GPU frame and atomically swap canvas visibility.
+    ReadyToFlip,
     /// Hand-over completed: GPU canvas is visible and CPU canvas is removed.
     Done,
     /// Hand-over timed out waiting for the GPU frame: GPU destroyed and page stays on CPU.
@@ -75,11 +82,15 @@ pub(crate) enum HandoverEffect {
     /// Precheck lazy layer features (`Isolation`, `PlusLighter`, `LayerBlur`) for the current
     /// instances without acquiring a surface texture or submitting a GPU frame.
     PrecheckFeatures,
-    /// Acquire a canvas texture, encode, and submit the single hand-over GPU frame.
+    /// Acquire a canvas texture, encode, and submit the single hand-over verification GPU frame
+    /// (while keeping the CPU canvas visible and painting).
     DrawGpuFrame,
+    /// Acquire a canvas texture, encode, and submit the up-to-date GPU frame on the flip rAF so
+    /// visibility swaps atomically in the same compositor commit.
+    DrawFlipFrame,
     /// Arm `onSubmittedWorkDone` and the `FINISH_LIMIT` timeout timer for `attempt`.
     ArmFinishWait { attempt: Attempt, delay: Duration },
-    /// Request one redraw so the host advances to the hand-over frame now that waiting ended.
+    /// Request one redraw so the host advances to the hand-over or flip frame now that waiting ended.
     RequestRedraw,
     /// Reveal the GPU canvas and remove the CPU canvas (`web.handover.done`).
     Complete,
@@ -88,7 +99,7 @@ pub(crate) enum HandoverEffect {
 }
 
 impl HandoverState {
-    /// Whether the hand-over GPU frame is in flight and new draws must wait for it.
+    /// Whether the hand-over GPU frame is in flight and awaiting `onSubmittedWorkDone`.
     pub(crate) const fn waiting_for_gpu(self) -> bool {
         matches!(self, Self::WaitingDone { .. })
     }
@@ -108,25 +119,28 @@ impl HandoverState {
                 *self = Self::Building { built: true };
                 Effects::one(HandoverEffect::RequestRedraw)
             }
-            (Self::Building { built: true }, HandoverEvent::PrepareFrame { checking_gpu: true }) => {
+            (Self::Building { built: true } | Self::ReadyToFlip, HandoverEvent::PrepareFrame { checking_gpu: true }) => {
                 *self = Self::WaitingChecks;
                 Effects::none()
             }
-            (Self::Building { built: true }, HandoverEvent::PrepareFrame { checking_gpu: false }) => {
+            (Self::Building { built: true } | Self::ReadyToFlip, HandoverEvent::PrepareFrame { checking_gpu: false }) => {
                 Effects::one(HandoverEffect::PrecheckFeatures)
             }
             (Self::WaitingChecks, HandoverEvent::PrepareFrame { checking_gpu: false }) => {
                 *self = Self::Building { built: true };
                 Effects::one(HandoverEffect::PrecheckFeatures)
             }
-            (Self::Building { built: true }, HandoverEvent::Prechecked { checking_gpu: true }) => {
+            (Self::Building { built: true } | Self::ReadyToFlip, HandoverEvent::Prechecked { checking_gpu: true }) => {
                 *self = Self::WaitingChecks;
                 Effects::none()
             }
             (Self::Building { built: true }, HandoverEvent::Prechecked { checking_gpu: false }) => {
                 Effects::one(HandoverEffect::DrawGpuFrame)
             }
-            (Self::Building { built: true }, HandoverEvent::GpuSubmitted { checking_gpu: true, .. }) => {
+            (Self::ReadyToFlip, HandoverEvent::Prechecked { checking_gpu: false }) => {
+                Effects::one(HandoverEffect::DrawFlipFrame)
+            }
+            (Self::Building { built: true } | Self::ReadyToFlip, HandoverEvent::GpuSubmitted { checking_gpu: true, .. }) => {
                 *self = Self::WaitingChecks;
                 Effects::none()
             }
@@ -138,15 +152,98 @@ impl HandoverState {
                     delay: FINISH_LIMIT + TIMEOUT_PAD,
                 })
             }
+            (Self::ReadyToFlip, HandoverEvent::GpuSubmitted { checking_gpu: false, .. }) => {
+                *self = Self::Done;
+                Effects::one(HandoverEffect::Complete)
+            }
             (Self::WaitingDone { attempt: expected, .. }, HandoverEvent::GpuDone { attempt })
                 if attempt == expected =>
             {
-                *self = Self::Done;
-                Effects::one(HandoverEffect::Complete)
+                *self = Self::ReadyToFlip;
+                Effects::one(HandoverEffect::RequestRedraw)
             }
             (Self::WaitingDone { deadline, .. }, HandoverEvent::Tick { now }) if now >= deadline => {
                 *self = Self::Failed;
                 Effects::one(HandoverEffect::FailTimeout)
+            }
+            _ => Effects::none(),
+        }
+    }
+}
+
+/// Explicit state machine driving non-blocking WebGL2 `Device::poll(PollType::Poll)` on
+/// `requestAnimationFrame` turns until an async wgpu callback (`on_submitted_work_done` or
+/// `map_async`) completes, fails, is cancelled, or reaches `deadline`.
+///
+/// Always waits for at least one `requestAnimationFrame` before the first poll because WebGL2
+/// sync objects only transition to `SIGNALED` across browser turns, and polling on rAF keeps
+/// handover completion phase-locked to display vsync instead of drifting on a fixed timer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum GlSyncPoll {
+    #[default]
+    Idle,
+    WaitingFrame { attempt: Attempt, deadline: Instant },
+    Polling { attempt: Attempt, deadline: Instant },
+    Done,
+}
+
+/// Inputs that advance [`GlSyncPoll`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlSyncPollEvent {
+    /// Arm rAF-driven polling for a newly submitted WebGL2 callback until `deadline`.
+    Start { deadline: Instant },
+    /// The scheduled `requestAnimationFrame` callback for `attempt` ran at `now`.
+    AnimationFrame { attempt: Attempt, now: Instant },
+    /// `device.poll(wgpu::PollType::Poll)` finished for `attempt` at `now`.
+    Polled { attempt: Attempt, completed: bool, device_error: bool, now: Instant },
+    /// The awaited callback already resolved or its barrier was dropped.
+    Cancel,
+}
+
+/// Side effects the web host performs for a [`GlSyncPoll`] transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlSyncPollEffect {
+    /// Register a `requestAnimationFrame` callback tagged with `attempt`.
+    RequestAnimationFrame { attempt: Attempt },
+    /// Run one non-blocking `device.poll(wgpu::PollType::Poll)` and feed `Polled` back in.
+    PollDevice { attempt: Attempt },
+}
+
+impl GlSyncPoll {
+    /// Advances the WebGL2 sync polling state machine on `event`.
+    pub(crate) fn step(&mut self, seq: &mut Seq, event: GlSyncPollEvent) -> Effects<GlSyncPollEffect> {
+        match (*self, event) {
+            (Self::Idle, GlSyncPollEvent::Start { deadline }) => {
+                let attempt = seq.next();
+                *self = Self::WaitingFrame { attempt, deadline };
+                Effects::one(GlSyncPollEffect::RequestAnimationFrame { attempt })
+            }
+            (Self::WaitingFrame { attempt: expected, deadline }, GlSyncPollEvent::AnimationFrame { attempt, now })
+                if attempt == expected =>
+            {
+                if now >= deadline {
+                    *self = Self::Done;
+                    Effects::none()
+                } else {
+                    *self = Self::Polling { attempt, deadline };
+                    Effects::one(GlSyncPollEffect::PollDevice { attempt })
+                }
+            }
+            (Self::Polling { attempt: expected, deadline }, GlSyncPollEvent::Polled { attempt, completed, device_error, now })
+                if attempt == expected =>
+            {
+                if completed || device_error || now >= deadline {
+                    *self = Self::Done;
+                    Effects::none()
+                } else {
+                    let next = seq.next();
+                    *self = Self::WaitingFrame { attempt: next, deadline };
+                    Effects::one(GlSyncPollEffect::RequestAnimationFrame { attempt: next })
+                }
+            }
+            (Self::WaitingFrame { .. } | Self::Polling { .. }, GlSyncPollEvent::Cancel) => {
+                *self = Self::Done;
+                Effects::none()
             }
             _ => Effects::none(),
         }

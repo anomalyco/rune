@@ -63,17 +63,17 @@ pub(super) enum Draw {
     /// input. `failed`: the GPU won't come automatically (no WebGPU, or it was lost until restore).
     Cpu { cpu: cpu_canvas::CpuCanvas, failed: bool },
     /// The GPU is made and its canvas configured, still see-through. `state` drives the
-    /// hand-over explicitly (`web_math::handover_machine::HandoverState`): while `Building` or
-    /// `WaitingChecks`, the CPU canvas keeps painting and zero GPU frames are submitted; once
-    /// built and all async error-scope checks have answered, one frame is drawn by both and
-    /// nothing new draws until `WaitingDone` resolves (`onSubmittedWorkDone` or `FINISH_LIMIT`).
+    /// hand-over explicitly (`web_math::handover_machine::HandoverState`): throughout `Building`,
+    /// `WaitingChecks`, and `WaitingDone`, the CPU canvas keeps painting animations and input
+    /// redraws while zero extra GPU frames are submitted; once `onSubmittedWorkDone` resolves,
+    /// `ReadyToFlip` draws an up-to-date GPU frame on the next rAF and swaps canvas visibility.
     HandingOver {
         cpu: cpu_canvas::CpuCanvas,
         side: GpuSide,
         seq: crate::machine::Seq,
         state: super::web_math::handover_machine::HandoverState,
-        /// Keeps WebGL2's `Weak<Cell<bool>>` `poll_until_done` alive for the active barrier.
-        barrier: Option<Rc<Cell<bool>>>,
+        /// Keeps WebGL2's rAF sync poll alive until the active barrier resolves or is dropped.
+        barrier: Option<DoneBarrier>,
     },
     Gpu(GpuSide),
     /// WebGL2 context lost on a GPU-first inline or document page that cannot overlay a CPU
@@ -100,16 +100,11 @@ impl Draw {
         }
     }
 
-    /// The GPU's hand-over frame is drawn and not finished: nothing new is drawn until it is.
-    pub(super) fn waiting_for_gpu(&self) -> bool {
-        matches!(self, Draw::HandingOver { state, .. } if state.waiting_for_gpu())
-    }
-
     pub(super) fn kind(&self) -> super::web_math::WebDrawKind {
         use super::web_math::WebDrawKind;
         match self {
             Draw::Cpu { .. } => WebDrawKind::Cpu,
-            Draw::HandingOver { .. } => WebDrawKind::HandingOver { waiting_for_gpu: self.waiting_for_gpu() },
+            Draw::HandingOver { .. } => WebDrawKind::HandingOver,
             Draw::Gpu(_) => WebDrawKind::Gpu,
             Draw::ContextLost => WebDrawKind::ContextLost,
             Draw::TerminalFailed => WebDrawKind::TerminalFailed,
@@ -667,38 +662,99 @@ pub(super) fn drift_wanted() -> bool {
     js_sys::Reflect::get(&js_sys::global(), &"__runeDrift".into()).is_ok_and(|v| js_sys::Array::is_array(&v))
 }
 
-/// A flag the GPU's queue sets once the work submitted so far is done, waking the loop.
-/// On WebGL2 (`wgpu-core`), schedules lightweight non-blocking `Device::poll` ticks until the
-/// callback fires or `FINISH_LIMIT` passes; on WebGPU the browser resolves it from its task queue.
-pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>, event: Wake) -> Rc<Cell<bool>> {
-    let flag = Rc::new(Cell::new(false));
-    let set = PageOnly((flag.clone(), proxy.clone()));
+/// Keeps an active `on_submitted_work_done` callback barrier alive. Dropping it cancels any
+/// further WebGL2 rAF polling for that barrier.
+pub(super) struct DoneBarrier {
+    done: Rc<Cell<bool>>,
+}
+
+impl DoneBarrier {
+    pub(super) fn is_done(&self) -> bool {
+        self.done.get()
+    }
+}
+
+/// A barrier the GPU's queue marks done once the work submitted so far finishes, waking the loop.
+/// On WebGL2 (`wgpu-core`), schedules non-blocking `Device::poll(PollType::Poll)` checks on
+/// `requestAnimationFrame` via `GlSyncPoll` until the callback fires or `FINISH_LIMIT` passes;
+/// on WebGPU the browser resolves it from its task queue.
+pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>, event: Wake) -> DoneBarrier {
+    let done = Rc::new(Cell::new(false));
+    let set = PageOnly((done.clone(), proxy.clone()));
     side.gpu.queue.on_submitted_work_done(move || {
-        let PageOnly((flag, proxy)) = &set;
-        flag.set(true);
+        let PageOnly((done, proxy)) = &set;
+        done.set(true);
         proxy.send_event(event).ok();
     });
     if super::web_math::needs_device_poll(side.backend) {
-        poll_until_done(side.gpu.device.clone(), &flag, Instant::now() + FINISH_LIMIT);
+        poll_until_done(side.gpu.device.clone(), &done, Instant::now() + FINISH_LIMIT);
     }
-    flag
+    DoneBarrier { done }
 }
 
-/// Interval between WebGL2 `Device::poll` checks while an async wgpu callback is pending.
-const POLL_INTERVAL: Duration = Duration::from_millis(8);
-
-/// Drives `wgpu-core` callbacks on WebGL2 after yielding to the browser event loop (WebGL2 sync
-/// objects only transition to `SIGNALED` across turns). Stops as soon as `flag` flips, is dropped,
-/// the device reports an error, or `deadline` passes.
+/// Drives `wgpu-core` callbacks on WebGL2 from `requestAnimationFrame` turns (WebGL2 sync
+/// objects only transition to `SIGNALED` across browser turns, and polling on rAF stays
+/// phase-locked to display vsync instead of drifting on a fixed timer). Stops as soon as `flag`
+/// flips, is dropped, the device reports an error, or `deadline` passes.
 fn poll_until_done(device: wgpu::Device, flag: &Rc<Cell<bool>>, deadline: Instant) {
-    fn step(device: wgpu::Device, weak: std::rc::Weak<Cell<bool>>, deadline: Instant) {
-        let Some(flag) = weak.upgrade() else { return };
-        if flag.get() || Instant::now() >= deadline { return; }
-        if device.poll(wgpu::PollType::Poll).is_err() || flag.get() { return; }
-        super::after(POLL_INTERVAL, move || step(device, weak, deadline));
+    use super::web_math::handover_machine::{GlSyncPoll, GlSyncPollEffect, GlSyncPollEvent};
+
+    struct PollLoop {
+        device: wgpu::Device,
+        weak: std::rc::Weak<Cell<bool>>,
+        seq: RefCell<crate::machine::Seq>,
+        state: RefCell<GlSyncPoll>,
     }
-    let weak = Rc::downgrade(flag);
-    super::after(Duration::ZERO, move || step(device, weak, deadline));
+
+    fn apply(lp: &Rc<PollLoop>, effects: crate::machine::Effects<GlSyncPollEffect>) {
+        for effect in effects {
+            match effect {
+                GlSyncPollEffect::RequestAnimationFrame { attempt } => {
+                    let Some(window) = web_sys::window() else { return };
+                    let lp_cb = Rc::clone(lp);
+                    let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
+                        let event = match lp_cb.weak.upgrade() {
+                            Some(flag) if !flag.get() => {
+                                GlSyncPollEvent::AnimationFrame { attempt, now: Instant::now() }
+                            }
+                            _ => GlSyncPollEvent::Cancel,
+                        };
+                        let eff = lp_cb.state.borrow_mut().step(&mut lp_cb.seq.borrow_mut(), event);
+                        apply(&lp_cb, eff);
+                    });
+                    if window.request_animation_frame(cb.unchecked_ref()).is_err() {
+                        let _ = lp.state.borrow_mut().step(&mut lp.seq.borrow_mut(), GlSyncPollEvent::Cancel);
+                    }
+                }
+                GlSyncPollEffect::PollDevice { attempt } => {
+                    let device_error = lp.device.poll(wgpu::PollType::Poll).is_err();
+                    let completed = lp.weak.upgrade().is_none_or(|flag| flag.get());
+                    let eff = lp.state.borrow_mut().step(
+                        &mut lp.seq.borrow_mut(),
+                        GlSyncPollEvent::Polled {
+                            attempt,
+                            completed,
+                            device_error,
+                            now: Instant::now(),
+                        },
+                    );
+                    apply(lp, eff);
+                }
+            }
+        }
+    }
+
+    let lp = Rc::new(PollLoop {
+        device,
+        weak: Rc::downgrade(flag),
+        seq: RefCell::new(crate::machine::Seq::default()),
+        state: RefCell::new(GlSyncPoll::default()),
+    });
+    let eff = lp.state.borrow_mut().step(
+        &mut lp.seq.borrow_mut(),
+        GlSyncPollEvent::Start { deadline },
+    );
+    apply(&lp, eff);
 }
 
 /// A value moved into a callback wgpu wants `Send`. In a page that callback runs on the page's

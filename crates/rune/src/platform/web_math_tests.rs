@@ -164,14 +164,15 @@ fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
 
 
 #[test]
-fn web_gate_skips_suspended_waiting_context_lost_and_moving() {
+fn web_gate_skips_suspended_context_lost_terminal_and_moving_but_draws_handing_over() {
     use crate::frame::host_step::Gate;
     assert!(matches!(web_frame_gate(true, WebDrawKind::Gpu, true), Gate::Skip));
     assert!(matches!(web_frame_gate(true, WebDrawKind::Cpu, false), Gate::Skip));
+    assert!(matches!(web_frame_gate(true, WebDrawKind::HandingOver, false), Gate::Skip));
     assert!(matches!(web_frame_gate(false, WebDrawKind::ContextLost, true), Gate::Skip));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::TerminalFailed, true), Gate::Skip));
     assert!(matches!(web_frame_gate(false, WebDrawKind::Moving, true), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: true }, true), Gate::Skip));
-    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver { waiting_for_gpu: false }, true), Gate::Draw));
+    assert!(matches!(web_frame_gate(false, WebDrawKind::HandingOver, true), Gate::Draw));
     assert!(matches!(web_frame_gate(false, WebDrawKind::Cpu, true), Gate::Draw));
     assert!(matches!(web_frame_gate(false, WebDrawKind::Gpu, false), Gate::Draw));
     assert!(matches!(web_frame_gate(false, WebDrawKind::Gpu, true), Gate::QuietTimer));
@@ -569,7 +570,7 @@ mod web_frame_host_tests {
                         Acquire::Missed(missed)
                     }
                 },
-                WebDrawKind::Cpu | WebDrawKind::HandingOver { .. } => {
+                WebDrawKind::Cpu | WebDrawKind::HandingOver => {
                     self.log.push("acquire:cpu");
                     Acquire::Ready(MockDrawable::Cpu)
                 }
@@ -650,7 +651,7 @@ mod web_frame_host_tests {
                     self.log.push("prepare:cpu");
                     RenderPrep::Ready(MockPrepared::Cpu)
                 }
-                (WebDrawKind::HandingOver { .. }, MockDrawable::Cpu) => {
+                (WebDrawKind::HandingOver, MockDrawable::Cpu) => {
                     let gpu = if self.handover_built {
                         self.handover_gpu_acquired += 1;
                         self.acquire_gpu_tex().ok()
@@ -819,8 +820,9 @@ mod web_frame_host_tests {
         assert!(gpu_host.log.contains(&"step:cycle_tick"));
         assert_eq!(gpu_host.clock.last(), gpu_host.step_at);
 
-        // HandingOver acquires GPU texture only during prepare_render when `built` is true.
-        let mut handover = MockWebHost::new(start, WebDrawKind::HandingOver { waiting_for_gpu: false });
+        // HandingOver keeps drawing CPU frames and acquires GPU texture only during prepare_render
+        // when `handover_built` is true (never skipping while waiting for the GPU to finish).
+        let mut handover = MockWebHost::new(start, WebDrawKind::HandingOver);
         assert_eq!(host_step::run(&mut handover), Outcome::Presented);
         assert_eq!(handover.handover_gpu_acquired, 0);
         assert!(handover.log.contains(&"prepare:handover_cpu"));
@@ -831,12 +833,14 @@ mod web_frame_host_tests {
         assert_eq!(handover.handover_gpu_acquired, 1);
         assert_eq!(handover.log, ["gate:draw", "acquire:cpu", "step", "sync", "prepare:handover_gpu", "render", "present", "settle"]);
 
-        // Waiting on GPU handover or ContextLost skips at gate without stepping.
+        // While waiting for GPU handover completion, CPU frames keep presenting without extra GPU acquires.
         handover.log.clear();
-        handover.draw = WebDrawKind::HandingOver { waiting_for_gpu: true };
-        assert_eq!(host_step::run(&mut handover), Outcome::Skipped);
-        assert_eq!(handover.log, ["gate:skip"]);
+        handover.handover_built = false;
+        assert_eq!(host_step::run(&mut handover), Outcome::Presented);
+        assert_eq!(handover.handover_gpu_acquired, 1);
+        assert_eq!(handover.log, ["gate:draw", "acquire:cpu", "step", "sync", "prepare:handover_cpu", "render", "present", "settle"]);
 
+        // ContextLost skips at gate without stepping.
         handover.log.clear();
         handover.draw = WebDrawKind::ContextLost;
         assert_eq!(host_step::run(&mut handover), Outcome::Skipped);

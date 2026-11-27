@@ -414,9 +414,27 @@ impl Browser {
         self.step_handover(web_math::handover_machine::HandoverEvent::GpuDone { attempt });
     }
 
-    /// The `FINISH_LIMIT` timeout timer fired for `attempt`.
-    pub(super) fn on_handover_timeout(&mut self, _attempt: crate::machine::Attempt) {
-        self.poll_handover_timeout();
+    /// The `FINISH_LIMIT` timeout timer fired for `attempt`. On WebGL2, gives the device one
+    /// final non-blocking poll first so a tab that was hidden (pausing rAF) still completes
+    /// cleanly if the GPU already finished.
+    pub(super) fn on_handover_timeout(&mut self, attempt: crate::machine::Attempt) {
+        let polled_done = {
+            let running = self.running.borrow();
+            match running.as_ref().map(|r| &r.draw) {
+                Some(Draw::HandingOver { side, barrier: Some(barrier), state, .. })
+                    if state.waiting_for_gpu() && web_math::needs_device_poll(side.backend) =>
+                {
+                    let _ = side.gpu.device.poll(wgpu::PollType::Poll);
+                    barrier.is_done()
+                }
+                _ => false,
+            }
+        };
+        if polled_done {
+            self.on_handover_done(attempt);
+        } else {
+            self.poll_handover_timeout();
+        }
     }
 
     /// Checks whether a hand-over frame in `WaitingDone` has passed `FINISH_LIMIT`.
@@ -444,60 +462,48 @@ impl Browser {
                 HandoverEffect::RequestRedraw => {
                     if let Some(window) = &self.window { window.request_redraw(); }
                 }
-                HandoverEffect::Complete => self.finish_handover(true),
-                HandoverEffect::FailTimeout => self.finish_handover(false),
+                HandoverEffect::FailTimeout => self.fail_handover_timeout(),
                 HandoverEffect::PrecheckFeatures
                 | HandoverEffect::DrawGpuFrame
-                | HandoverEffect::ArmFinishWait { .. } => {}
+                | HandoverEffect::DrawFlipFrame
+                | HandoverEffect::ArmFinishWait { .. }
+                | HandoverEffect::Complete => {}
             }
         }
     }
 
-    /// Finishes `Draw::HandingOver`: reveals the GPU canvas and removes the CPU canvas when
-    /// `succeeded`, or destroys the GPU and falls back to the CPU canvas on timeout.
-    fn finish_handover(&mut self, succeeded: bool) {
-        let timed_out = {
+    /// Arms the optional `globalThis.RUNE_LOSE_GPU_AFTER` harness timer after hand-over completes.
+    pub(super) fn arm_lose_gpu_harness(&self) {
+        if let Some(ms) = js_sys::Reflect::get(&js_sys::global(), &"RUNE_LOSE_GPU_AFTER".into()).ok().and_then(|v| v.as_f64()) {
+            let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
+            after(Duration::from_millis(ms as u64), move || {
+                *lost.borrow_mut() = Some(Loss::WebGpu("RUNE_LOSE_GPU_AFTER".into()));
+                proxy.send_event(Wake::App).ok();
+            });
+        }
+    }
+
+    /// Destroys the timed-out GPU device and falls back to the CPU canvas after `FINISH_LIMIT`.
+    fn fail_handover_timeout(&mut self) {
+        {
             let mut running = self.running.borrow_mut();
             let Some(r) = &mut *running else { return };
             let Draw::HandingOver { cpu, side, .. } = std::mem::replace(&mut r.draw, Draw::Moving) else { return };
-            let canvas = self.window.as_ref().and_then(|w| w.canvas());
-            if !succeeded {
-                web_sys::console::warn_1(&"rune: the GPU didn't finish its first frame; the page draws on the CPU".into());
-                crate::marks::mark("web.handover.failed");
-                side.gpu.device.destroy();
-                drop(side);
-                r.app.release_compositor_gpu();
-                let atlas = &mut r.app.rt_mut().text.atlas;
-                crate::render::cpu_boot::attach_text(atlas);
-                atlas.refill_gpu_masks();
-                r.draw = Draw::Cpu { cpu, failed: true };
-                true
-            } else {
-                if let Some(c) = &canvas { c.style().remove_property("opacity").ok(); }
-                cpu.remove();
-                // A harness checking the way back to the CPU (`globalThis.RUNE_LOSE_GPU_AFTER`, in ms)
-                // has the device count as lost that long after the hand-over, as the browser reports it.
-                if let Some(ms) = js_sys::Reflect::get(&js_sys::global(), &"RUNE_LOSE_GPU_AFTER".into()).ok().and_then(|v| v.as_f64()) {
-                    let (lost, proxy) = (self.lost.clone(), self.proxy.clone());
-                    after(Duration::from_millis(ms as u64), move || {
-                        *lost.borrow_mut() = Some(Loss::WebGpu("RUNE_LOSE_GPU_AFTER".into()));
-                        proxy.send_event(Wake::App).ok();
-                    });
-                }
-                r.draw = Draw::Gpu(side);
-                r.last_presented = None;
-                crate::marks::mark("web.handover.done");
-                if let Some(window) = &self.window { window.request_redraw(); }
-                false
-            }
-        };
-        if timed_out {
-            self.cancel_webgpu_recovery();
-            self.notify_gpu_fallback(
-                crate::GpuFallbackStage::HandoverTimeout,
-                "GPU hand-over frame timed out",
-            );
+            web_sys::console::warn_1(&"rune: the GPU didn't finish its first frame; the page draws on the CPU".into());
+            crate::marks::mark("web.handover.failed");
+            side.gpu.device.destroy();
+            drop(side);
+            r.app.release_compositor_gpu();
+            let atlas = &mut r.app.rt_mut().text.atlas;
+            crate::render::cpu_boot::attach_text(atlas);
+            atlas.refill_gpu_masks();
+            r.draw = Draw::Cpu { cpu, failed: true };
         }
+        self.cancel_webgpu_recovery();
+        self.notify_gpu_fallback(
+            crate::GpuFallbackStage::HandoverTimeout,
+            "GPU hand-over frame timed out",
+        );
     }
 
     fn requested_features(&self) -> wgpu::Features {
