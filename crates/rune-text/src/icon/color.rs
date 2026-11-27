@@ -161,11 +161,12 @@ fn bytes_of(p: &Pixels) -> usize {
 
 #[cfg(feature = "svg")]
 fn rasterize(icon: &Icon, px: u32, current: &str, one: Option<Color>) -> Option<Pixels> {
-    let v = icon.view;
+    if px == 0 {
+        return None;
+    }
+    let vb = icon.view_box()?;
     let body = if current.is_empty() { icon.body.to_owned() } else { icon.body.replace("currentColor", current) };
-    let doc = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 {v} {v}">{body}</svg>"#
-    );
+    let doc = super::view_box::svg_document(&body, vb, px);
     let (w, h, mut rgba) = rune_image::svg_rgba(doc.as_bytes(), px).ok()?;
     // One colour: the drawing's coverage in it; its alpha comes from the instance.
     if let Some(c) = one {

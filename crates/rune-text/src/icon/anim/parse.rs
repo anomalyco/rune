@@ -182,7 +182,7 @@ pub(super) enum Op {
 /// A compiled monochrome animated icon: flat op stream + validated SMIL tracks.
 #[derive(Clone)]
 pub(crate) struct CompiledAnim {
-    pub(super) view: f32,
+    pub(super) view_box: [f32; 4],
     pub(super) ops: Vec<Op>,
     pub(super) tracks: Vec<Track>,
     pub(super) node_count: usize,
@@ -206,13 +206,21 @@ pub(crate) enum CompileOutcome {
     Rejected,
 }
 
-/// Compiles `body` (for an icon with square `view`) into a pre-parsed monochrome animation AST.
+/// Compiles `body` (resolving a root `<svg viewBox="...">` or falling back to square `view`)
+/// into a pre-parsed monochrome animation AST.
 pub(crate) fn compile(body: &str, view: f32) -> CompileOutcome {
     compile_inner(body, view).unwrap_or(CompileOutcome::Rejected)
 }
 
 fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
-    if !may_be_animated(body) || !view.is_finite() || !(MIN_VIEW_DIM..=MAX_VIEW_DIM).contains(&view) {
+    if !may_be_animated(body) {
+        return None;
+    }
+    let view_box = super::super::view_box::resolve(body, view)?;
+    if view_box[2].max(view_box[3]) < MIN_VIEW_DIM
+        || view_box[0].abs() > MAX_COORD
+        || view_box[1].abs() > MAX_COORD
+    {
         return None;
     }
     if body.as_bytes().contains(&0) {
@@ -363,7 +371,7 @@ fn compile_inner(body: &str, view: f32) -> Option<CompileOutcome> {
         return Some(CompileOutcome::StaticOnly);
     }
     let has_indefinite = tracks.iter().any(|t| !t.is_set && t.repeat.is_none());
-    Some(CompileOutcome::Animated(CompiledAnim { view, ops, tracks, node_count: next_node_id as usize, has_indefinite }))
+    Some(CompileOutcome::Animated(CompiledAnim { view_box, ops, tracks, node_count: next_node_id as usize, has_indefinite }))
 }
 
 struct StackEntry<'a> {
