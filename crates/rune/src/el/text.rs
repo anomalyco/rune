@@ -426,6 +426,21 @@ impl El {
             .display_pills()
             .into_iter()
             .map(|(start, end, id)| {
+                if let Some(inline) = inp.pill_inline_image.as_ref().and_then(|f| f(id)) {
+                    return crate::text::PillChip {
+                        start,
+                        end,
+                        icon: None,
+                        image: None,
+                        bg: None,
+                        fg: None,
+                        ring: None,
+                        radius: None,
+                        pad_x: None,
+                        margin_x: None,
+                        bare: Some(Box::new(inline.into_bare())),
+                    };
+                }
                 let st = inp.pill_style.as_ref().map(|f| f(id)).unwrap_or_default();
                 let image = inp.pill_image.as_ref().and_then(|f| f(id));
                 let icon = if image.is_some() {
@@ -478,7 +493,7 @@ impl El {
             }
         }
         let pill_fg = t.cold.pill_colors.and_then(|(_, fg)| fg);
-        base_spans.extend(t.cold.pills.iter().filter_map(|p| {
+        base_spans.extend(t.cold.pills.iter().filter(|p| p.bare.is_none()).filter_map(|p| {
             Some(Span { start: p.start, end: p.end, color: Some(p.fg.or(pill_fg)?), ..Span::default() })
         }));
         let mut flat = crate::text::flatten_spans(&base_spans);

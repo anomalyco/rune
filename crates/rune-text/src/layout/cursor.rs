@@ -201,7 +201,7 @@ pub fn cursor_geometry(
         m.block_max_coord.max(m.content_block_max_coord) as f64,
     );
     // Parley puts a caret at a pill's edge against its label, inside the chip: move it outside.
-    if let Some(px) = pill_edge(layout, at, ((bb.y0 + bb.y1) * 0.5) as f32) {
+    if let Some(px) = pill_edge(layout, &line, at) {
         let w = bb.x1 - bb.x0;
         bb.x0 = px as f64;
         bb.x1 = bb.x0 + w;
@@ -209,17 +209,13 @@ pub fn cursor_geometry(
     bb
 }
 
-/// The x just outside the pill chip whose label starts or ends at byte `at`, on the line at
-/// height `y`: after the chip of a pill ending there, else before one starting there.
-fn pill_edge(layout: &Layout<Ink>, at: usize, y: f32) -> Option<f32> {
+/// The x just outside the pill chip whose label starts or ends at byte `at`, on `line`: after
+/// the chip of a pill ending there, else before one starting there.
+fn pill_edge(layout: &Layout<Ink>, line: &parley::Line<'_, Ink>, at: usize) -> Option<f32> {
     let ids: Vec<u64> = layout.inline_boxes().filter(|b| b.index == at && b.id & PILL_BOX != 0).map(|b| b.id).collect();
     if ids.is_empty() {
         return None;
     }
-    let line = layout.lines().find(|l| {
-        let m = l.metrics();
-        m.block_min_coord <= y && y <= m.block_max_coord
-    })?;
     let boxes: Vec<parley::PositionedInlineBox> = line
         .items()
         .filter_map(|it| match it {
@@ -298,6 +294,21 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
             && let Some(ib) = layout.inline_boxes().find(|ib| ib.id == b.id)
         {
             if b.id & (PILL_BOX | SPAN_BOX) != 0 {
+                // A replaced pill (`InlineImage` / `El::pill_inline_image`) occupies its whole
+                // visual box inside the leading `PILL_BOX` (`baseline.is_some()`); clicking its
+                // trailing half places the caret after the pill, matching glyph hit-testing.
+                if b.id & PILL_BOX != 0 && b.id & 1 == 0 && ib.baseline.is_some() {
+                    let trail_left = line.items().find_map(|it| match it {
+                        PositionedLayoutItem::InlineBox(t) if t.id == (b.id | 1) => Some(t.x <= b.x),
+                        _ => None,
+                    }).unwrap_or(rtl);
+                    let trailing_half = if trail_left { x < b.x + b.width * 0.5 } else { x > b.x + b.width * 0.5 };
+                    if trailing_half
+                        && let Some(trail) = layout.inline_boxes().find(|t| t.id == (b.id | 1))
+                    {
+                        return Cursor::from_byte_index(layout, trail.index, Affinity::Upstream);
+                    }
+                }
                 let aff = if b.id & 1 == 0 { Affinity::Downstream } else { Affinity::Upstream };
                 return Cursor::from_byte_index(layout, ib.index, aff);
             }

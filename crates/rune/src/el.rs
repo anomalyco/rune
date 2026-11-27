@@ -195,6 +195,8 @@ pub(crate) struct PasteFn {
 pub(crate) type PillIconFn = Rc<dyn Fn(&str) -> Option<&'static crate::Icon>>;
 /// A pill's leading full-colour image by its id; see [`El::pill_image`].
 pub(crate) type PillImageFn = Rc<dyn Fn(&str) -> Option<crate::Pixels>>;
+/// A pill's replacing inline image by its id; see [`El::pill_inline_image`].
+pub(crate) type PillInlineImageFn = Rc<dyn Fn(&str) -> Option<InlineImage>>;
 /// A pill's look by its id; see [`El::pill_style`].
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
 /// A pill's plain-text copy payload by its id; see [`El::pill_copy_text`].

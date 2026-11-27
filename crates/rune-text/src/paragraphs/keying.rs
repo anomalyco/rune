@@ -139,7 +139,7 @@ pub(super) fn key_paragraphs(spec: &TextInput<'_>, layout_spans: &[Span], style_
             s.hash_layout(&mut h);
         }
         for p in pills_in(spec.pills, a, b, &isolates) {
-            (p.start, p.end, p.icon.is_some(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits()))).hash(&mut h);
+            hash::hash_pill_layout(&p, &mut h);
         }
         for sb in span_boxes_in(spec.span_boxes, a, b, &isolates) {
             if sb.style.has_padding() {

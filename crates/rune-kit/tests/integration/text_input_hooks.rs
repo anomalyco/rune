@@ -561,6 +561,37 @@ fn text_area_forwards_pill_image_and_line_fills() {
 }
 
 #[test]
+fn text_area_forwards_pill_inline_image() {
+    let emoji = rune::Pixels::new();
+    emoji.set(16, 16, vec![255; 16 * 16 * 4]);
+    let mut edit = TextEdit::new("oi ").rich();
+    edit.insert_pill("emoji:gato", ":gato:");
+    edit.insert(" tudo");
+
+    let mut rt = Runtime::new(
+        (edit, emoji),
+        |(edit, emoji): &(TextEdit, rune::Pixels), _: &mut Cx<_>| {
+            let k = Kit::neutral(true);
+            let px = emoji.clone();
+            col().padding(8.0).child(
+                TextArea::new(edit)
+                    .width(Some(280.0))
+                    .pill_inline_image(move |id| {
+                        (id == "emoji:gato").then(|| rune::InlineImage::new(px.clone(), 20.0, 16.0, 4.0))
+                    })
+                    .build(&k)
+                    .key("ta"),
+            )
+        },
+        (320.0, 120.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let img = rt.instances.iter().find(|q| q.params[1] == rune::render::KIND_IMAGE).expect("TextArea forwards pill_inline_image");
+    assert!((img.rect[2] - 20.0).abs() <= 1.0 && (img.rect[3] - 20.0).abs() <= 1.0, "img rect={:?}", img.rect);
+}
+
+#[test]
 fn on_input_copy_and_pill_copy_text_forward_across_kit_fields() {
     struct State {
         ti: TextEdit,
