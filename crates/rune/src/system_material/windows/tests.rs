@@ -19,7 +19,7 @@ fn base_inputs() -> MaterialInputs {
 }
 
 fn draw(id: u64, material: SystemMaterial, rect: [f32; 4], radius: f32, opacity: f32) -> MaterialDraw {
-    MaterialDraw { id: NodeId(id), material, rect, radius, continuous: false, opacity }
+    MaterialDraw { id: NodeId(id), material, rect, radius, continuous: false, opacity, params: MaterialParams::new() }
 }
 
 #[derive(Clone, Debug, PartialEq)]

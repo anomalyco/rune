@@ -58,6 +58,105 @@ pub enum SystemMaterial {
     Sidebar,
 }
 
+/// Maximum backdrop saturation multiplier supported by [`MaterialParams::saturation`].
+pub(crate) const MAX_MATERIAL_SATURATION: f32 = 4.0;
+
+const fn clamp_param(v: f32, max: f32) -> Option<f32> {
+    if !v.is_finite() {
+        None
+    } else if v <= 0.0 {
+        Some(0.0)
+    } else if v > max {
+        Some(max)
+    } else {
+        Some(v)
+    }
+}
+
+/// Optional per-element appearance overrides for
+/// [`El::system_material_with`](crate::El::system_material_with).
+///
+/// Every field defaults to `None`, leaving the platform preset unchanged. On Windows 11
+/// (`windows-system-material`), these tune the Acrylic `CompositionEffectBrush` recipe:
+/// - [`Self::tint`]: optional RGB tint colour (alpha ignored); unset keeps the active
+///   `(SystemMaterial, dark)` WinUI 3 light/dark theme colour automatically.
+/// - [`Self::tint_opacity`]: Color/Tint blend pass opacity (`0.0..=1.0`).
+/// - [`Self::luminosity_opacity`]: Luminosity blend pass opacity (`0.0..=1.0`).
+/// - [`Self::saturation`]: backdrop colour saturation multiplier (`0.0` = monochrome, `1.0` =
+///   unchanged, `> 1.0` = saturation boost such as `1.5`–`1.8`, clamped to `0.0..=4.0`).
+///
+/// Platforms that cannot honour a field ignore it.
+///
+/// ```
+/// use rune::{Color, MaterialParams};
+///
+/// const GLASS_LOOK: MaterialParams = MaterialParams::new()
+///     .luminosity_opacity(0.70)
+///     .tint_opacity(0.08)
+///     .saturation(1.6);
+/// assert_eq!(GLASS_LOOK.get_luminosity_opacity(), Some(0.70));
+/// assert_eq!(GLASS_LOOK.get_tint_opacity(), Some(0.08));
+/// assert_eq!(GLASS_LOOK.get_saturation(), Some(1.6));
+/// assert_eq!(GLASS_LOOK.get_tint(), None);
+///
+/// let tinted = GLASS_LOOK.tint(Color { r: 0.1, g: 0.2, b: 0.4, a: 1.0 });
+/// assert!(tinted.get_tint().is_some());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MaterialParams {
+    pub(crate) tint: Option<Color>,
+    pub(crate) tint_opacity: Option<f32>,
+    pub(crate) luminosity_opacity: Option<f32>,
+    pub(crate) saturation: Option<f32>,
+}
+
+impl MaterialParams {
+    /// Empty overrides: keep every platform preset's default tint, luminosity, and saturation.
+    pub const fn new() -> Self {
+        Self { tint: None, tint_opacity: None, luminosity_opacity: None, saturation: None }
+    }
+
+    /// Override the material's RGB tint colour (alpha is ignored; control blend strengths with
+    /// [`Self::tint_opacity`] and [`Self::luminosity_opacity`]). Leaving this unset keeps each
+    /// [`SystemMaterial`] preset's light/dark theme colour automatically.
+    pub const fn tint(mut self, color: Color) -> Self {
+        self.tint = Some(color);
+        self
+    }
+
+    /// Override the Color/Tint blend pass opacity (`0.0..=1.0`; non-finite clears the override).
+    pub const fn tint_opacity(mut self, opacity: f32) -> Self {
+        self.tint_opacity = clamp_param(opacity, 1.0);
+        self
+    }
+
+    /// Override the Luminosity blend pass opacity (`0.0..=1.0`; non-finite clears the override).
+    pub const fn luminosity_opacity(mut self, opacity: f32) -> Self {
+        self.luminosity_opacity = clamp_param(opacity, 1.0);
+        self
+    }
+
+    /// Adjust backdrop colour saturation (`0.0` = monochrome, `1.0` = unchanged backdrop,
+    /// `> 1.0` = over-saturated boost such as `1.5`–`1.8`, clamped to `0.0..=4.0`; non-finite
+    /// clears the override).
+    pub const fn saturation(mut self, saturation: f32) -> Self {
+        self.saturation = clamp_param(saturation, MAX_MATERIAL_SATURATION);
+        self
+    }
+
+    /// Configured RGB tint colour override, or `None` to keep the platform preset's theme colour.
+    pub const fn get_tint(&self) -> Option<Color> { self.tint }
+
+    /// Configured Color/Tint opacity override in `0.0..=1.0`, or `None` for the preset default.
+    pub const fn get_tint_opacity(&self) -> Option<f32> { self.tint_opacity }
+
+    /// Configured Luminosity opacity override in `0.0..=1.0`, or `None` for the preset default.
+    pub const fn get_luminosity_opacity(&self) -> Option<f32> { self.luminosity_opacity }
+
+    /// Configured backdrop saturation multiplier in `0.0..=4.0`, or `None` for unchanged (`1.0`).
+    pub const fn get_saturation(&self) -> Option<f32> { self.saturation }
+}
+
 /// Default native material views per window. Elements past the window's limit draw their
 /// fallback instead; raise or lower the per-window cap (up to 64) with
 /// [`App::max_native_materials`](crate::App::max_native_materials).
@@ -143,6 +242,8 @@ pub struct MaterialDraw {
     pub continuous: bool,
     /// The element's effective opacity, ancestors included.
     pub opacity: f32,
+    /// Per-element appearance overrides set by [`El::system_material_with`](crate::El::system_material_with).
+    pub(crate) params: MaterialParams,
 }
 
 impl MaterialDraw {
@@ -152,6 +253,11 @@ impl MaterialDraw {
         let s = f64::from(scale.max(1e-3));
         (self.rect.map(|v| f64::from(v) / s), f64::from(self.radius) / s)
     }
+
+    /// Per-element appearance overrides set by
+    /// [`El::system_material_with`](crate::El::system_material_with), or [`MaterialParams::new`]
+    /// when built with [`El::system_material`](crate::El::system_material).
+    pub const fn params(&self) -> MaterialParams { self.params }
 }
 
 /// One presented frame's [`MaterialDraw`]s and the window scale they are measured at, as

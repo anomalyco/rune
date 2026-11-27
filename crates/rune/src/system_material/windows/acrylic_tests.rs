@@ -289,6 +289,7 @@ fn theme_and_material_changes_update_visual_once_and_idle_frames_emit_zero_calls
         radius: 24.0,
         continuous: false,
         opacity: 1.0,
+        params: crate::MaterialParams::new(),
     };
     // Initial dark Popover frame: 1 update + 1 commit.
     assert!(ctrl.present(&[popover], true, &mut seam, || {}));
@@ -364,26 +365,28 @@ fn cached_material_subtree_replays_only_non_opaque_draws_for_windows() {
 #[test]
 fn brush_choice_degrades_gracefully_to_wcag_flat_tint_on_factory_failure() {
     use crate::system_material::windows::acrylic::{BrushChoice, resolve_brush_choice};
+    let default_params = crate::MaterialParams::new();
+    let expected_key = AcrylicRecipe::for_material(SystemMaterial::Popover, true).cache_key();
 
     assert_eq!(
-        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Popover, true, true),
-        BrushChoice::Acrylic { material: SystemMaterial::Popover, dark: true },
+        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Popover, default_params, true, true),
+        BrushChoice::Acrylic { key: expected_key },
     );
     // Factory/ExtendedError failure degrades to WCAG flat tint rather than raw blur or State::Failed.
     assert_eq!(
-        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Popover, true, false),
+        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Popover, default_params, true, false),
         BrushChoice::FlatTint { argb: FLAT_TINT_DARK },
     );
     assert_eq!(
-        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Glass, false, false),
+        resolve_brush_choice(TintMode::Acrylic, SystemMaterial::Glass, default_params, false, false),
         BrushChoice::FlatTint { argb: FLAT_TINT_LIGHT },
     );
     assert_eq!(
-        resolve_brush_choice(TintMode::Flat, SystemMaterial::Sidebar, true, true),
+        resolve_brush_choice(TintMode::Flat, SystemMaterial::Sidebar, default_params, true, true),
         BrushChoice::FlatTint { argb: FLAT_TINT_DARK },
     );
     assert_eq!(
-        resolve_brush_choice(TintMode::Raw, SystemMaterial::Popover, true, true),
+        resolve_brush_choice(TintMode::Raw, SystemMaterial::Popover, default_params, true, true),
         BrushChoice::RawHostBackdrop,
     );
 }
@@ -444,6 +447,198 @@ fn real_acrylic_effect_factory_succeeds_across_parallel_threads_and_same_thread_
                 "skipping parallel/repeat live Windows Acrylic COM test: {}",
                 avail.summary()
             );
+            probe_tests::assert_production_falls_back_when_probe_unavailable(avail);
+        }
+    }
+}
+
+#[test]
+fn material_params_override_acrylic_recipe_and_saturation_matrix_is_exact() {
+    use crate::MaterialParams;
+    use crate::system_material::windows::acrylic::{
+        LUMA_B, LUMA_G, LUMA_R, apply_color_matrix_srgb, saturation_color_matrix,
+    };
+
+    // Empty params keep every default preset unchanged and omit the ColorMatrix node.
+    for material in [SystemMaterial::Glass, SystemMaterial::Popover, SystemMaterial::Sidebar] {
+        for dark in [false, true] {
+            let base = AcrylicRecipe::for_material(material, dark);
+            let resolved = AcrylicRecipe::resolve(material, dark, MaterialParams::new());
+            assert_eq!(resolved, base);
+            assert!(resolved.graph_desc().saturation_matrix.is_none());
+            assert_eq!(AcrylicRecipe::from_key(resolved.cache_key()), base);
+        }
+    }
+
+    // Partial override keeps theme tint RGB while overriding tint_opacity, luminosity_opacity, and saturation.
+    let params = MaterialParams::new()
+        .tint_opacity(0.08)
+        .luminosity_opacity(0.65)
+        .saturation(1.8);
+    let dark_glass = AcrylicRecipe::resolve(SystemMaterial::Glass, true, params);
+    let light_glass = AcrylicRecipe::resolve(SystemMaterial::Glass, false, params);
+    assert_eq!(dark_glass.tint, [0x2C, 0x2C, 0x2C], "unset tint tracks dark theme");
+    assert_eq!(light_glass.tint, [0xFC, 0xFC, 0xFC], "unset tint tracks light theme");
+    assert!((dark_glass.tint_opacity - 0.08).abs() < 1e-6);
+    assert!((dark_glass.luminosity_opacity - 0.65).abs() < 1e-6);
+    assert!((dark_glass.saturation - 1.8).abs() < 1e-6);
+    assert!(dark_glass.graph_desc().saturation_matrix.is_some());
+
+    // Explicit linear tint colour encodes to straight sRGB [u8; 3] (independent of theme).
+    let blue = crate::color::hex("#2060C0").unwrap();
+    let tinted = AcrylicRecipe::resolve(SystemMaterial::Glass, true, params.tint(blue));
+    assert_eq!(tinted.tint, [0x20, 0x60, 0xC0]);
+
+    // Verify row-major Direct2D 5x4 saturation matrix (non-transposed) for s=0.0, 1.0, and 1.5.
+    let m_gray = saturation_color_matrix(0.0);
+    let red_gray = apply_color_matrix_srgb(&m_gray, [1.0, 0.0, 0.0]);
+    for ch in red_gray {
+        assert!((ch - LUMA_R).abs() < 1e-5, "pure red at s=0 must collapse to luma {LUMA_R}: {red_gray:?}");
+    }
+    let green_gray = apply_color_matrix_srgb(&m_gray, [0.0, 1.0, 0.0]);
+    for ch in green_gray {
+        assert!((ch - LUMA_G).abs() < 1e-5, "pure green at s=0 must collapse to luma {LUMA_G}: {green_gray:?}");
+    }
+    let blue_gray = apply_color_matrix_srgb(&m_gray, [0.0, 0.0, 1.0]);
+    for ch in blue_gray {
+        assert!((ch - LUMA_B).abs() < 1e-5, "pure blue at s=0 must collapse to luma {LUMA_B}: {blue_gray:?}");
+    }
+
+    // s = 1.0 is exact identity.
+    let m_id = saturation_color_matrix(1.0);
+    let sample = [0.75, 0.35, 0.55];
+    let out_id = apply_color_matrix_srgb(&m_id, sample);
+    for k in 0..3 {
+        assert!((out_id[k] - sample[k]).abs() < 1e-6);
+    }
+
+    // s = 1.5 boosts chroma by 1.5x while preserving Rec.709 luma (within gamut).
+    let m_boost = saturation_color_matrix(1.5);
+    let muted_red = [0.8, 0.3, 0.3];
+    let boosted = apply_color_matrix_srgb(&m_boost, muted_red);
+    let chroma = |[r, g, b]: [f32; 3]| r.max(g).max(b) - r.min(g).min(b);
+    let luma = |[r, g, b]: [f32; 3]| LUMA_R * r + LUMA_G * g + LUMA_B * b;
+    assert!((chroma(boosted) - chroma(muted_red) * 1.5).abs() < 1e-4, "boosted={boosted:?}");
+    assert!((luma(boosted) - luma(muted_red)).abs() < 1e-4, "luma must be preserved");
+
+    // End-to-end Acrylic simulation: saturation > 1.0 boosts chroma over neutral Glass, while s = 0.0 desaturates.
+    let muted_blue = [0.40, 0.50, 0.70];
+    let neutral_out = simulate_acrylic_srgb(AcrylicRecipe::for_material(SystemMaterial::Glass, true), muted_blue);
+    let boosted_out = simulate_acrylic_srgb(
+        AcrylicRecipe::resolve(SystemMaterial::Glass, true, MaterialParams::new().saturation(1.8)),
+        muted_blue,
+    );
+    let mono_out = simulate_acrylic_srgb(
+        AcrylicRecipe::resolve(SystemMaterial::Glass, true, MaterialParams::new().saturation(0.0)),
+        muted_blue,
+    );
+    assert!(chroma(boosted_out) > chroma(neutral_out) * 1.3, "saturation boost must increase backdrop chroma: {neutral_out:?} -> {boosted_out:?}");
+    assert!(chroma(mono_out) < 1e-4, "saturation 0.0 with neutral tint must be monochrome: {mono_out:?}");
+}
+
+#[test]
+fn material_params_change_updates_visual_once_and_idle_stays_silent() {
+    use crate::MaterialParams;
+
+    #[derive(Default)]
+    struct RecordingSeam {
+        updates: Vec<VisualSpec>,
+        commits: usize,
+    }
+    impl WindowsMaterialSeam for RecordingSeam {
+        fn set_handover_topmost(&mut self, _: isize, _: bool) -> Result<(), String> { Ok(()) }
+        fn set_host_backdrop_brush(&mut self, _: isize, _: bool) -> Result<(), String> { Ok(()) }
+        fn create_target(&mut self, _: isize) -> Result<(), String> { Ok(()) }
+        fn destroy_target(&mut self) {}
+        fn create_visual(&mut self, _: usize) -> Result<(), String> { Ok(()) }
+        fn update_visual(&mut self, _: usize, spec: VisualSpec) -> Result<(), String> {
+            self.updates.push(spec);
+            Ok(())
+        }
+        fn hide_visual(&mut self, _: usize) -> Result<(), String> { Ok(()) }
+        fn remove_visual(&mut self, _: usize) {}
+        fn commit(&mut self) -> Result<(), String> { self.commits += 1; Ok(()) }
+    }
+
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
+    let mut seam = RecordingSeam::default();
+    assert!(ctrl.update(Some(0xE010), base_inputs(), true, &mut seam));
+
+    let base_draw = MaterialDraw {
+        id: NodeId(42),
+        material: SystemMaterial::Glass,
+        rect: [10.0, 20.0, 200.0, 60.0],
+        radius: 20.0,
+        continuous: true,
+        opacity: 1.0,
+        params: MaterialParams::new().luminosity_opacity(0.65).saturation(1.6),
+    };
+    assert!(ctrl.present(&[base_draw], true, &mut seam, || {}));
+    assert_eq!(seam.updates.len(), 1);
+    assert_eq!(seam.commits, 1);
+    assert_eq!(seam.updates[0].params, base_draw.params);
+
+    // Idle frame with identical params emits zero calls.
+    seam.updates.clear();
+    seam.commits = 0;
+    assert!(ctrl.present(&[base_draw], true, &mut seam, || {}));
+    assert!(seam.updates.is_empty());
+    assert_eq!(seam.commits, 0);
+
+    // Updating params updates the visual once and commits once.
+    let tuned_draw = MaterialDraw {
+        params: base_draw.params.tint_opacity(0.18).saturation(2.2),
+        ..base_draw
+    };
+    assert!(ctrl.present(&[tuned_draw], true, &mut seam, || {}));
+    assert_eq!(seam.updates.len(), 1);
+    assert_eq!(seam.commits, 1);
+    assert_eq!(seam.updates[0].params, tuned_draw.params);
+}
+
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+#[test]
+fn real_acrylic_effect_factory_compiles_custom_saturation_and_tint_without_window() {
+    use crate::MaterialParams;
+    match real::probe_host() {
+        probe::HostAvailability::Available { .. } => {
+            let custom_recipes = [
+                // Monochrome (saturation = 0.0 via CLSID_D2D1ColorMatrix)
+                AcrylicRecipe::resolve(
+                    SystemMaterial::Glass,
+                    true,
+                    MaterialParams::new().luminosity_opacity(0.60).tint_opacity(0.10).saturation(0.0),
+                ),
+                // Apple-style over-saturated glass (saturation = 1.8 > 1.0 via CLSID_D2D1ColorMatrix)
+                AcrylicRecipe::resolve(
+                    SystemMaterial::Glass,
+                    true,
+                    MaterialParams::new().luminosity_opacity(0.65).tint_opacity(0.08).saturation(1.8),
+                ),
+                // Strong saturation boost + custom RGB tint on light theme
+                AcrylicRecipe::resolve(
+                    SystemMaterial::Popover,
+                    false,
+                    MaterialParams::new()
+                        .tint(Color { r: 0.12, g: 0.30, b: 0.72, a: 1.0 })
+                        .tint_opacity(0.25)
+                        .luminosity_opacity(0.70)
+                        .saturation(2.5),
+                ),
+                // Custom tint/luminosity with neutral saturation (4-node graph)
+                AcrylicRecipe::resolve(
+                    SystemMaterial::Sidebar,
+                    true,
+                    MaterialParams::new().tint_opacity(0.30).luminosity_opacity(0.80),
+                ),
+            ];
+            let compiled = real::compile_acrylic_recipes(&custom_recipes).expect(
+                "custom tuned Acrylic recipes (including saturation > 1.0 ColorMatrix) must compile on Windows 11",
+            );
+            assert_eq!(compiled, custom_recipes.len());
+        }
+        avail @ probe::HostAvailability::Unavailable { .. } => {
+            eprintln!("skipping live Windows custom Acrylic COM test: {}", avail.summary());
             probe_tests::assert_production_falls_back_when_probe_unavailable(avail);
         }
     }

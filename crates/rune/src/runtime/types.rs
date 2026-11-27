@@ -54,7 +54,7 @@ pub(crate) struct NodeCold {
     pub(super) pixel_aspect: Option<f32>,
     /// `El::aspect_fit`: the ratio and the element's own style, which the fitted size replaces.
     pub(super) aspect_fit: Option<Box<(f32, CompactStyle)>>,
-    pub(super) material: Option<crate::SystemMaterial>,
+    pub(super) material: Option<(crate::SystemMaterial, crate::MaterialParams)>,
     /// `El::help`.
     pub(crate) help: Option<String>,
     /// `El::help_when_truncated`.

@@ -61,6 +61,7 @@ pub(in crate::runtime) enum RasterPass {
 pub(in crate::runtime) struct CachedMaterial {
     pub(in crate::runtime) id: NodeId,
     pub(in crate::runtime) material: crate::SystemMaterial,
+    pub(in crate::runtime) params: crate::MaterialParams,
     /// `[x - origin_x, y - origin_y, width, height]` at `raster_scale`.
     pub(in crate::runtime) rel_rect: [f32; 4],
     /// Clamped corner radius at `raster_scale`.
@@ -329,6 +330,7 @@ impl state::PaintState {
                             radius: m.radius * k,
                             continuous: m.continuous,
                             opacity,
+                            params: m.params,
                         };
                         self.materials.push(replayed);
                         #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
@@ -479,6 +481,7 @@ impl state::PaintState {
             cached_materials.push(CachedMaterial {
                 id: draw.id,
                 material: draw.material,
+                params: draw.params,
                 rel_rect: [
                     draw.rect[0] - ac.origin[0],
                     draw.rect[1] - ac.origin[1],

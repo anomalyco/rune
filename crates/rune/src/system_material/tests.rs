@@ -7,7 +7,7 @@ use bytemuck::Zeroable;
 
 #[test]
 fn native_frames_are_points_from_the_top_left() {
-    let draw = MaterialDraw { id: NodeId(1), material: SystemMaterial::Glass, rect: [20.0, 40.0, 200.0, 100.0], radius: 24.0, continuous: false, opacity: 1.0 };
+    let draw = MaterialDraw { id: NodeId(1), material: SystemMaterial::Glass, rect: [20.0, 40.0, 200.0, 100.0], radius: 24.0, continuous: false, opacity: 1.0, params: MaterialParams::new() };
     assert_eq!(draw.points(2.0), ([10.0, 20.0, 100.0, 50.0], 12.0));
     assert_eq!(draw.points(1.0), ([20.0, 40.0, 200.0, 100.0], 24.0));
 }
@@ -663,4 +663,73 @@ fn on_materials_contract_animating_rest_exact_box_and_under_cache() {
             }
         }
     }
+}
+
+#[test]
+fn material_params_clamp_sanitize_and_flow_through_draws_and_cache() {
+    // Default MaterialParams leaves every override unset.
+    let empty = MaterialParams::default();
+    assert_eq!(empty, MaterialParams::new());
+    assert_eq!(empty.get_tint(), None);
+    assert_eq!(empty.get_tint_opacity(), None);
+    assert_eq!(empty.get_luminosity_opacity(), None);
+    assert_eq!(empty.get_saturation(), None);
+
+    // Clamping and non-finite sanitization.
+    let clamped = MaterialParams::new()
+        .tint_opacity(1.5)
+        .luminosity_opacity(-0.2)
+        .saturation(9.0);
+    assert_eq!(clamped.get_tint_opacity(), Some(1.0));
+    assert_eq!(clamped.get_luminosity_opacity(), Some(0.0));
+    assert_eq!(clamped.get_saturation(), Some(MAX_MATERIAL_SATURATION));
+
+    let sanitized = clamped
+        .tint_opacity(f32::NAN)
+        .luminosity_opacity(f32::INFINITY)
+        .saturation(f32::NEG_INFINITY);
+    assert_eq!(sanitized.get_tint_opacity(), None);
+    assert_eq!(sanitized.get_luminosity_opacity(), None);
+    assert_eq!(sanitized.get_saturation(), None);
+
+    // El::system_material_with propagates params into Runtime::system_materials() and El::cache() replays.
+    let tint = Color { r: 0.1, g: 0.2, b: 0.5, a: 1.0 };
+    let initial = MaterialParams::new()
+        .tint(tint)
+        .tint_opacity(0.12)
+        .luminosity_opacity(0.65)
+        .saturation(1.75);
+    let updated = MaterialParams::new()
+        .tint_opacity(0.30)
+        .luminosity_opacity(0.80)
+        .saturation(0.5);
+
+    fn view(params: &MaterialParams, _: &mut Cx<MaterialParams>) -> El {
+        el().key("root").size(240.0, 120.0).cache().child(
+            el().key("card")
+                .absolute(10.0, 10.0)
+                .size(180.0, 60.0)
+                .radius(16.0)
+                .system_material_with(SystemMaterial::Glass, *params),
+        )
+    }
+
+    let mut rt = Runtime::new(initial, view, (240.0, 120.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0);
+    assert_eq!(rt.system_materials().len(), 1);
+    let d0 = rt.system_materials()[0];
+    assert_eq!(d0.material, SystemMaterial::Glass);
+    assert!(d0.continuous, "Glass with MaterialParams still enables continuous corners");
+    assert_eq!(d0.params(), initial);
+
+    // Second frame reuses cached layer (elided) and replays the exact MaterialParams.
+    rt.frame(0.0);
+    assert_eq!(rt.system_materials().len(), 1);
+    assert_eq!(rt.system_materials()[0].params(), initial);
+
+    // Updating MaterialParams invalidates commit/cache and reflects the new params immediately.
+    rt.update(|p, _| *p = updated);
+    rt.frame(0.0);
+    assert_eq!(rt.system_materials().len(), 1);
+    assert_eq!(rt.system_materials()[0].params(), updated);
 }

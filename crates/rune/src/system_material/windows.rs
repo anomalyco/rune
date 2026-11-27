@@ -12,7 +12,7 @@
 //! - Per-element rounded clipping via `Compositor::CreateRectangleClipWithSidesAndRadius` (default)
 //!   or `CompositionGeometricClip` + `CompositionRoundedRectangleGeometry` (`RUNE_WIN_MATERIAL_CLIP=geo`)
 
-use super::{MAX_NATIVE_MATERIALS_CAP, MaterialDraw, Mode, SystemMaterial, assign};
+use super::{MAX_NATIVE_MATERIALS_CAP, MaterialDraw, MaterialParams, Mode, SystemMaterial, assign};
 use crate::machine::Effects;
 use rune_motion::NodeId;
 
@@ -272,6 +272,8 @@ pub(crate) struct VisualSpec {
     pub clip: ClipKind,
     /// Element's requested `SystemMaterial` (selects the Windows 11 Acrylic recipe).
     pub material: SystemMaterial,
+    /// Per-element appearance overrides (`El::system_material_with`).
+    pub params: MaterialParams,
     /// Active dark theme flag (selects dark vs light Acrylic / flat-tint recipe).
     pub dark: bool,
     /// Active brush/tint mode (`Acrylic`, `Flat`, or `Raw`).
@@ -298,6 +300,7 @@ impl VisualSpec {
             opacity,
             clip,
             material: draw.material,
+            params: draw.params,
             dark,
             tint_mode,
         }

@@ -3,7 +3,7 @@ use super::probe::{
     HostUnavailableReason, compile_all_acrylic_brushes_with, probe_host_with,
 };
 use super::*;
-use crate::system_material::windows::acrylic::{BrushChoice, FLAT_TINT_DARK, resolve_brush_choice};
+use crate::system_material::windows::acrylic::{AcrylicBrushKey, AcrylicRecipe, BrushChoice, FLAT_TINT_DARK, resolve_brush_choice};
 use crate::{SystemMaterial, WindowBackdrop};
 
 fn base_inputs() -> MaterialInputs {
@@ -163,15 +163,14 @@ impl AcrylicFactorySeam for FakeProbeSeam {
         &mut self,
         compositor: &Self::Compositor,
         backdrop: &Self::BackdropBrush,
-        material: SystemMaterial,
-        dark: bool,
+        recipe: AcrylicRecipe,
     ) -> Result<Self::EffectBrush, String> {
         assert!(self.open_compositors.contains(compositor));
         assert!(self.open_backdrops.contains(backdrop));
         let idx = self.acrylic_calls;
         self.acrylic_calls += 1;
         if self.fail == Some(ProbeFailAt::AcrylicBrushIndex(idx)) {
-            return Err(format!("CreateEffectFactory failed at #{idx} ({material:?}, dark={dark})"));
+            return Err(format!("CreateEffectFactory failed at #{idx} ({recipe:?})"));
         }
         let id = self.alloc();
         self.open_brushes.push(id);
@@ -409,10 +408,10 @@ fn acrylic_six_brush_compile_and_cache_close_everything_on_midway_failure_and_la
     let mut next_id = 1usize;
 
     for (idx, &(material, dark)) in ALL_ACRYLIC_VARIANTS.iter().enumerate() {
+        let key = AcrylicRecipe::for_material(material, dark).cache_key();
         let res = cache.get_or_create(
-            material,
-            dark,
-            |_, _| {
+            key,
+            |_| {
                 create_calls += 1;
                 if create_calls == 4 {
                     return Err("simulated mid-way effect factory failure".into());
@@ -432,8 +431,8 @@ fn acrylic_six_brush_compile_and_cache_close_everything_on_midway_failure_and_la
             assert!(res.expect("first three succeed").is_some());
             assert_eq!(open.borrow().len(), idx + 1);
             assert_eq!(
-                resolve_brush_choice(TintMode::Acrylic, material, dark, true),
-                BrushChoice::Acrylic { material, dark }
+                resolve_brush_choice(TintMode::Acrylic, material, crate::MaterialParams::new(), dark, true),
+                BrushChoice::Acrylic { key }
             );
         } else if idx == 3 {
             assert!(res.is_err(), "fourth brush must fail");
@@ -442,7 +441,7 @@ fn acrylic_six_brush_compile_and_cache_close_everything_on_midway_failure_and_la
                 "all 3 previously cached brushes must be closed on failure"
             );
             assert_eq!(
-                resolve_brush_choice(TintMode::Acrylic, material, dark, false),
+                resolve_brush_choice(TintMode::Acrylic, material, crate::MaterialParams::new(), dark, false),
                 BrushChoice::FlatTint { argb: FLAT_TINT_DARK }
             );
         } else {
@@ -454,10 +453,10 @@ fn acrylic_six_brush_compile_and_cache_close_everything_on_midway_failure_and_la
     }
 
     // Re-requesting an earlier key on an idle frame also performs zero retries.
+    let glass_key = AcrylicRecipe::for_material(SystemMaterial::Glass, false).cache_key();
     let retry = cache.get_or_create(
-        SystemMaterial::Glass,
-        false,
-        |_, _| {
+        glass_key,
+        |_| {
             create_calls += 1;
             Ok(999)
         },
@@ -469,15 +468,50 @@ fn acrylic_six_brush_compile_and_cache_close_everything_on_midway_failure_and_la
     // clear_with closes every resident brush on normal target teardown.
     let mut healthy = AcrylicBrushCache::<usize>::new();
     let mut closed = Vec::new();
-    assert_eq!(
-        healthy.get_or_create(SystemMaterial::Popover, true, |_, _| Ok(11), |_| {}),
-        Ok(Some(&11))
-    );
-    assert_eq!(
-        healthy.get_or_create(SystemMaterial::Glass, false, |_, _| Ok(22), |_| {}),
-        Ok(Some(&22))
-    );
+    let k1 = AcrylicRecipe::for_material(SystemMaterial::Popover, true).cache_key();
+    let k2 = AcrylicRecipe::for_material(SystemMaterial::Glass, false).cache_key();
+    assert_eq!(healthy.get_or_create(k1, |_| Ok(11), |_| {}), Ok(Some(&11)));
+    assert_eq!(healthy.get_or_create(k2, |_| Ok(22), |_| {}), Ok(Some(&22)));
     healthy.clear_with(|id| closed.push(id));
     closed.sort_unstable();
     assert_eq!(closed, vec![11, 22]);
+}
+
+#[test]
+fn acrylic_brush_cache_evicts_oldest_unused_entries_without_closing_active_brushes() {
+    let key_for = |sat: u16| AcrylicBrushKey {
+        tint: [0x2C, 0x2C, 0x2C],
+        tint_milli: 0,
+        luminosity_milli: 850,
+        saturation_centi: sat,
+    };
+    let mut cache = AcrylicBrushCache::<usize>::with_capacity(2);
+    let mut closed = Vec::new();
+    let k0 = key_for(100);
+    let k1 = key_for(150);
+    let k2 = key_for(200);
+    let k3 = key_for(250);
+
+    assert_eq!(cache.get_or_create(k0, |_| Ok(1), |_| {}), Ok(Some(&1)));
+    assert_eq!(cache.get_or_create(k1, |_| Ok(2), |_| {}), Ok(Some(&2)));
+    // Touch k0 so k1 becomes the least recently used.
+    assert_eq!(cache.get_or_create(k0, |_| unreachable!(), |_| {}), Ok(Some(&1)));
+    assert_eq!(cache.get_or_create(k2, |_| Ok(3), |_| {}), Ok(Some(&3)));
+    assert_eq!(cache.len(), 3);
+
+    // Only k2 is in use: k1 (oldest unused) must be evicted and closed; k0 and k2 stay.
+    cache.evict_unused(|k| *k == k2, |id| closed.push(id));
+    assert_eq!(cache.len(), 2);
+    assert_eq!(closed, vec![2]);
+
+    // If ALL entries are currently in use by live visuals, none are closed prematurely.
+    assert_eq!(cache.get_or_create(k3, |_| Ok(4), |_| {}), Ok(Some(&4)));
+    cache.evict_unused(|_| true, |id| closed.push(id));
+    assert_eq!(cache.len(), 3);
+    assert_eq!(closed, vec![2]);
+
+    // Once visuals release k0 and k2, eviction trims back down to capacity 2 (evicting k0).
+    cache.evict_unused(|k| *k == k3, |id| closed.push(id));
+    assert_eq!(cache.len(), 2);
+    assert_eq!(closed, vec![2, 1]);
 }

@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 
 use super::MIN_HOST_BACKDROP_BUILD;
+use super::acrylic::{AcrylicBrushKey, AcrylicRecipe};
+#[cfg(test)]
 use crate::SystemMaterial;
 
 /// Host-level availability of the Windows 11 `HostBackdropBrush` compositor stack (independent
@@ -157,51 +159,91 @@ pub(crate) fn probe_host_with<S: HostProbeSeam>(seam: &mut S) -> HostAvailabilit
     HostAvailability::Available { build: build_num }
 }
 
-/// Bounded per-target cache of at most 6 compiled Acrylic brushes keyed by `(SystemMaterial, dark)`.
+/// Maximum number of resident Acrylic brushes cached per target (`MAX_NATIVE_MATERIALS_CAP`).
+pub(crate) const MAX_ACRYLIC_CACHE_ENTRIES: usize = crate::system_material::MAX_NATIVE_MATERIALS_CAP;
+
+/// Bounded per-target LRU cache of compiled Acrylic brushes keyed by [`AcrylicBrushKey`].
 ///
-/// If compiling any brush fails (including halfway through the six variants), every previously
-/// cached brush is closed immediately and failure is latched so subsequent frames take the WCAG
-/// flat-tint fallback with zero retries.
+/// Plain `El::system_material` apps cache at most the 6 `(SystemMaterial, dark)` presets.
+/// Apps that tune [`crate::MaterialParams`] live (e.g. sliders) stay bounded via
+/// [`Self::evict_unused`] without closing any brush still bound to an active visual.
+///
+/// If compiling any brush fails, every previously cached brush is closed immediately and
+/// failure is latched so subsequent frames take the WCAG flat-tint fallback with zero retries.
 pub(crate) struct AcrylicBrushCache<B> {
-    brushes: HashMap<(SystemMaterial, bool), B>,
+    brushes: HashMap<AcrylicBrushKey, (B, u64)>,
+    clock: u64,
+    max_entries: usize,
     failed: bool,
 }
 
 impl<B> AcrylicBrushCache<B> {
     pub(crate) fn new() -> Self {
-        Self { brushes: HashMap::new(), failed: false }
+        Self::with_capacity(MAX_ACRYLIC_CACHE_ENTRIES)
+    }
+
+    pub(crate) fn with_capacity(max_entries: usize) -> Self {
+        Self { brushes: HashMap::new(), clock: 0, max_entries: max_entries.max(1), failed: false }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.brushes.len()
     }
 
     pub(crate) fn get_or_create(
         &mut self,
-        material: SystemMaterial,
-        dark: bool,
-        create: impl FnOnce(SystemMaterial, bool) -> Result<B, String>,
+        key: AcrylicBrushKey,
+        create: impl FnOnce(AcrylicBrushKey) -> Result<B, String>,
         mut close: impl FnMut(B),
     ) -> Result<Option<&B>, String> {
         if self.failed {
             return Ok(None);
         }
-        let key = (material, dark);
-        if !self.brushes.contains_key(&key) {
-            match create(material, dark) {
+        self.clock = self.clock.wrapping_add(1);
+        let stamp = self.clock;
+        if let Some((_, used)) = self.brushes.get_mut(&key) {
+            *used = stamp;
+        } else {
+            match create(key) {
                 Ok(brush) => {
-                    self.brushes.insert(key, brush);
+                    self.brushes.insert(key, (brush, stamp));
                 }
                 Err(err) => {
                     self.failed = true;
-                    for (_, cached) in self.brushes.drain() {
+                    for (_, (cached, _)) in self.brushes.drain() {
                         close(cached);
                     }
                     return Err(err);
                 }
             }
         }
-        Ok(self.brushes.get(&key))
+        Ok(self.brushes.get(&key).map(|(b, _)| b))
+    }
+
+    /// Evicts and closes the least-recently-used entries not satisfying `in_use` until the
+    /// cache is back within its capacity bound.
+    pub(crate) fn evict_unused(
+        &mut self,
+        in_use: impl Fn(&AcrylicBrushKey) -> bool,
+        mut close: impl FnMut(B),
+    ) {
+        while self.brushes.len() > self.max_entries {
+            let oldest = self
+                .brushes
+                .iter()
+                .filter(|(k, _)| !in_use(k))
+                .min_by_key(|(_, (_, stamp))| *stamp)
+                .map(|(k, _)| *k);
+            let Some(victim) = oldest else { break };
+            if let Some((brush, _)) = self.brushes.remove(&victim) {
+                close(brush);
+            }
+        }
     }
 
     pub(crate) fn clear_with(&mut self, mut close: impl FnMut(B)) {
-        for (_, brush) in self.brushes.drain() {
+        for (_, (brush, _)) in self.brushes.drain() {
             close(brush);
         }
     }
@@ -218,7 +260,7 @@ pub(crate) const ALL_ACRYLIC_VARIANTS: [(SystemMaterial, bool); 6] = [
     (SystemMaterial::Sidebar, true),
 ];
 
-/// Narrow seam for compiling all six Acrylic brushes without a window, ensuring every created
+/// Narrow seam for compiling Acrylic brushes without a window, ensuring every created
 /// brush, backdrop brush, and compositor is closed in reverse order even on partial failure.
 #[cfg(test)]
 pub(crate) trait AcrylicFactorySeam: HostProbeSeam {
@@ -228,18 +270,18 @@ pub(crate) trait AcrylicFactorySeam: HostProbeSeam {
         &mut self,
         compositor: &Self::Compositor,
         backdrop: &Self::BackdropBrush,
-        material: SystemMaterial,
-        dark: bool,
+        recipe: AcrylicRecipe,
     ) -> Result<Self::EffectBrush, String>;
 
     fn close_effect_brush(&mut self, brush: Self::EffectBrush);
 }
 
-/// Compiles all six `(SystemMaterial, dark)` Acrylic brushes without opening a window and closes
-/// every created COM object in reverse order even if a brush fails halfway through.
+/// Compiles `recipes` without opening a window and closes every created COM object in reverse
+/// order even if a brush fails halfway through.
 #[cfg(test)]
-pub(crate) fn compile_all_acrylic_brushes_with<S: AcrylicFactorySeam>(
+pub(crate) fn compile_acrylic_recipes_with<S: AcrylicFactorySeam>(
     seam: &mut S,
+    recipes: &[AcrylicRecipe],
 ) -> Result<usize, String> {
     seam.ensure_dispatcher_queue()?;
     let compositor = seam.create_compositor()?;
@@ -250,10 +292,10 @@ pub(crate) fn compile_all_acrylic_brushes_with<S: AcrylicFactorySeam>(
             return Err(err);
         }
     };
-    let mut brushes = Vec::with_capacity(ALL_ACRYLIC_VARIANTS.len());
+    let mut brushes = Vec::with_capacity(recipes.len());
     let mut err_out = None;
-    for (material, dark) in ALL_ACRYLIC_VARIANTS {
-        match seam.create_acrylic_brush(&compositor, &backdrop, material, dark) {
+    for &recipe in recipes {
+        match seam.create_acrylic_brush(&compositor, &backdrop, recipe) {
             Ok(brush) => brushes.push(brush),
             Err(err) => {
                 err_out = Some(err);
@@ -271,4 +313,17 @@ pub(crate) fn compile_all_acrylic_brushes_with<S: AcrylicFactorySeam>(
         Some(err) => Err(err),
         None => Ok(compiled),
     }
+}
+
+/// Compiles all six `(SystemMaterial, dark)` Acrylic brushes without opening a window and closes
+/// every created COM object in reverse order even if a brush fails halfway through.
+#[cfg(test)]
+pub(crate) fn compile_all_acrylic_brushes_with<S: AcrylicFactorySeam>(
+    seam: &mut S,
+) -> Result<usize, String> {
+    let recipes: Vec<AcrylicRecipe> = ALL_ACRYLIC_VARIANTS
+        .iter()
+        .map(|&(material, dark)| AcrylicRecipe::for_material(material, dark))
+        .collect();
+    compile_acrylic_recipes_with(seam, &recipes)
 }
