@@ -84,7 +84,7 @@ pub(in crate::window) struct Host {
     pub(in crate::window) observability: crate::frame::stage::HostObservability,
     pub(in crate::window) frame_presented: crate::frame::presented::FramePresentReports,
     #[cfg(target_os = "macos")]
-    pub(in crate::window) ambient_period: Option<std::time::Duration>,
+    pub(in crate::window) pacing_config: PacingConfig,
     /// Shown, hidden or closed for good; `win` holds the window while it has one.
     pub(in crate::window) life: Life,
     /// False for windows `App::window` added: they live as long as the loop, never keep it.
@@ -245,6 +245,8 @@ struct HostInit {
     on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     #[cfg(target_os = "macos")]
     ambient_period: Option<std::time::Duration>,
+    #[cfg(target_os = "macos")]
+    unfocused_period: Option<std::time::Duration>,
     geometry: SpecGeometry,
     args: Args,
     keep_running: bool,
@@ -303,6 +305,8 @@ impl Host {
         let on_frame_presented = app.on_frame_presented.take();
         #[cfg(target_os = "macos")]
         let ambient_period = app.ambient_period;
+        #[cfg(target_os = "macos")]
+        let unfocused_period = app.unfocused_period;
         let macos_window = std::mem::take(&mut app.macos_window);
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
@@ -387,6 +391,8 @@ impl Host {
             on_frame_presented,
             #[cfg(target_os = "macos")]
             ambient_period,
+            #[cfg(target_os = "macos")]
+            unfocused_period,
             geometry,
             args,
             keep_running,
@@ -445,6 +451,8 @@ impl Host {
             on_frame_presented,
             #[cfg(target_os = "macos")]
             ambient_period,
+            #[cfg(target_os = "macos")]
+            unfocused_period,
             mut geometry,
             mut args,
             keep_running,
@@ -575,7 +583,7 @@ impl Host {
             observability,
             frame_presented,
             #[cfg(target_os = "macos")]
-            ambient_period,
+            pacing_config: PacingConfig { ambient_period, unfocused_period, focused: true },
             life: Life::Unopened,
             keeps_loop,
             geometry,
@@ -639,8 +647,8 @@ impl Host {
         }
     }
 
-    /// Notes live user input reaching this window so an opt-in `App::ambient_fps` cap lifts
-    /// immediately on the next display refresh.
+    /// Notes live user input reaching this window so an opt-in `App::ambient_fps` or
+    /// `App::unfocused_fps` cap lifts immediately on the next display refresh.
     pub(in crate::window) fn note_input(&mut self, at: Instant) {
         #[cfg(target_os = "macos")]
         if let Some(w) = &mut self.win
@@ -695,6 +703,28 @@ impl Host {
     pub(in crate::window) fn publish(&self) {
         let visible = self.life.shown() && self.win.is_some();
         self.shared.set_visible(visible);
+    }
+}
+
+/// Per-window macOS `DisplayLink` pacing configuration carried across link creation and retry.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug)]
+pub(in crate::window) struct PacingConfig {
+    pub(in crate::window) ambient_period: Option<std::time::Duration>,
+    pub(in crate::window) unfocused_period: Option<std::time::Duration>,
+    pub(in crate::window) focused: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl PacingConfig {
+    pub(in crate::window) fn apply(
+        self,
+        pacing: crate::platform::display_link::DisplayLink,
+    ) -> crate::platform::display_link::DisplayLink {
+        pacing
+            .with_ambient_period(self.ambient_period)
+            .with_unfocused_period(self.unfocused_period)
+            .with_focused(self.focused)
     }
 }
 

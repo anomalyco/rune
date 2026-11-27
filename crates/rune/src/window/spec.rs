@@ -1072,6 +1072,24 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         ambient_fps(fps: f32);
+        /// Cap frame pacing (Hz) for unsteered motion while this window is visible but unfocused
+        /// (`0.0`, default = no extra unfocused cap), like [`App::unfocused_fps`].
+        ///
+        /// Keeps streaming transcripts live on a secondary display without pausing them; live
+        /// input over the unfocused window still lifts the cap immediately. Enforced on macOS
+        /// `DisplayLink` windows today.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, text};
+        ///
+        /// let _spec = WindowSpec::new(
+        ///     "chat",
+        ///     AppSpec::new("Chat", (720.0, 540.0), String::new, |s, _| text(s.as_str()).wrap()),
+        /// )
+        /// .ambient_fps(60.0)
+        /// .unfocused_fps(30.0);
+        /// ```
+        unfocused_fps(fps: f32);
         /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
         /// clamped to `1..=2`, default `2`), like [`App::frame_latency`]. Ignored on Windows,
         /// Linux, and the web.

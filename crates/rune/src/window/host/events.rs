@@ -423,6 +423,15 @@ impl Host {
                 if stale { return; }
                 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
                 if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && self.life.shown()); }
+                #[cfg(target_os = "macos")]
+                {
+                    self.pacing_config.focused = focused;
+                    if let Some(w) = &mut self.win
+                        && let Some(pacing) = &mut w.native.pacing
+                    {
+                        pacing.set_focused(focused);
+                    }
+                }
                 self.observability.report_focus(focused);
                 // Deliver independently of drawable availability, including hide/occlusion.
                 self.app.window_focus(focused);

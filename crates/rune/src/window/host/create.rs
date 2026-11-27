@@ -497,7 +497,7 @@ impl Host {
         let native = Native {
             // A window whose first frame is drawn here, at once (`prime`), gets its display link
             // after that frame. `RUNE_PACING_BEFORE_FRAME` keeps the old order.
-            pacing: if prime.presumes() && std::env::var_os("RUNE_PACING_BEFORE_FRAME").is_none() { None } else { crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()).map(|p| p.with_ambient_period(self.ambient_period)) },
+            pacing: if prime.presumes() && std::env::var_os("RUNE_PACING_BEFORE_FRAME").is_none() { None } else { crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()).map(|p| self.pacing_config.apply(p)) },
             present,
             present_log: hook_log,
             shadow,
@@ -580,7 +580,15 @@ impl Host {
             }
             sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar);
             sync_screen_origin_core(self.app.rt_mut(), &w.window);
-            if w.window.has_focus() {
+            let focused = w.window.has_focus();
+            #[cfg(target_os = "macos")]
+            {
+                self.pacing_config.focused = focused;
+                if let Some(pacing) = &mut w.native.pacing {
+                    pacing.set_focused(focused);
+                }
+            }
+            if focused {
                 self.app.window_focus(true);
             }
         }
@@ -640,7 +648,7 @@ impl Host {
             // The display link that waited for the first frame, or for a window not drawn here.
             if let Some(w) = self.win.as_mut() && w.native.pacing.is_none() {
                 w.native.pacing = crate::platform::display_link::DisplayLink::new(&w.window, self.frame_wake.clone())
-                    .map(|p| p.with_ambient_period(self.ambient_period));
+                    .map(|p| self.pacing_config.apply(p));
             }
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {

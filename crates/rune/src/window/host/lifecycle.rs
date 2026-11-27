@@ -1116,7 +1116,7 @@ impl Host {
         #[cfg(target_os = "macos")]
         if l.native.pacing.is_none() {
             l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone())
-                .map(|p| p.with_ambient_period(self.ambient_period));
+                .map(|p| self.pacing_config.apply(p));
         }
         if was {
             self.app.rt_mut().settle_all();
