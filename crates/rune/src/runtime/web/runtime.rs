@@ -2,6 +2,17 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use super::*;
 
+/// Paired sibling credential input in the same form/scope, exposed beside the focused field
+/// inside the browser bridge's hidden `<form>` so password managers can detect login forms
+/// and fill username/email and password fields simultaneously.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CredentialPeer {
+    pub key: String,
+    pub secure: bool,
+    pub autofill: &'static str,
+    pub html_type: &'static str,
+}
+
 /// The last context sent to the DOM. Secure text never enters this cache.
 #[derive(Default)]
 pub(crate) struct Mirror {
@@ -12,7 +23,11 @@ pub(crate) struct Mirror {
     pub anchor: u32,
     pub focus: u32,
     pub secure: bool,
-    /// True after the browser mutates the hidden textarea outside a Rust sync (a DOM edit or a
+    pub single_line: bool,
+    pub input_mode: crate::InputMode,
+    pub autofill: Option<crate::Autofill>,
+    pub peer: Option<CredentialPeer>,
+    /// True after the browser mutates the hidden input outside a Rust sync (a DOM edit or a
     /// deferred composition sync), so the next diff resyncs even if the model matches the cache.
     stale: bool,
 }
@@ -72,15 +87,42 @@ fn whole_lines<'a>(edit: &'a crate::TextEdit, (start, text, anchor, focus): (usi
 impl Mirror {
     pub(crate) fn invalidate(&mut self) { self.stale = true; }
 
+    #[cfg(test)]
     fn update(&mut self, key: &str, edit: Option<&crate::TextEdit>) -> bool {
+        self.update_with(key, edit, false, crate::InputMode::Text, None, None)
+    }
+
+    fn update_with(
+        &mut self,
+        key: &str,
+        edit: Option<&crate::TextEdit>,
+        single_line: bool,
+        input_mode: crate::InputMode,
+        autofill: Option<crate::Autofill>,
+        peer: Option<CredentialPeer>,
+    ) -> bool {
         let secure = edit.is_some_and(|e| e.is_secure());
         let (base, text, anchor, focus) = edit.filter(|_| !secure).map(|e| whole_lines(e, context_window(e))).unwrap_or((0, "", 0, 0));
-        if !self.stale && self.key == key && self.base == base && self.text == text && self.anchor == anchor
-            && self.focus == focus && self.secure == secure { return false; }
+        if !self.stale
+            && self.key == key
+            && self.base == base
+            && self.text == text
+            && self.anchor == anchor
+            && self.focus == focus
+            && self.secure == secure
+            && self.single_line == single_line
+            && self.input_mode == input_mode
+            && self.autofill == autofill
+            && self.peer == peer
+        {
+            return false;
+        }
         self.stale = false;
         self.key.clear(); self.key.push_str(key);
         self.text.clear(); self.text.push_str(text);
         self.base = base; self.anchor = anchor; self.focus = focus; self.secure = secure;
+        self.single_line = single_line; self.input_mode = input_mode; self.autofill = autofill;
+        self.peer = peer;
         true
     }
 }
@@ -141,10 +183,87 @@ impl RuntimeCore {
             return None;
         }
         if self.focused_input_read_only() || self.focused_input_disabled() { return None; }
-        let access = self.focused_input()?.access.clone()?;
+        let input = self.focused_input()?;
+        let access = input.access.clone()?;
+        let (single_line, input_mode, autofill) = (input.single_line, input.input_mode, input.autofill);
+        let peer = self.focused_index().and_then(|idx| self.web_credential_peer(idx));
         let key = self.kbd.focus.path()?;
-        Some(mirror.update(key, Some(access(app.states()))))
+        Some(mirror.update_with(key, Some(access(app.states())), single_line, input_mode, autofill, peer))
     }
+
+    fn credential_scope(&self, idx: usize) -> Option<usize> {
+        std::iter::successors(self.tree.nodes[idx].parent, |&p| self.tree.nodes[p].parent).find(|&p| {
+            let n = &self.tree.nodes[p];
+            n.role == "form" || n.role == "dialog" || n.role == "alertdialog"
+        })
+    }
+
+    /// Finds the paired credential sibling (username/email <-> password) in the same form or
+    /// dialog scope so the browser bridge can keep both inside its hidden `<form>`.
+    pub(crate) fn web_credential_peer(&self, focused_idx: usize) -> Option<CredentialPeer> {
+        let focused = self.tree.nodes.get(focused_idx)?.input.as_deref()?;
+        if matches!(focused.autofill, Some(crate::Autofill::Off | crate::Autofill::OneTimeCode)) {
+            return None;
+        }
+        let scope = self.credential_scope(focused_idx);
+        let eligible = |j: usize| -> Option<&crate::el::InputSpec> {
+            if j == focused_idx { return None; }
+            let node = &self.tree.nodes[j];
+            if node.inert || self.node_disabled(j) || self.is_node_read_only(j) { return None; }
+            if self.credential_scope(j) != scope { return None; }
+            let inp = node.input.as_deref()?;
+            if inp.access.is_none() || matches!(inp.autofill, Some(crate::Autofill::Off | crate::Autofill::OneTimeCode)) {
+                return None;
+            }
+            Some(inp)
+        };
+        if focused.edit.is_secure() {
+            let mut best: Option<(u8, usize, CredentialPeer)> = None;
+            for j in 0..self.tree.nodes.len() {
+                let Some(inp) = eligible(j) else { continue };
+                if inp.edit.is_secure() { continue; }
+                let (prio, autofill, html_type) = match (inp.autofill, inp.input_mode) {
+                    (Some(crate::Autofill::Username), crate::InputMode::Email) => (0, "username", "email"),
+                    (Some(crate::Autofill::Username), _) => (0, "username", "text"),
+                    (Some(crate::Autofill::Email), _) => (1, "email", "email"),
+                    (None, crate::InputMode::Email) => (2, "username", "email"),
+                    _ => continue,
+                };
+                let prefer = match &best {
+                    None => true,
+                    Some((bp, bi, _)) => prio < *bp || (prio == *bp && j < focused_idx && (*bi > focused_idx || j > *bi)),
+                };
+                if prefer {
+                    best = Some((prio, j, CredentialPeer {
+                        key: self.tree.nodes[j].path.clone(),
+                        secure: false,
+                        autofill,
+                        html_type,
+                    }));
+                }
+            }
+            best.map(|(_, _, p)| p)
+        } else {
+            let is_login_id = matches!(focused.autofill, Some(crate::Autofill::Username | crate::Autofill::Email))
+                || focused.input_mode == crate::InputMode::Email;
+            if !is_login_id { return None; }
+            let mut first = None;
+            for j in 0..self.tree.nodes.len() {
+                let Some(inp) = eligible(j) else { continue };
+                if !inp.edit.is_secure() { continue; }
+                let peer = CredentialPeer {
+                    key: self.tree.nodes[j].path.clone(),
+                    secure: true,
+                    autofill: inp.autofill.map_or("current-password", crate::Autofill::as_html),
+                    html_type: "password",
+                };
+                if j > focused_idx { return Some(peer); }
+                if first.is_none() { first = Some(peer); }
+            }
+            first
+        }
+    }
+
     /// Whether Rune currently has keyboard focus on an editable text input (plain or secure),
     /// matching the condition under which [`Self::web_context`] populates `mirror.key`.
     pub(crate) fn web_has_editable_focus(&self) -> bool {
@@ -155,8 +274,18 @@ impl RuntimeCore {
 
     pub(crate) fn web_context(&self, mirror: &mut Mirror) -> bool {
         match self.focused_input().filter(|i| i.access.is_some() && !self.focused_input_read_only() && !self.focused_input_disabled()) {
-            Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
-            None => mirror.update("", None),
+            Some(input) => {
+                let peer = self.focused_index().and_then(|idx| self.web_credential_peer(idx));
+                mirror.update_with(
+                    self.kbd.focus.path().unwrap_or_default(),
+                    Some(&input.edit),
+                    input.single_line,
+                    input.input_mode,
+                    input.autofill,
+                    peer,
+                )
+            }
+            None => mirror.update_with("", None, false, crate::InputMode::Text, None, None),
         }
     }
 
@@ -232,6 +361,67 @@ impl RuntimeCore {
             edit.paste(&text)
         }, &mut tx);
         if changed { self.commit.dirty = true; }
+        merge(&mut self.frame.pending, tx);
+    }
+
+    /// Applies a browser password-manager autofill that wrote to the unfocused paired credential
+    /// sibling (`web_credential_peer`) in the hidden `<form>`. Validates that `key` is the
+    /// active focused field's current credential peer, wipes incoming text via `Zeroizing`, and
+    /// writes nothing to event logs or traces.
+    pub(crate) fn web_autofill(&mut self, app: &mut dyn AppDriver, key: &str, text: String, secure: bool) {
+        let text = zeroize::Zeroizing::new(text);
+        if key.is_empty() || self.focused_input_read_only() || self.focused_input_disabled() { return; }
+        let Some(focused_idx) = self.focused_index() else { return };
+        let Some(peer) = self.web_credential_peer(focused_idx) else { return };
+        if peer.key != key || peer.secure != secure { return; }
+        let Some(peer_idx) = self.tree.nodes.iter().position(|n| n.path == key) else { return };
+        if self.node_disabled(peer_idx) || self.is_node_read_only(peer_idx) { return; }
+        let Some((access, change, selection_change, single_line, revealed_override, line_home_end_override)) =
+            self.tree.nodes[peer_idx].input.as_deref().and_then(|i| {
+                if i.edit.is_secure() != secure { return None; }
+                Some((
+                    i.access.clone()?,
+                    i.change.clone(),
+                    i.selection_change.clone(),
+                    i.single_line,
+                    i.revealed_override,
+                    i.line_home_end_override,
+                ))
+            })
+        else { return };
+        let mut tx = self.transaction(app);
+        {
+            let edit = access(app.states());
+            edit.set_single_line(single_line);
+            if secure && !edit.is_secure() { edit.set_secure(true); }
+            if let Some(rev) = revealed_override { edit.set_revealed(rev); }
+            if let Some(lhe) = line_home_end_override { edit.set_line_home_end(lhe); }
+        }
+        let before = zeroize::Zeroizing::new(access(app.states()).text.clone());
+        let before_sel = {
+            let e = access(app.states());
+            (e.anchor, e.focus)
+        };
+        {
+            let edit = access(app.states());
+            let len = edit.text.len();
+            edit.set_selection(0, len);
+            let _ = edit.paste(&text);
+        }
+        let changed = before.as_str() != access(app.states()).text.as_str();
+        let after_sel = {
+            let e = access(app.states());
+            (e.anchor, e.focus)
+        };
+        if changed {
+            if let Some(cb) = change { cb(app.states(), &mut tx); }
+            access(app.states()).mark_edited();
+            self.commit.dirty = true;
+        }
+        if before_sel != after_sel {
+            if let Some(cb) = selection_change { cb(app.states(), &mut tx); }
+            self.commit.dirty = true;
+        }
         merge(&mut self.frame.pending, tx);
     }
 

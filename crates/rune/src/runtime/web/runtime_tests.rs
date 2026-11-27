@@ -466,3 +466,219 @@ fn web_field_blur_clears_matching_focused_input_fires_on_focus_change_and_ignore
     assert!(!rt.core_mut().web_field_blur(&a_path));
     assert_eq!(rt.state.blurs, vec!["a"]);
 }
+
+#[test]
+fn input_mode_and_autofill_sync_to_web_mirror_with_unchanged_defaults() {
+    struct Form {
+        plain: crate::TextEdit,
+        email: crate::TextEdit,
+        search: crate::TextEdit,
+        pin: crate::TextEdit,
+    }
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        crate::col()
+            .child(crate::text_input(&s.plain, crate::tok::type_::BODY).key("plain").on_edit(|s: &mut Form| &mut s.plain))
+            .child(
+                crate::text_input(&s.email, crate::tok::type_::BODY)
+                    .key("email")
+                    .single_line()
+                    .input_mode(crate::InputMode::Email)
+                    .autofill(crate::Autofill::Email)
+                    .on_edit(|s: &mut Form| &mut s.email),
+            )
+            .child(
+                crate::text_input(&s.search, crate::tok::type_::BODY)
+                    .key("search")
+                    .single_line()
+                    .input_mode(crate::InputMode::Search)
+                    .on_edit(|s: &mut Form| &mut s.search),
+            )
+            .child(
+                crate::text_input(&s.pin, crate::tok::type_::BODY)
+                    .key("pin")
+                    .single_line()
+                    .secure()
+                    .input_mode(crate::InputMode::Numeric)
+                    .autofill(crate::Autofill::OneTimeCode)
+                    .on_edit(|s: &mut Form| &mut s.pin),
+            )
+    }
+    let mut rt = Runtime::new(
+        Form {
+            plain: crate::TextEdit::default(),
+            email: crate::TextEdit::default(),
+            search: crate::TextEdit::default(),
+            pin: crate::TextEdit::default().secure(),
+        },
+        view,
+        (320.0, 200.0),
+        Env::default(),
+    );
+    rt.frame(0.0);
+    let path_of = |rt: &Runtime<Form>, k: &str| {
+        rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap().path.clone()
+    };
+    let mut mirror = Mirror::default();
+
+    // Default plain field: InputMode::Text, autofill None, single_line false, peer None.
+    rt.set_focus(Some(path_of(&rt, "plain")), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!(mirror.input_mode, crate::InputMode::Text);
+    assert_eq!(mirror.autofill, None);
+    assert!(!mirror.single_line);
+    assert_eq!(mirror.peer, None);
+    assert!(!rt.web_context(&mut mirror), "unchanged semantics must not resync");
+
+    // Email single-line field.
+    rt.set_focus(Some(path_of(&rt, "email")), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!(mirror.input_mode, crate::InputMode::Email);
+    assert_eq!(mirror.autofill, Some(crate::Autofill::Email));
+    assert!(mirror.single_line);
+    assert_eq!(mirror.peer, None, "pin with OneTimeCode must not pair as password peer");
+
+    // Search single-line field.
+    rt.set_focus(Some(path_of(&rt, "search")), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!(mirror.input_mode, crate::InputMode::Search);
+    assert_eq!(mirror.autofill, None);
+    assert!(mirror.single_line);
+
+    // Secure numeric OTP field.
+    rt.set_focus(Some(path_of(&rt, "pin")), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert!(mirror.secure);
+    assert_eq!(mirror.input_mode, crate::InputMode::Numeric);
+    assert_eq!(mirror.autofill, Some(crate::Autofill::OneTimeCode));
+    assert_eq!(mirror.peer, None);
+}
+
+#[test]
+fn credential_peer_pairs_within_form_and_web_autofill_updates_unfocused_sibling() {
+    struct Login {
+        email: crate::TextEdit,
+        pw: crate::TextEdit,
+        other_email: crate::TextEdit,
+        other_pw: crate::TextEdit,
+        email_changes: usize,
+        pw_changes: usize,
+    }
+    fn view(s: &Login, _: &mut Cx<Login>) -> El {
+        crate::col()
+            .child(
+                crate::col()
+                    .key("login-form")
+                    .role("form")
+                    .child(
+                        crate::text_input(&s.email, crate::tok::type_::BODY)
+                            .key("email")
+                            .single_line()
+                            .input_mode(crate::InputMode::Email)
+                            .autofill(crate::Autofill::Username)
+                            .on_edit(|s: &mut Login| &mut s.email)
+                            .on_input_change(|s: &mut Login, _| s.email_changes += 1),
+                    )
+                    .child(
+                        crate::text_input(&s.pw, crate::tok::type_::BODY)
+                            .key("pw")
+                            .single_line()
+                            .secure()
+                            .autofill(crate::Autofill::CurrentPassword)
+                            .on_edit(|s: &mut Login| &mut s.pw)
+                            .on_input_change(|s: &mut Login, _| s.pw_changes += 1),
+                    ),
+            )
+            .child(
+                crate::col()
+                    .key("other-form")
+                    .role("form")
+                    .child(
+                        crate::text_input(&s.other_email, crate::tok::type_::BODY)
+                            .key("other-email")
+                            .single_line()
+                            .autofill(crate::Autofill::Email)
+                            .on_edit(|s: &mut Login| &mut s.other_email),
+                    )
+                    .child(
+                        crate::text_input(&s.other_pw, crate::tok::type_::BODY)
+                            .key("other-pw")
+                            .single_line()
+                            .secure()
+                            .autofill(crate::Autofill::NewPassword)
+                            .on_edit(|s: &mut Login| &mut s.other_pw),
+                    ),
+            )
+    }
+    let mut rt = Runtime::new(
+        Login {
+            email: crate::TextEdit::default(),
+            pw: crate::TextEdit::default().secure(),
+            other_email: crate::TextEdit::default(),
+            other_pw: crate::TextEdit::default().secure(),
+            email_changes: 0,
+            pw_changes: 0,
+        },
+        view,
+        (320.0, 240.0),
+        Env::default(),
+    );
+    rt.frame(0.0);
+    let path_of = |rt: &Runtime<Login>, k: &str| {
+        rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap().path.clone()
+    };
+    let email_path = path_of(&rt, "email");
+    let pw_path = path_of(&rt, "pw");
+    let other_pw_path = path_of(&rt, "other-pw");
+    let mut mirror = Mirror::default();
+
+    // Focusing email inside login-form pairs with login-form's password (not other-form's).
+    rt.set_focus(Some(email_path.clone()), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!(
+        mirror.peer,
+        Some(CredentialPeer {
+            key: pw_path.clone(),
+            secure: true,
+            autofill: "current-password",
+            html_type: "password",
+        }),
+    );
+
+    // Simultaneous password-manager fill onto unfocused password peer updates state & fires on_input_change
+    // without logging secrets into runtime events.
+    rt.web_autofill(&pw_path, "s3cr3t-pass!".into(), true);
+    rt.frame(0.0);
+    assert_eq!(rt.state.pw.text.as_str(), "s3cr3t-pass!");
+    assert_eq!(rt.state.pw_changes, 1);
+    assert!(rt.events.is_empty(), "autofill must not log secrets: {:?}", rt.events);
+
+    // Rejects autofill targeting another form's field or mismatched secure flag.
+    rt.web_autofill(&other_pw_path, "wrong-form".into(), true);
+    rt.web_autofill(&pw_path, "wrong-flag".into(), false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.other_pw.text.as_str(), "");
+    assert_eq!(rt.state.pw.text.as_str(), "s3cr3t-pass!");
+
+    // Focusing password pairs back with login-form's email/username field and accepts unfocused email fill.
+    rt.set_focus(Some(pw_path.clone()), true);
+    rt.frame(0.0);
+    assert!(rt.web_context(&mut mirror));
+    assert_eq!(
+        mirror.peer,
+        Some(CredentialPeer {
+            key: email_path.clone(),
+            secure: false,
+            autofill: "username",
+            html_type: "email",
+        }),
+    );
+    rt.web_autofill(&email_path, "ada@example.com".into(), false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.email.text.as_str(), "ada@example.com");
+    assert_eq!(rt.state.email_changes, 1);
+}

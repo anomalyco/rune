@@ -3949,3 +3949,279 @@ test('macOS right-click armMenu flushes layout synchronously and does not suppre
         bridge.destroy(h);
     }
 });
+
+test('semantic single-line inputMode/autofill use hidden <form> <input> and support paired credential autofill', () => {
+    const { doc, canvas, events, h } = setup({ coarse: true });
+    try {
+        canvas.focus();
+        assert.equal(h.form.tagName, 'FORM');
+        assert.equal(h.form.getAttribute('novalidate'), '');
+        assert.equal(h.form.getAttribute('autocomplete'), 'on');
+        assert.deepEqual(h.form.children, [h.input, h.password]);
+        let submitPrevented = false;
+        h.form.dispatchEvent({ type: 'submit', preventDefault() { submitPrevented = true; } });
+        assert.equal(submitPrevented, true);
+
+        const focusModes = [];
+        h.input.onFocus = () => focusModes.push(h.input.inputMode);
+        bridge.sync(h, 'email', '', 0, 0, 0, false, true, 'email', 'username', 'pw', true, 'current-password', 'password');
+        assert.equal(doc.activeElement, h.input);
+        assert.deepEqual(focusModes, ['email'], 'inputMode must be email before focus() on coarse pointers');
+        assert.equal(h.input.type, 'text', 'active email input stays selection-safe type=text');
+        assert.equal(h.input.inputMode, 'email');
+        assert.equal(h.input.getAttribute('autocapitalize'), 'none');
+        assert.equal(h.input.getAttribute('autocorrect'), 'off');
+        assert.equal(h.input.spellcheck, false);
+        assert.equal(h.input.autocomplete, 'username');
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, false, 'paired password peer is exposed to password managers');
+        assert.equal(h.password.getAttribute('aria-hidden'), 'true');
+        assert.equal(h.password.autocomplete, 'current-password');
+
+        events.length = 0;
+        h.input.value = 'a@b.co';
+        h.input.setSelectionRange(6, 6, 'forward');
+        h.input.dispatchEvent({ type: 'input', isComposing: false });
+        assert.deepEqual(events, [{
+            kind: 'edit', key: 'email', base: 0, expected: '', start: 0, end: 0, text: 'a@b.co', anchor: 6, focus: 6,
+        }]);
+
+        events.length = 0;
+        h.password.value = 'pw-from-manager';
+        h.password.dispatchEvent({ type: 'input' });
+        assert.equal(h.password.value, '');
+        assert.deepEqual(events, [{ kind: 'autofill', key: 'pw', text: 'pw-from-manager', secure: true }]);
+
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Email address', rq: true }));
+        assert.equal(h.input.getAttribute('aria-label'), 'Email address');
+        assert.equal(h.input.getAttribute('aria-required'), 'true');
+        assert.equal(h.textarea.getAttribute('aria-label'), 'Text input');
+
+        events.length = 0;
+        bridge.sync(h, 'pw', '', 0, 0, 0, true, true, 'text', 'new-password', 'email', false, 'username', 'email');
+        assert.equal(doc.activeElement, h.password);
+        assert.equal(h.password.autocomplete, 'new-password');
+        assert.equal(h.input.inert, false);
+        assert.equal(h.input.getAttribute('aria-hidden'), 'true');
+        assert.equal(h.input.type, 'email', 'unfocused email peer exposes type=email to password managers');
+        assert.equal(h.input.autocomplete, 'username');
+        h.input.value = 'ada@example.com';
+        h.input.dispatchEvent({ type: 'input' });
+        assert.equal(h.input.value, '');
+        assert.deepEqual(events, [{ kind: 'autofill', key: 'email', text: 'ada@example.com', secure: false }]);
+
+        bridge.sync(h, 'search', '', 0, 0, 0, false, true, 'search', '');
+        assert.equal(h.field, h.input);
+        assert.equal(h.input.type, 'search');
+        assert.equal(h.input.inputMode, 'search');
+        assert.equal(h.input.getAttribute('enterkeyhint'), 'search');
+        assert.equal(h.password.inert, true, 'no peer leaves password inert');
+
+        bridge.sync(h, 'site', '', 0, 0, 0, false, true, 'url', 'url');
+        assert.equal(h.input.type, 'url');
+        assert.equal(h.input.inputMode, 'url');
+        assert.equal(h.input.getAttribute('enterkeyhint'), null);
+        assert.equal(h.input.autocomplete, 'url');
+
+        bridge.sync(h, 'kbd-only', '', 0, 0, 0, false, true, 'none', 'off');
+        assert.equal(h.input.inputMode, 'none');
+        assert.equal(h.input.autocomplete, 'off');
+
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.input.inert, true);
+        assert.equal(h.password.inert, true);
+        assert.equal(h.peerKey, '');
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('paste and drop accept non-PNG raster images via createImageBitmap transcode and reject SVG/oversized', async () => {
+    const origCreateBitmap = globalThis.createImageBitmap;
+    const origOffscreen = globalThis.OffscreenCanvas;
+    const { events, h } = setup();
+    try {
+        const fakePngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+        let bitmapCalls = 0;
+        let closedCount = 0;
+        let nextSize = [4, 4];
+        Object.defineProperty(globalThis, 'createImageBitmap', {
+            value: async () => {
+                bitmapCalls++;
+                return { width: nextSize[0], height: nextSize[1], close() { closedCount++; } };
+            },
+            configurable: true,
+        });
+        Object.defineProperty(globalThis, 'OffscreenCanvas', {
+            value: class FakeOffscreenCanvas {
+                constructor(w, bh) { this.width = w; this.height = bh; }
+                getContext() { return { drawImage() {} }; }
+                async convertToBlob(opts) {
+                    assert.equal(opts.type, 'image/png');
+                    return new Blob([fakePngBytes], { type: 'image/png' });
+                }
+            },
+            configurable: true,
+        });
+
+        bridge.sync(h, 'editor', '', 0, 0, 0, false);
+        const jpegFile = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+        h.textarea.dispatchEvent({
+            type: 'paste',
+            preventDefault() {},
+            clipboardData: {
+                items: [{ kind: 'file', type: 'image/jpeg', getAsFile: () => jpegFile }],
+                files: [jpegFile],
+                getData: () => '',
+            },
+        });
+        assert.equal(events.at(-1).kind, 'paste');
+        assert.equal(events.at(-1).image, true);
+
+        const captured = [];
+        const ctx2 = setup();
+        try {
+            const h2 = bridge.mount(ctx2.canvas, msg => {
+                const ev = JSON.parse(msg);
+                if (ev.kind === 'paste' && ev.image) captured.push(bridge.pastedImage(h2, 1024));
+            }, false, false, false);
+            try {
+                bridge.sync(h2, 'url', '', 0, 0, 0, false, true, 'url', '');
+                const webpFile = new Blob([new Uint8Array([0x52, 0x49, 0x46, 0x46])], { type: 'image/webp' });
+                h2.input.dispatchEvent({
+                    type: 'paste',
+                    preventDefault() {},
+                    clipboardData: {
+                        items: [{ kind: 'file', type: 'image/webp', getAsFile: () => webpFile }],
+                        files: [webpFile],
+                        getData: () => '',
+                    },
+                });
+                const outWebp = await captured.pop();
+                assert.deepEqual(outWebp, fakePngBytes);
+                assert.equal(bitmapCalls, 1);
+                assert.equal(closedCount, 1);
+
+                const rawPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9, 9]);
+                const pngFile = new Blob([rawPng], { type: 'image/png' });
+                h2.input.dispatchEvent({
+                    type: 'paste',
+                    preventDefault() {},
+                    clipboardData: {
+                        items: [
+                            { kind: 'file', type: 'image/jpeg', getAsFile: () => jpegFile },
+                            { kind: 'file', type: 'image/png', getAsFile: () => pngFile },
+                        ],
+                        files: [jpegFile, pngFile],
+                        getData: () => '',
+                    },
+                });
+                const outPng = await captured.pop();
+                assert.deepEqual(outPng, rawPng);
+                assert.equal(bitmapCalls, 1, 'PNG fast path must skip createImageBitmap');
+
+                ctx2.canvas.dispatchEvent({
+                    type: 'drop',
+                    preventDefault() {},
+                    dataTransfer: { files: [jpegFile] },
+                });
+                const outDrop = await captured.pop();
+                assert.deepEqual(outDrop, fakePngBytes);
+                assert.equal(bitmapCalls, 2);
+                assert.equal(closedCount, 2);
+
+                const svgFile = new Blob(['<svg/>'], { type: 'image/svg+xml' });
+                h2.input.dispatchEvent({
+                    type: 'paste',
+                    preventDefault() {},
+                    clipboardData: {
+                        items: [{ kind: 'file', type: 'image/svg+xml', getAsFile: () => svgFile }],
+                        files: [svgFile],
+                        getData: () => '',
+                    },
+                });
+                assert.equal(captured.length, 0, 'image/svg+xml must not set image:true');
+
+                nextSize = [10000, 10000];
+                h2.input.dispatchEvent({
+                    type: 'paste',
+                    preventDefault() {},
+                    clipboardData: {
+                        items: [{ kind: 'file', type: 'image/jpeg', getAsFile: () => jpegFile }],
+                        files: [jpegFile],
+                        getData: () => '',
+                    },
+                });
+                const outTooBig = await captured.pop();
+                assert.equal(outTooBig, undefined);
+                assert.equal(closedCount, 3);
+            } finally {
+                bridge.destroy(h2);
+            }
+        } finally {
+            bridge.destroy(ctx2.h);
+        }
+    } finally {
+        bridge.destroy(h);
+        Object.defineProperty(globalThis, 'createImageBitmap', { value: origCreateBitmap, configurable: true });
+        Object.defineProperty(globalThis, 'OffscreenCanvas', { value: origOffscreen, configurable: true });
+    }
+});
+
+test('showMenu clamps to window.visualViewport for mobile keyboards and pinch-zoom, and syncCaret offsets embedded/page canvases without visualViewport drift', () => {
+    const { doc, win, h } = setup();
+    try {
+        Object.defineProperty(globalThis, 'innerWidth', { value: 390, configurable: true });
+        Object.defineProperty(globalThis, 'innerHeight', { value: 844, configurable: true });
+        win.visualViewport = { offsetLeft: 0, offsetTop: 0, width: 390, height: 360, scale: 1 };
+        const spec = JSON.stringify({ items: [{ id: 'a', title: 'Cut' }, { id: 'b', title: 'Copy' }] });
+        bridge.showMenu(h, spec, 20, 320, 160, false);
+        const menu = doc.body.children.find(n => n.getAttribute('data-rune-menu') === '');
+        assert.ok(menu);
+        assert.ok(menu.style.cssText.includes('max-height:352px'), 'max-height must follow visualViewport');
+        assert.equal(menu.style.top, '240px', 'menu must flip above software keyboard');
+        bridge.hideMenu(h);
+
+        Object.defineProperty(globalThis, 'innerWidth', { value: 800, configurable: true });
+        Object.defineProperty(globalThis, 'innerHeight', { value: 600, configurable: true });
+        win.visualViewport = { offsetLeft: 100, offsetTop: 150, width: 400, height: 300, scale: 2 };
+        bridge.showMenu(h, spec, 450, 420, 160, false);
+        const zoomedMenu = doc.body.children.find(n => n.getAttribute('data-rune-menu') === '');
+        assert.ok(zoomedMenu);
+        assert.ok(zoomedMenu.style.cssText.includes('max-height:292px'));
+        assert.equal(zoomedMenu.style.left, '336px');
+        assert.equal(zoomedMenu.style.top, '340px');
+        bridge.hideMenu(h);
+
+        bridge.sync(h, 'f', 'hi', 0, 2, 2, false);
+        bridge.syncCaret(h, 40, 200, 2, 20);
+        assert.equal(h.textarea.style.left, '40px');
+        assert.equal(h.textarea.style.top, '200px');
+        assert.equal(h.input.style.left, '40px');
+        assert.equal(h.input.style.top, '200px');
+        assert.equal(h.password.style.left, '40px');
+        assert.equal(h.password.style.top, '200px');
+
+        const embCanvas = doc.createElement('canvas');
+        let embRect = { left: 120, top: 180, right: 520, bottom: 480, width: 400, height: 300 };
+        embCanvas.getBoundingClientRect = () => embRect;
+        doc.body.append(embCanvas);
+        const he = bridge.mount(embCanvas, () => {}, true, false, false);
+        try {
+            bridge.sync(he, 'f', 'hi', 0, 2, 2, false, true, 'email', '');
+            bridge.syncCaret(he, 15, 25, 2, 18);
+            assert.equal(he.input.style.left, '135px');
+            assert.equal(he.input.style.top, '205px');
+
+            embRect = { left: 120, top: 60, right: 520, bottom: 360, width: 400, height: 300 };
+            win.dispatchEvent({ type: 'scroll' });
+            assert.equal(he.input.style.left, '135px');
+            assert.equal(he.input.style.top, '85px');
+        } finally {
+            bridge.destroy(he);
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});

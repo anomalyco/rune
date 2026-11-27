@@ -223,6 +223,10 @@ impl dyn WebApp + '_ {
     pub(super) fn web_secure_replace(&mut self, key: &str, text: String) {
         self.driver(|rt, app| rt.web_secure_replace(app, key, text));
     }
+
+    pub(super) fn web_autofill(&mut self, key: &str, text: String, secure: bool) {
+        self.driver(|rt, app| rt.web_autofill(app, key, text, secure));
+    }
 }
 
 fn pasted_image_fn(handle: &JsValue) -> impl FnOnce() -> js_sys::Promise + '_ {

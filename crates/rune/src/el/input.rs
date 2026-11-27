@@ -2,6 +2,130 @@
 
 use super::*;
 
+/// Virtual keyboard layout and text-input mode hint ([`El::input_mode`]), following HTML's
+/// `inputmode` attribute.
+///
+/// Defaults to [`InputMode::Text`]. On the web this configures the hidden editing input's
+/// `inputMode`, `type` (where selection-safe), `autocapitalize`, `autocorrect`, `spellcheck`,
+/// and `enterKeyHint`; mobile and desktop IME hosts can map it directly to native soft-keyboard
+/// types or content purposes.
+///
+/// ```
+/// # use rune::{InputMode, TextEdit, TextStyle, text_input};
+/// # let edit = TextEdit::default();
+/// let field = text_input(&edit, TextStyle::new(14.0, 400.0))
+///     .single_line()
+///     .input_mode(InputMode::Email);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum InputMode {
+    /// Standard text keyboard (`inputmode="text"`).
+    #[default]
+    Text,
+    /// Email address keyboard with `@` and `.` (`inputmode="email"`), no autocapitalize or autocorrect.
+    Email,
+    /// Web address keyboard with `/` and `.com` (`inputmode="url"`), no autocapitalize or autocorrect.
+    Url,
+    /// Search keyboard with a Search submit key (`inputmode="search"`, `enterkeyhint="search"`).
+    Search,
+    /// Integer numeric keypad (`inputmode="numeric"`), no autocapitalize or autocorrect.
+    Numeric,
+    /// Decimal numeric keypad with a locale decimal separator (`inputmode="decimal"`).
+    Decimal,
+    /// Telephone keypad (`inputmode="tel"`).
+    Tel,
+    /// Suppresses the virtual keyboard while still accepting hardware keyboard input (`inputmode="none"`).
+    None,
+}
+
+impl InputMode {
+    /// The corresponding HTML `inputmode` attribute value.
+    pub const fn as_html(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Email => "email",
+            Self::Url => "url",
+            Self::Search => "search",
+            Self::Numeric => "numeric",
+            Self::Decimal => "decimal",
+            Self::Tel => "tel",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Browser and OS autofill hint for a text field ([`El::autofill`]), following HTML's
+/// `autocomplete` autofill tokens (distinct from ARIA's [`AutoComplete`], which describes
+/// inline/popup completion behaviour via `aria-autocomplete`).
+///
+/// On the web, pairing a username or email field ([`Autofill::Username`] / [`Autofill::Email`])
+/// with a [`secure`](El::secure) password field ([`Autofill::CurrentPassword`] /
+/// [`Autofill::NewPassword`]) exposes both inside a hidden `<form>` so Safari AutoFill, Chrome
+/// Password Manager, Firefox Lockwise, and third-party password managers can offer and fill
+/// credentials into both fields simultaneously.
+///
+/// ```
+/// # use rune::{Autofill, InputMode, TextEdit, TextStyle, text_input};
+/// # let edit = TextEdit::default();
+/// let email = text_input(&edit, TextStyle::new(14.0, 400.0))
+///     .single_line()
+///     .input_mode(InputMode::Email)
+///     .autofill(Autofill::Username);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Autofill {
+    /// Disables browser autofill (`autocomplete="off"`).
+    Off,
+    /// Account username or sign-in identifier (`autocomplete="username"`).
+    Username,
+    /// Email address (`autocomplete="email"`).
+    Email,
+    /// Existing account password (`autocomplete="current-password"`).
+    CurrentPassword,
+    /// New password being created or changed (`autocomplete="new-password"`).
+    NewPassword,
+    /// One-time verification code (`autocomplete="one-time-code"`).
+    OneTimeCode,
+    /// Full name (`autocomplete="name"`).
+    Name,
+    /// Given / first name (`autocomplete="given-name"`).
+    GivenName,
+    /// Family / last name (`autocomplete="family-name"`).
+    FamilyName,
+    /// Company or organization name (`autocomplete="organization"`).
+    Organization,
+    /// Telephone number (`autocomplete="tel"`).
+    Tel,
+    /// Website or profile URL (`autocomplete="url"`).
+    Url,
+    /// Street address (`autocomplete="street-address"`).
+    StreetAddress,
+    /// Postal or ZIP code (`autocomplete="postal-code"`).
+    PostalCode,
+}
+
+impl Autofill {
+    /// The corresponding HTML `autocomplete` attribute value.
+    pub const fn as_html(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Username => "username",
+            Self::Email => "email",
+            Self::CurrentPassword => "current-password",
+            Self::NewPassword => "new-password",
+            Self::OneTimeCode => "one-time-code",
+            Self::Name => "name",
+            Self::GivenName => "given-name",
+            Self::FamilyName => "family-name",
+            Self::Organization => "organization",
+            Self::Tel => "tel",
+            Self::Url => "url",
+            Self::StreetAddress => "street-address",
+            Self::PostalCode => "postal-code",
+        }
+    }
+}
+
 /// A text field bound to a [`TextEdit`] in app state.
 #[derive(Clone)]
 pub struct InputSpec {
@@ -53,6 +177,10 @@ pub struct InputSpec {
     pub(crate) read_only: bool,
     /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
     pub(crate) selection_style: Option<SelectionStyle>,
+    /// [`El::input_mode`]: virtual keyboard / input mode hint (HTML `inputmode`).
+    pub(crate) input_mode: InputMode,
+    /// [`El::autofill`]: browser/OS autofill hint (HTML `autocomplete`).
+    pub(crate) autofill: Option<Autofill>,
 }
 
 impl std::fmt::Debug for InputSpec {
@@ -125,6 +253,8 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         reveal_caret_on_focus: false,
         read_only: false,
         selection_style: None,
+        input_mode: InputMode::Text,
+        autofill: None,
     }));
     e.sync_input_pills();
     e.sync_input_rich();
@@ -400,6 +530,40 @@ impl El {
     pub fn on_input_key<S: 'static>(mut self, f: impl Fn(&mut S, &crate::KeyEvent, &mut Tx) -> bool + 'static) -> Self {
         if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             input.key = Some(Rc::new(move |s, key, tx| f(downcast::<S>(s), key, tx)));
+        }
+        self
+    }
+    /// Set the virtual keyboard layout and input mode hint for this [`text_input`] (HTML
+    /// `inputmode`). Defaults to [`InputMode::Text`].
+    ///
+    /// ```
+    /// # use rune::{InputMode, TextEdit, TextStyle, text_input};
+    /// # let edit = TextEdit::default();
+    /// let _ = text_input(&edit, TextStyle::new(14.0, 400.0))
+    ///     .single_line()
+    ///     .input_mode(InputMode::Search);
+    /// ```
+    pub fn input_mode(mut self, mode: InputMode) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.input_mode = mode;
+        }
+        self
+    }
+    /// Set the browser and OS autofill hint for this [`text_input`] (HTML `autocomplete`,
+    /// distinct from ARIA [`El::auto_complete`]). Defaults to `None` (no explicit hint on plain
+    /// fields; `"current-password"` on [`El::secure`] fields).
+    ///
+    /// ```
+    /// # use rune::{Autofill, TextEdit, TextStyle, text_input};
+    /// # let edit = TextEdit::default();
+    /// let _ = text_input(&edit, TextStyle::new(14.0, 400.0))
+    ///     .single_line()
+    ///     .secure()
+    ///     .autofill(Autofill::NewPassword);
+    /// ```
+    pub fn autofill(mut self, hint: Autofill) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.autofill = Some(hint);
         }
         self
     }
