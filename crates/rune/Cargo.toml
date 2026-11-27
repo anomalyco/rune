@@ -78,10 +78,9 @@ png = ["rune-image/png", "dep:image", "dep:png"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes), and
 # scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["rune-image/svg", "rune-text/svg"]
-# AVIF images (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a Rust port of
-# dav1d; an animated AVIF shows its first frame. Building it for x86 needs NASM on the PATH for
-# rav1d's assembly. Off, AVIF bytes resolve to `Image::error`. No effect on web, where the
-# browser decodes AVIF.
+# AVIF stills (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a pure-Rust port of
+# dav1d; animated AVIF (`avis`) is rejected natively. Off, AVIF bytes resolve to `Image::error`.
+# No effect on web, where the browser decodes AVIF.
 avif = ["rune-image/avif"]
 # Linux and web (`wasm32`): spell check text fields (`El::spellcheck`) against Hunspell
 # dictionaries via `spellbook` (MPL-2.0) and `unicode-segmentation` (installed system dictionaries

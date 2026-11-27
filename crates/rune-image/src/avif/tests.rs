@@ -1,4 +1,5 @@
-use super::{checked_rgba_bytes, checked_rgba_bytes_with, is_avif, limits::{ALPHA_AUX_URN, check as check_limits, inspect, too_large}};
+use crate::ImageLimits;
+use super::{checked_rgba_bytes, checked_rgba_bytes_raw, checked_rgba_bytes_with, is_avif, limits::{ALPHA_AUX_URN, check as check_limits, check_with as check_limits_with, inspect, too_large}};
 
 struct BitWriter {
     bytes: Vec<u8>,
@@ -381,14 +382,16 @@ fn checked_rgba_bytes_enforces_dimensions_allocation_and_overflow() {
         Ok((crate::MAX_SIDE, crate::MAX_SIDE, crate::MAX_ALLOC as usize)),
     );
 
-    // Byte-budget enforcement independent of MAX_SIDE.
-    assert_eq!(checked_rgba_bytes_with(64, 64, 128, 64 * 64 * 4), Ok((64, 64, 64 * 64 * 4)));
-    assert_eq!(checked_rgba_bytes_with(64, 64, 128, 64 * 64 * 4 - 1), Err(too_large()));
-    assert_eq!(checked_rgba_bytes_with(4096, 4096, crate::MAX_SIDE, 64 * 1024 * 1024 - 1), Err(too_large()));
+    // Byte-budget and pixel-budget enforcement independent of MAX_SIDE.
+    let lim_exact = ImageLimits::new().with_max_side(128).with_max_alloc(64 * 64 * 4);
+    assert_eq!(checked_rgba_bytes_with(64, 64, lim_exact), Ok((64, 64, 64 * 64 * 4)));
+    assert_eq!(checked_rgba_bytes_with(64, 64, lim_exact.with_max_alloc(64 * 64 * 4 - 1)), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_with(64, 64, ImageLimits::new().with_max_pixels(64 * 64 - 1)), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_with(4096, 4096, ImageLimits::new().with_max_alloc(64 * 1024 * 1024 - 1)), Err(too_large()));
 
     // Checked multiplication overflow does not wrap.
-    assert_eq!(checked_rgba_bytes_with(u32::MAX as usize, u32::MAX as usize, u32::MAX, u64::MAX), Err(too_large()));
-    assert_eq!(checked_rgba_bytes_with(1usize << 31, 1usize << 31, u32::MAX, u64::MAX), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_raw(u32::MAX as usize, u32::MAX as usize, u32::MAX, u64::MAX, u64::MAX), Err(too_large()));
+    assert_eq!(checked_rgba_bytes_raw(1usize << 31, 1usize << 31, u32::MAX, u64::MAX, u64::MAX), Err(too_large()));
 }
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
@@ -403,34 +406,80 @@ fn rgba_rejects_oversized_avif_before_decoding() {
     assert_eq!(super::super::decode(&spoofed_ispe).err(), Some(too_large()));
 }
 
+#[test]
+fn preflight_enforces_caller_supplied_image_limits() {
+    let seq = seq_hdr_reduced(64, 32, false, false);
+    let avif = build_avif(Some((64, 32)), &seq, None);
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_side(64)), Ok(()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_side(63)), Err(too_large()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_pixels(64 * 32)), Ok(()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_pixels(64 * 32 - 1)), Err(too_large()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_alloc(64 * 32 * 4)), Ok(()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_alloc(64 * 32 * 4 - 1)), Err(too_large()));
+    assert_eq!(check_limits_with(&avif, ImageLimits::new().with_max_pixels(0)), Err(too_large()));
+}
+
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 #[test]
-fn image_to_rgba_validates_budget_before_allocating_and_preallocates_exact_buffer() {
+fn rav1d_enforces_frame_size_limit_and_conversion_budget_directly() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../www/public/img/hello-320.avif");
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(check_limits(&bytes), Ok(()));
 
-    let decode_image = || avif_decode::Decoder::from_avif(&bytes).unwrap().to_image().unwrap();
-    let (w, h, pixels) = super::image_to_rgba(decode_image()).unwrap();
+    let (w, h, pixels) = super::rgba(&bytes).unwrap();
     assert!(w > 0 && h > 0);
+    let total_px = u64::from(w) * u64::from(h);
     let expected_bytes = w as usize * h as usize * 4;
     assert_eq!(pixels.len(), expected_bytes);
     assert_eq!(pixels.capacity(), expected_bytes, "RGBA conversion buffer should pre-allocate exact capacity");
+    assert!(pixels.as_chunks::<4>().0.iter().all(|px| px[3] == 255), "opaque AVIF must decode with alpha = 255");
 
-    // Reject over-dimension and over-allocation budgets before allocating.
-    assert_eq!(super::image_to_rgba_with(decode_image(), w - 1, crate::MAX_ALLOC), Err(too_large()));
-    assert_eq!(
-        super::image_to_rgba_with(decode_image(), crate::MAX_SIDE, expected_bytes as u64 - 1),
-        Err(too_large()),
-    );
+    // Extract the raw AV1 primary bitstream and invoke rav1d directly (bypassing ISO-BMFF/AV1
+    // preflight) to prove `Dav1dSettings::frame_size_limit` rejects oversized frames inside rav1d.
+    let mut reader = bytes.as_slice();
+    let parsed = avif_parse::read_avif(&mut reader).unwrap();
+    let av1 = &parsed.primary_item;
 
-    // End-to-end native AVIF decode matches.
-    let (rw, rh, rpixels) = super::rgba(&bytes).unwrap();
-    assert_eq!((rw, rh), (w, h));
-    assert_eq!(rpixels, pixels);
-    assert_eq!(rpixels.capacity(), expected_bytes);
-    let decoded = super::super::decode(&bytes).unwrap();
-    assert_eq!((decoded.mips[0].width, decoded.mips[0].height), (w, h));
+    // Exact pixel budget succeeds through rav1d.
+    let exact_px = ImageLimits::new().with_max_pixels(total_px);
+    let (dw, dh, dpixels) = super::codec::decode_av1_frame_with_limit(av1, exact_px).unwrap();
+    assert_eq!((dw, dh), (w, h));
+    assert_eq!(dpixels, pixels);
+    assert_eq!(dpixels.capacity(), expected_bytes);
+
+    // One pixel tighter is rejected by rav1d itself with ERANGE -> too_large().
+    let too_tight_px = ImageLimits::new().with_max_pixels(total_px - 1);
+    assert_eq!(super::codec::decode_av1_frame_with_limit(av1, too_tight_px), Err(too_large()));
+
+    // Zero pixel budget is rejected before opening rav1d (never passing 0 to frame_size_limit).
+    assert_eq!(super::codec::decode_av1_frame_with_limit(av1, ImageLimits::new().with_max_pixels(0)), Err(too_large()));
+    assert_eq!(super::codec::decode_av1_frame_with_limit(av1, ImageLimits::new().with_max_side(0)), Err(too_large()));
+    assert_eq!(super::codec::decode_av1_frame_with_limit(av1, ImageLimits::new().with_max_alloc(3)), Err(too_large()));
+
+    // Tight byte budget (implied pixel budget = total_px - 1) is rejected inside rav1d as well.
+    let too_tight_alloc = ImageLimits::new().with_max_alloc(expected_bytes as u64 - 1);
+    assert_eq!(super::codec::decode_av1_frame_with_limit(av1, too_tight_alloc), Err(too_large()));
+
+    // When total pixels fit `frame_size_limit` (w*h <= max_side^2 if non-square, or side cap on
+    // the long edge) the post-decode check still rejects before allocating the RGBA buffer.
+    let tighter_side = ImageLimits::new().with_max_side(w.max(h) - 1);
+    assert_eq!(super::codec::decode_avif(&bytes, tighter_side), Err(too_large()));
+
+    // End-to-end through ImageCache::load_with_limits and load_scaled_with_limits, including
+    // cache-key isolation between tighter preview limits and full-budget loads.
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let rejected = cache.load_with_limits(bytes.clone(), ImageLimits::new().with_max_pixels(total_px - 1));
+    assert_eq!(rejected.wait(), Err(&too_large()));
+    let accepted = cache.load_with_limits(bytes.clone(), exact_px);
+    assert_eq!(accepted.wait(), Ok([w, h]));
+    let full = cache.load(bytes.clone());
+    assert_eq!(full.wait(), Ok([w, h]));
+
+    let scaled_rejected = cache.load_scaled_with_limits(bytes.clone(), 64.0, 1.0, ImageLimits::new().with_max_side(w.max(h) - 1));
+    assert_eq!(scaled_rejected.wait(), Err(&too_large()));
+    let scaled_ok = cache.load_scaled_with_limits(bytes, 64.0, 1.0, exact_px);
+    let [sw, sh] = scaled_ok.wait().unwrap();
+    assert!(sw <= 64 && sh <= 64 && sw > 0 && sh > 0);
 }
 
 /// Builds a minimal AVIF container with arbitrary `colr` boxes associated to given item IDs.
@@ -636,4 +685,31 @@ fn avif_rgba_converts_display_p3_colr_prof_and_ricc_and_falls_back_on_srgb_or_co
     // Corrupt ICC profile in colr does not fail decode and leaves pixels unchanged.
     let corrupt_avif = inject_colr_into_hello_avif(&untagged, b"prof", b"corrupt-icc-data");
     assert_eq!(super::rgba(&corrupt_avif).unwrap().2, base_pixels);
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+#[test]
+fn avif_rgba_decodes_real_alpha_plane_and_enforces_budget_on_alpha_too() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../www/public/img/hello-320.avif");
+    let orig = std::fs::read(&path).unwrap();
+    let (w, h, base_pixels) = super::rgba(&orig).unwrap();
+
+    // Reuse hello-320.avif's real AV1 bitstream as both primary and auxiliary alpha items.
+    let mut reader = orig.as_slice();
+    let parsed = avif_parse::read_avif(&mut reader).unwrap();
+    let av1 = &parsed.primary_item;
+    let with_alpha = build_avif(Some((w, h)), av1, Some((Some((w, h)), av1)));
+
+    let (aw, ah, alpha_pixels) = super::rgba(&with_alpha).unwrap();
+    assert_eq!((aw, ah), (w, h));
+    assert_eq!(alpha_pixels.len(), base_pixels.len());
+    // RGB channels match the opaque decode; alpha channel now carries the decoded luma plane.
+    assert!(alpha_pixels.as_chunks::<4>().0.iter().any(|px| px[3] != 255), "alpha plane must populate pixel alpha");
+    for (orig_px, alpha_px) in base_pixels.as_chunks::<4>().0.iter().zip(alpha_pixels.as_chunks::<4>().0) {
+        assert_eq!(&orig_px[..3], &alpha_px[..3]);
+    }
+
+    // Tighter pixel budget rejects the alpha AVIF inside rav1d too.
+    let too_tight = ImageLimits::new().with_max_pixels(u64::from(w) * u64::from(h) - 1);
+    assert_eq!(super::codec::decode_avif(&with_alpha, too_tight), Err(too_large()));
 }

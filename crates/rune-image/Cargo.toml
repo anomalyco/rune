@@ -16,11 +16,12 @@ png = ["dep:image", "dep:moxcms"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes),
 # and scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["dep:resvg"]
-# AVIF stills (`ImageCache::load` on AVIF bytes), decoded natively by rav1d, a Rust port of
-# dav1d; animated AVIF (`avis`) is rejected natively. Building it for x86 needs NASM on the PATH
-# for rav1d's assembly. Off, AVIF bytes resolve to `Image::error`. No effect on web, where the
-# browser decodes AVIF stills and the first frame of AVIF sequences.
-avif = ["dep:avif-decode"]
+# AVIF stills (`ImageCache::load` on AVIF bytes), decoded natively by rav1d (a pure-Rust port of
+# dav1d) with per-load pixel budgets enforced in rav1d (`frame_size_limit`), in preflight, and
+# before RGBA conversion; animated AVIF (`avis`) is rejected natively. Off, AVIF bytes resolve to
+# `Image::error`. No effect on web, where the browser decodes AVIF stills and the first frame of
+# AVIF sequences.
+avif = ["dep:avif-parse", "dep:libc", "dep:rav1d", "dep:yuv"]
 
 [dependencies]
 blake3 = { workspace = true }
@@ -28,7 +29,10 @@ resvg = { workspace = true, optional = true }
 rune-core = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-avif-decode = { version = "3", optional = true }
+avif-parse = { version = "2.1", optional = true }
+libc = { workspace = true, optional = true }
+rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"], optional = true }
+yuv = { version = "0.8", optional = true }
 # Native raster decoders and embedded ICC conversion; always linked on native targets.
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 moxcms = { workspace = true }

@@ -24,6 +24,7 @@ mod header;
 mod icc;
 #[cfg(test)]
 mod icc_tests;
+mod limits;
 #[cfg(test)]
 mod mip_tests;
 mod mips;
@@ -39,6 +40,7 @@ mod tests;
 
 pub use app_icon::app_icon_rgba;
 pub use freedesktop::themed_icon_rgba;
+pub use limits::ImageLimits;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use from_url::font_file;
@@ -62,11 +64,13 @@ use mips::byte;
 use mips::maybe_downsample_rgba;
 use mips::mip_chain;
 use mips::mip_chain_with_intrinsic;
-use svg::svg_rgba_with_size;
+use svg::{svg_rgba_with_size, svg_rgba_with_size_and_limits};
 
 /// Largest image side Rune decodes or accepts on native and web: 8192 pixels, so 8-bit RGBA
 /// stays within [`MAX_ALLOC`] before mips.
 pub(crate) const MAX_SIDE: u32 = 8192;
+/// Largest total pixel count Rune decodes by default (`8192 × 8192`, 256 MiB as RGBA8).
+pub(crate) const MAX_PIXELS: u64 = (MAX_SIDE as u64) * (MAX_SIDE as u64);
 /// Largest decoded raster buffer Rune allocates: 256 MiB.
 pub(crate) const MAX_ALLOC: u64 = 256 * 1024 * 1024;
 
@@ -218,7 +222,9 @@ impl Image {
 
 enum Input {
     Encoded(Arc<[u8]>),
+    EncodedLimited(Arc<[u8]>, ImageLimits),
     EncodedScaled(Arc<[u8]>, u32),
+    EncodedScaledLimited(Arc<[u8]>, u32, ImageLimits),
     Rgba(u32, u32, Arc<[u8]>),
     Icon(
         #[cfg_attr(target_arch = "wasm32", allow(dead_code))] std::path::PathBuf,
@@ -243,7 +249,9 @@ impl Input {
     fn decode(self) -> Result<Decoded, DecodeFailure> {
         match self {
             Input::Encoded(bytes) => decode(&bytes).map_err(DecodeFailure::from),
+            Input::EncodedLimited(bytes, limits) => decode_with_limits(&bytes, limits).map_err(DecodeFailure::from),
             Input::EncodedScaled(bytes, max_px) => decode_scaled(&bytes, max_px).map_err(DecodeFailure::from),
+            Input::EncodedScaledLimited(bytes, max_px, limits) => decode_scaled_with_limits(&bytes, max_px, limits).map_err(DecodeFailure::from),
             Input::Rgba(w, h, bytes) => mip_chain(w, h, &bytes).map_err(DecodeFailure::from),
             Input::Svg(bytes, px) => svg_rgba_with_size(&bytes, px)
                 .and_then(|(w, h, intrinsic, bytes)| mip_chain_with_intrinsic(w, h, &bytes, Some(intrinsic)))
@@ -410,6 +418,28 @@ impl ImageCache {
         self.request(id, Input::Encoded(bytes))
     }
 
+    /// Like [`ImageCache::load`], but enforces caller-supplied per-load [`ImageLimits`] (clamped
+    /// to Rune's global ceiling) during preflight, inside the native AVIF `rav1d` decoder
+    /// (`frame_size_limit`), and before raster buffer allocation.
+    ///
+    /// Use this for preview surfaces, thumbnails, or untrusted feeds that should reject oversized
+    /// inputs before allocating large frame buffers. Default limits share cache entries with
+    /// [`ImageCache::load`]; tighter limits use distinct cache keys so a rejected preview load
+    /// never poisons a full-budget load of the same bytes.
+    pub fn load_with_limits(&self, bytes: impl Into<Arc<[u8]>>, limits: ImageLimits) -> Image {
+        if limits.is_default() {
+            return self.load(bytes);
+        }
+        let bytes = bytes.into();
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-encoded-limited\0");
+        hash.update(&limits.max_side().to_le_bytes());
+        hash.update(&limits.max_pixels().to_le_bytes());
+        hash.update(&limits.max_alloc().to_le_bytes());
+        hash.update(&bytes);
+        self.request(*hash.finalize().as_bytes(), Input::EncodedLimited(bytes, limits))
+    }
+
     /// Like [`ImageCache::load`], but downsamples raster images to fit `size_pt` points square at
     /// `scale` device pixels per point (pass the window's `Env::scale`), keeping the aspect ratio
     /// and decoding only the first frame of animations, before building mipmaps.
@@ -446,6 +476,30 @@ impl ImageCache {
         hash.update(&max_px.to_le_bytes());
         hash.update(&bytes);
         self.request(*hash.finalize().as_bytes(), Input::EncodedScaled(bytes, max_px))
+    }
+
+    /// Like [`ImageCache::load_scaled`], but enforces caller-supplied per-load [`ImageLimits`]
+    /// before decoding the source image and downsampling to `size_pt` at `scale`.
+    pub fn load_scaled_with_limits(
+        &self,
+        bytes: impl Into<Arc<[u8]>>,
+        size_pt: f32,
+        scale: f32,
+        limits: ImageLimits,
+    ) -> Image {
+        if limits.is_default() {
+            return self.load_scaled(bytes, size_pt, scale);
+        }
+        let bytes = bytes.into();
+        let max_px = scaled_pixels(size_pt, scale);
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"rune-encoded-scaled-limited\0");
+        hash.update(&max_px.to_le_bytes());
+        hash.update(&limits.max_side().to_le_bytes());
+        hash.update(&limits.max_pixels().to_le_bytes());
+        hash.update(&limits.max_alloc().to_le_bytes());
+        hash.update(&bytes);
+        self.request(*hash.finalize().as_bytes(), Input::EncodedScaledLimited(bytes, max_px, limits))
     }
 
     /// SVG or SVGZ bytes rasterized to fit `size_pt` points square at `scale` device pixels per
@@ -640,12 +694,22 @@ impl ImageCache {
                         match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::Encoded(bytes) if browser_decodes(&bytes) => {
-                        let decoded = decode_encoded_in_browser(&bytes).await;
+                        let decoded = decode_encoded_in_browser(&bytes, ImageLimits::new()).await;
+                        if !wanted(&weak) { return; }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
+                    }
+                    Input::EncodedLimited(bytes, limits) if browser_decodes(&bytes) => {
+                        let decoded = decode_encoded_in_browser(&bytes, limits).await;
                         if !wanted(&weak) { return; }
                         match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::EncodedScaled(bytes, max_px) if browser_decodes(&bytes) => {
-                        let decoded = decode_encoded_in_browser(&bytes).await;
+                        let decoded = decode_encoded_in_browser(&bytes, ImageLimits::new()).await;
+                        if !wanted(&weak) { return; }
+                        match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
+                    }
+                    Input::EncodedScaledLimited(bytes, max_px, limits) if browser_decodes(&bytes) => {
+                        let decoded = decode_encoded_in_browser(&bytes, limits).await;
                         if !wanted(&weak) { return; }
                         match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
@@ -672,9 +736,9 @@ fn browser_decodes(bytes: &[u8]) -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn decode_encoded_in_browser(bytes: &[u8]) -> Result<from_url::Fetched, ImageError> {
-    let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
-    from_url::decode_in_browser(bytes).await
+async fn decode_encoded_in_browser(bytes: &[u8], limits: ImageLimits) -> Result<from_url::Fetched, ImageError> {
+    let bytes = if bytes.starts_with(b"icns") { icns_png_with_limits(bytes, limits)? } else { bytes };
+    from_url::decode_in_browser_with_limits(bytes, limits).await
 }
 
 /// Whether anything still holds the image a fetch is for.
@@ -731,49 +795,61 @@ fn read_regular_file_checked(path: &std::path::Path) -> Result<Vec<u8>, DecodeFa
 }
 
 fn decode(bytes: &[u8]) -> Result<Decoded, ImageError> {
+    decode_with_limits(bytes, ImageLimits::new())
+}
+
+fn decode_with_limits(bytes: &[u8], limits: ImageLimits) -> Result<Decoded, ImageError> {
     if is_svg(bytes) {
-        let (w, h, intrinsic, rgba) = svg_rgba_with_size(bytes, 0)?;
+        let (w, h, intrinsic, rgba) = svg_rgba_with_size_and_limits(bytes, 0, limits)?;
         return mip_chain_with_intrinsic(w, h, &rgba, Some(intrinsic));
     }
     if avif::is_avif(bytes) {
-        let (w, h, rgba) = avif::rgba(bytes)?;
+        let (w, h, rgba) = avif::rgba_with_limits(bytes, limits)?;
         return mip_chain(w, h, &rgba);
     }
-    let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
-    if let Some(animation) = animated::decode(bytes) { return animation; }
-    let (w, h, rgba) = decode_still_raster(bytes)?;
+    let bytes = if bytes.starts_with(b"icns") { icns_png_with_limits(bytes, limits)? } else { bytes };
+    if let Some(animation) = animated::decode_with_limits(bytes, limits) { return animation; }
+    let (w, h, rgba) = decode_still_raster_with_limits(bytes, limits)?;
     mip_chain(w, h, &rgba)
 }
 
 fn decode_scaled(bytes: &[u8], max_px: u32) -> Result<Decoded, ImageError> {
+    decode_scaled_with_limits(bytes, max_px, ImageLimits::new())
+}
+
+fn decode_scaled_with_limits(bytes: &[u8], max_px: u32, limits: ImageLimits) -> Result<Decoded, ImageError> {
     if is_svg(bytes) {
-        let (w, h, intrinsic, rgba) = svg_rgba_with_size(bytes, max_px)?;
+        let (w, h, intrinsic, rgba) = svg_rgba_with_size_and_limits(bytes, max_px, limits)?;
         return mip_chain_with_intrinsic(w, h, &rgba, Some(intrinsic));
     }
     let (w, h, rgba) = if avif::is_avif(bytes) {
-        avif::rgba(bytes)?
+        avif::rgba_with_limits(bytes, limits)?
     } else {
-        let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
-        decode_still_raster(bytes)?
+        let bytes = if bytes.starts_with(b"icns") { icns_png_with_limits(bytes, limits)? } else { bytes };
+        decode_still_raster_with_limits(bytes, limits)?
     };
     let (w, h, rgba) = maybe_downsample_rgba(w, h, rgba, Some(max_px))?;
     mip_chain(w, h, &rgba)
 }
 
 #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
-fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
+fn decode_still_raster_with_limits(bytes: &[u8], budget: ImageLimits) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use image::ImageDecoder;
     let error = |e: image::ImageError| ImageError(e.to_string());
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format().map_err(|e| ImageError(e.to_string()))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_ALLOC);
+    limits.max_image_width = Some(budget.max_side());
+    limits.max_image_height = Some(budget.max_side());
+    limits.max_alloc = Some(budget.max_alloc());
     reader.limits(limits.clone());
     // `ImageReader::decode`, keeping the decoder to read its EXIF orientation (a phone's JPEG
     // stores its pixels as the sensor saw them and says how to turn them upright).
     let mut decoder = reader.into_decoder().map_err(error)?;
+    let (dw, dh) = decoder.dimensions();
+    if !budget.fits(dw, dh, 4) {
+        return Err(ImageError("image exceeds pixel budget".into()));
+    }
     limits.reserve(decoder.total_bytes()).map_err(error)?;
     decoder.set_limits(limits).map_err(error)?;
     let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
@@ -782,13 +858,16 @@ fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> 
     image.apply_orientation(orientation);
     let image = image.into_rgba8();
     let (w, h) = (image.width(), image.height());
+    if !budget.fits(w, h, 4) {
+        return Err(ImageError("image exceeds pixel budget".into()));
+    }
     let mut raw = image.into_raw();
     icc::convert_rgba_to_srgb(icc.as_deref(), &mut raw);
     Ok((w, h, raw))
 }
 
 #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
-fn decode_still_raster(_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
+fn decode_still_raster_with_limits(_bytes: &[u8], _budget: ImageLimits) -> Result<(u32, u32, Vec<u8>), ImageError> {
     Err(ImageError("Rust raster decoding is disabled on wasm32 without the `png` feature".into()))
 }
 
@@ -808,7 +887,7 @@ pub fn png_rgba8(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
     Ok(rgba)
 }
 
-fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
+fn icns_png_with_limits(bytes: &[u8], limits: ImageLimits) -> Result<&[u8], ImageError> {
     let invalid = || ImageError("invalid ICNS container or no supported PNG representation".into());
     let len = u32::from_be_bytes(bytes.get(4..8).ok_or_else(invalid)?.try_into().unwrap()) as usize;
     if len != bytes.len() { return Err(invalid()); }
@@ -825,7 +904,7 @@ fn icns_png(bytes: &[u8]) -> Result<&[u8], ImageError> {
             let w = u32::from_be_bytes(chunk[16..20].try_into().unwrap());
             let h = u32::from_be_bytes(chunk[20..24].try_into().unwrap());
             let candidate = u64::from(w) * u64::from(h);
-            if w <= MAX_SIDE && h <= MAX_SIDE && candidate > area { best = Some(chunk); area = candidate; }
+            if limits.fits(w, h, 4) && candidate > area { best = Some(chunk); area = candidate; }
         }
         pos = end;
     }

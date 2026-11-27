@@ -9,7 +9,7 @@
 //! and ISOBMFF container). SVG is handled separately before this check. The same Chrome list
 //! applies in Safari and Firefox so an app accepts and refuses the same formats in every
 //! browser instead of relying on browser-specific decoders such as TIFF, HEIC/HEIF or JPEG 2000.
-use super::{ImageError, MAX_ALLOC, MAX_SIDE, avif};
+use super::{ImageError, ImageLimits, avif};
 
 /// 12-byte JPEG XL ISOBMFF container signature box (ISO/IEC 18181-2).
 const JXL_CONTAINER_SIG: [u8; 12] = [
@@ -32,46 +32,51 @@ pub(super) const MAX_AVIS_DURATION_SECS: u64 = 300;
 /// zero-sized, malformed and non-Chrome formats so no unvalidated raster reaches
 /// `createImageBitmap`.
 pub(super) fn check(bytes: &[u8]) -> Result<(), ImageError> {
+    check_with_limits(bytes, ImageLimits::new())
+}
+
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub(super) fn check_with_limits(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        check_png(bytes)
+        check_png(bytes, limits)
     } else if bytes.starts_with(&[0xff, 0xd8]) {
-        check_jpeg(bytes)
+        check_jpeg(bytes, limits)
     } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        check_gif(bytes)
+        check_gif(bytes, limits)
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        check_webp(bytes)
+        check_webp(bytes, limits)
     } else if bytes.starts_with(b"BM") {
-        check_bmp(bytes)
+        check_bmp(bytes, limits)
     } else if is_ico(bytes) {
-        check_ico(bytes)
+        check_ico(bytes, limits)
     } else if let Some(kind) = avif_kind(bytes) {
         match kind {
-            AvifKind::Still => avif::check_limits(bytes),
-            AvifKind::Sequence => check_avis(bytes),
+            AvifKind::Still => avif::check_limits_with(bytes, limits),
+            AvifKind::Sequence => check_avis(bytes, limits),
         }
     } else if bytes.starts_with(&[0xff, 0x0a]) {
-        check_jxl_codestream(bytes)
+        check_jxl_codestream(bytes, limits)
     } else if bytes.starts_with(&JXL_CONTAINER_SIG) {
-        check_jxl_container(bytes)
+        check_jxl_container(bytes, limits)
     } else {
         Err(ImageError("unsupported image format (web accepts only formats Chrome decodes)".into()))
     }
 }
 
-fn check_dimensions(w: u32, h: u32) -> Result<(), ImageError> {
+fn check_dimensions(w: u32, h: u32, limits: ImageLimits) -> Result<(), ImageError> {
     if w == 0 || h == 0 {
         return Err(ImageError(format!("{w}×{h} has zero dimension")));
     }
-    if w > MAX_SIDE || h > MAX_SIDE {
-        return Err(ImageError(format!("{w}×{h} is over {MAX_SIDE} pixels a side")));
+    if w > limits.max_side() || h > limits.max_side() {
+        return Err(ImageError(format!("{w}×{h} is over {} pixels a side", limits.max_side())));
     }
-    if (u64::from(w) * u64::from(h)).saturating_mul(4) > MAX_ALLOC {
+    if !limits.fits(w, h, 4) {
         return Err(ImageError(format!("{w}×{h} exceeds maximum decoded size")));
     }
     Ok(())
 }
 
-fn check_png(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_png(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid PNG header".into());
     let head = bytes.get(..24).ok_or_else(invalid)?;
     let ihdr_len = u32::from_be_bytes(head[8..12].try_into().unwrap());
@@ -80,10 +85,10 @@ fn check_png(bytes: &[u8]) -> Result<(), ImageError> {
     }
     let w = u32::from_be_bytes(head[16..20].try_into().unwrap());
     let h = u32::from_be_bytes(head[20..24].try_into().unwrap());
-    check_dimensions(w, h)
+    check_dimensions(w, h, limits)
 }
 
-fn check_jpeg(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_jpeg(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid JPEG header".into());
     let mut i = 2usize;
     while i < bytes.len() {
@@ -104,7 +109,7 @@ fn check_jpeg(bytes: &[u8]) -> Result<(), ImageError> {
                 if len < 8 { return Err(invalid()); }
                 let h = u32::from(u16::from_be_bytes([seg[3], seg[4]]));
                 let w = u32::from(u16::from_be_bytes([seg[5], seg[6]]));
-                return check_dimensions(w, h);
+                return check_dimensions(w, h, limits);
             }
             // All other markers carry a 2-byte big-endian length (including the 2 length bytes).
             _ => {
@@ -118,12 +123,12 @@ fn check_jpeg(bytes: &[u8]) -> Result<(), ImageError> {
     Err(invalid())
 }
 
-fn check_gif(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_gif(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid GIF header".into());
     let head = bytes.get(..10).ok_or_else(invalid)?;
     let w = u32::from(u16::from_le_bytes([head[6], head[7]]));
     let h = u32::from(u16::from_le_bytes([head[8], head[9]]));
-    check_dimensions(w, h)?;
+    check_dimensions(w, h, limits)?;
     // If the stream continues past the Logical Screen Descriptor, also bound the first image
     // descriptor so a small logical screen cannot hide an oversized frame.
     if bytes.len() < 13 { return Ok(()); }
@@ -151,7 +156,7 @@ fn check_gif(bytes: &[u8]) -> Result<(), ImageError> {
                 let desc = i.checked_add(10).and_then(|end| bytes.get(i + 1..end)).ok_or_else(invalid)?;
                 let fw = u32::from(u16::from_le_bytes([desc[4], desc[5]]));
                 let fh = u32::from(u16::from_le_bytes([desc[6], desc[7]]));
-                return check_dimensions(fw, fh);
+                return check_dimensions(fw, fh, limits);
             }
             _ => break,
         }
@@ -159,20 +164,20 @@ fn check_gif(bytes: &[u8]) -> Result<(), ImageError> {
     Ok(())
 }
 
-fn check_webp(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_webp(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid WebP header".into());
     let (first_fourcc, first_payload, mut pos) = read_riff_chunk(bytes, 12).ok_or_else(invalid)?;
     match &first_fourcc {
-        b"VP8 " => check_vp8(first_payload),
-        b"VP8L" => check_vp8l(first_payload),
+        b"VP8 " => check_vp8(first_payload, limits),
+        b"VP8L" => check_vp8l(first_payload, limits),
         b"VP8X" => {
-            check_vp8x(first_payload)?;
+            check_vp8x(first_payload, limits)?;
             // Also bound any bitstream or animation frame chunks inside the extended container.
             while let Some((fourcc, payload, next)) = read_riff_chunk(bytes, pos) {
                 match &fourcc {
-                    b"VP8 " => check_vp8(payload)?,
-                    b"VP8L" => check_vp8l(payload)?,
-                    b"ANMF" => check_webp_anmf(payload)?,
+                    b"VP8 " => check_vp8(payload, limits)?,
+                    b"VP8L" => check_vp8l(payload, limits)?,
+                    b"ANMF" => check_webp_anmf(payload, limits)?,
                     _ => {}
                 }
                 pos = next;
@@ -194,17 +199,17 @@ fn read_riff_chunk(bytes: &[u8], pos: usize) -> Option<([u8; 4], &[u8], usize)> 
     Some((fourcc, payload, next))
 }
 
-fn check_vp8(data: &[u8]) -> Result<(), ImageError> {
+fn check_vp8(data: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid WebP VP8 header".into());
     if data.len() < 10 || data[0] & 1 != 0 || &data[3..6] != &[0x9d, 0x01, 0x2a] {
         return Err(invalid());
     }
     let w = u32::from(u16::from_le_bytes([data[6], data[7]]) & 0x3fff);
     let h = u32::from(u16::from_le_bytes([data[8], data[9]]) & 0x3fff);
-    check_dimensions(w, h)
+    check_dimensions(w, h, limits)
 }
 
-fn check_vp8l(data: &[u8]) -> Result<(), ImageError> {
+fn check_vp8l(data: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid WebP VP8L header".into());
     if data.len() < 5 || data[0] != 0x2f {
         return Err(invalid());
@@ -212,26 +217,26 @@ fn check_vp8l(data: &[u8]) -> Result<(), ImageError> {
     let bits = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
     let w = (bits & 0x3fff) + 1;
     let h = ((bits >> 14) & 0x3fff) + 1;
-    check_dimensions(w, h)
+    check_dimensions(w, h, limits)
 }
 
-fn check_vp8x(data: &[u8]) -> Result<(), ImageError> {
+fn check_vp8x(data: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     if data.len() < 10 { return Err(ImageError("invalid WebP VP8X header".into())); }
     let w = 1 + u24_le(&data[4..7]);
     let h = 1 + u24_le(&data[7..10]);
-    check_dimensions(w, h)
+    check_dimensions(w, h, limits)
 }
 
-fn check_webp_anmf(data: &[u8]) -> Result<(), ImageError> {
+fn check_webp_anmf(data: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     if data.len() < 16 { return Err(ImageError("invalid WebP ANMF chunk".into())); }
     let w = 1 + u24_le(&data[6..9]);
     let h = 1 + u24_le(&data[9..12]);
-    check_dimensions(w, h)?;
+    check_dimensions(w, h, limits)?;
     let mut pos = 16usize;
     while let Some((fourcc, payload, next)) = read_riff_chunk(data, pos) {
         match &fourcc {
-            b"VP8 " => check_vp8(payload)?,
-            b"VP8L" => check_vp8l(payload)?,
+            b"VP8 " => check_vp8(payload, limits)?,
+            b"VP8L" => check_vp8l(payload, limits)?,
             _ => {}
         }
         pos = next;
@@ -243,12 +248,12 @@ fn u24_le(bytes: &[u8]) -> u32 {
     u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16)
 }
 
-fn check_bmp(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_bmp(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let dib = bytes.get(14..).ok_or_else(|| ImageError("invalid BMP header".into()))?;
-    check_bmp_dib(dib, false)
+    check_bmp_dib(dib, false, limits)
 }
 
-fn check_bmp_dib(dib: &[u8], ico_halved_height: bool) -> Result<(), ImageError> {
+fn check_bmp_dib(dib: &[u8], ico_halved_height: bool, limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid BMP header".into());
     let size = u32::from_le_bytes(dib.get(..4).ok_or_else(invalid)?.try_into().unwrap());
     let (w, mut h) = if size == 12 {
@@ -264,14 +269,14 @@ fn check_bmp_dib(dib: &[u8], ico_halved_height: bool) -> Result<(), ImageError> 
         return Err(invalid());
     };
     if ico_halved_height { h /= 2; }
-    check_dimensions(w, h)
+    check_dimensions(w, h, limits)
 }
 
 fn is_ico(bytes: &[u8]) -> bool {
     bytes.len() >= 6 && bytes[0] == 0 && bytes[1] == 0 && matches!(bytes[2], 1 | 2) && bytes[3] == 0
 }
 
-fn check_ico(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_ico(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid ICO header".into());
     let count = usize::from(u16::from_le_bytes([bytes[4], bytes[5]]));
     if count == 0 { return Err(invalid()); }
@@ -285,9 +290,9 @@ fn check_ico(bytes: &[u8]) -> Result<(), ImageError> {
         let end = offset.checked_add(size).filter(|&end| end <= bytes.len()).ok_or_else(invalid)?;
         let payload = &bytes[offset..end];
         if payload.starts_with(b"\x89PNG\r\n\x1a\n") {
-            check_png(payload)?;
+            check_png(payload, limits)?;
         } else {
-            check_bmp_dib(payload, true)?;
+            check_bmp_dib(payload, true, limits)?;
         }
     }
     Ok(())
@@ -361,7 +366,7 @@ fn read_bmff_box<'a>(
     Ok(Some((kind, &bytes[payload_start..end], end)))
 }
 
-fn check_avis(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_avis(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid AVIF sequence header".into());
     let mut pos = 0usize;
     let mut saw_ftyp = false;
@@ -384,7 +389,7 @@ fn check_avis(bytes: &[u8]) -> Result<(), ImageError> {
                     return Err(ImageError("AVIF sequence metadata exceeds header scan limit".into()));
                 }
                 saw_meta = true;
-                check_avis_meta(payload)?;
+                check_avis_meta(payload, limits)?;
             }
             b"moov" => {
                 if saw_moov { return Err(invalid()); }
@@ -392,7 +397,7 @@ fn check_avis(bytes: &[u8]) -> Result<(), ImageError> {
                     return Err(ImageError("AVIF sequence metadata exceeds header scan limit".into()));
                 }
                 saw_moov = true;
-                valid_av01_tracks = check_avis_moov(payload)?;
+                valid_av01_tracks = check_avis_moov(payload, limits)?;
             }
             // Skip media data and auxiliary boxes without scanning their payload.
             _ => {}
@@ -404,7 +409,7 @@ fn check_avis(bytes: &[u8]) -> Result<(), ImageError> {
     Ok(())
 }
 
-fn check_avis_meta(data: &[u8]) -> Result<(), ImageError> {
+fn check_avis_meta(data: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid AVIF sequence meta box".into());
     let head = data.get(..4).ok_or_else(invalid)?;
     if head != [0, 0, 0, 0] { return Err(invalid()); }
@@ -424,7 +429,7 @@ fn check_avis_meta(data: &[u8]) -> Result<(), ImageError> {
                             if ispe[..4] != [0, 0, 0, 0] { return Err(invalid()); }
                             let w = u32::from_be_bytes(ispe[4..8].try_into().unwrap());
                             let h = u32::from_be_bytes(ispe[8..12].try_into().unwrap());
-                            check_dimensions(w, h)?;
+                            check_dimensions(w, h, limits)?;
                         }
                     }
                 }
@@ -475,7 +480,7 @@ fn read_bmff_timescale_duration(
     Ok((ts, finite))
 }
 
-fn check_avis_moov(data: &[u8]) -> Result<usize, ImageError> {
+fn check_avis_moov(data: &[u8], limits: ImageLimits) -> Result<usize, ImageError> {
     let invalid = || ImageError("invalid AVIF sequence moov box".into());
     let mut pos = 0usize;
     let mut valid_av01_tracks = 0usize;
@@ -487,7 +492,7 @@ fn check_avis_moov(data: &[u8]) -> Result<usize, ImageError> {
                 if let Some(dur) = finite { check_avis_duration(ts, dur)?; }
             }
             b"trak" => {
-                if check_avis_track(payload)? { valid_av01_tracks += 1; }
+                if check_avis_track(payload, limits)? { valid_av01_tracks += 1; }
             }
             _ => {}
         }
@@ -495,7 +500,7 @@ fn check_avis_moov(data: &[u8]) -> Result<usize, ImageError> {
     Ok(valid_av01_tracks)
 }
 
-fn check_avis_track(data: &[u8]) -> Result<bool, ImageError> {
+fn check_avis_track(data: &[u8], limits: ImageLimits) -> Result<bool, ImageError> {
     let invalid = || ImageError("invalid AVIF sequence track".into());
     let mut pos = 0usize;
     let mut timescale: Option<u32> = None;
@@ -516,7 +521,7 @@ fn check_avis_track(data: &[u8]) -> Result<bool, ImageError> {
                 let w_fp = u32::from_be_bytes(d[off..off + 4].try_into().unwrap());
                 let h_fp = u32::from_be_bytes(d[off + 4..off + 8].try_into().unwrap());
                 if w_fp != 0 || h_fp != 0 {
-                    check_dimensions(w_fp.saturating_add(0xffff) >> 16, h_fp.saturating_add(0xffff) >> 16)?;
+                    check_dimensions(w_fp.saturating_add(0xffff) >> 16, h_fp.saturating_add(0xffff) >> 16, limits)?;
                 }
             }
             b"mdia" => {
@@ -535,7 +540,7 @@ fn check_avis_track(data: &[u8]) -> Result<bool, ImageError> {
                             while let Some((nkind, npayload, nnext)) = read_bmff_box(mpayload, np, invalid)? {
                                 np = nnext;
                                 if &nkind == b"stbl" {
-                                    check_avis_stbl(npayload, &mut has_av01, &mut stsz_frames, &mut stts)?;
+                                    check_avis_stbl(npayload, &mut has_av01, &mut stsz_frames, &mut stts, limits)?;
                                 }
                             }
                         }
@@ -570,6 +575,7 @@ fn check_avis_stbl(
     has_av01: &mut bool,
     stsz_frames: &mut Option<u32>,
     stts: &mut Option<(u32, u128)>,
+    limits: ImageLimits,
 ) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid AVIF sequence sample table".into());
     let mut pos = 0usize;
@@ -585,7 +591,7 @@ fn check_avis_stbl(
                         let dims = epayload.get(24..28).ok_or_else(invalid)?;
                         let w = u32::from(u16::from_be_bytes([dims[0], dims[1]]));
                         let h = u32::from(u16::from_be_bytes([dims[2], dims[3]]));
-                        check_dimensions(w, h)?;
+                        check_dimensions(w, h, limits)?;
                         *has_av01 = true;
                     }
                 }
@@ -667,7 +673,7 @@ impl<'a> JxlBits<'a> {
     }
 }
 
-fn check_jxl_codestream(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_jxl_codestream(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid JPEG XL header".into());
     if !bytes.starts_with(&[0xff, 0x0a]) {
         return Err(invalid());
@@ -697,7 +703,7 @@ fn check_jxl_codestream(bytes: &[u8]) -> Result<(), ImageError> {
         _ => u64::from(ysize) * 2,
     };
     let w = u32::try_from(xsize).unwrap_or(u32::MAX);
-    check_dimensions(w, ysize)
+    check_dimensions(w, ysize, limits)
 }
 
 fn append_jxl_head(buf: &mut [u8; 16], len: &mut usize, chunk: &[u8]) {
@@ -706,7 +712,7 @@ fn append_jxl_head(buf: &mut [u8; 16], len: &mut usize, chunk: &[u8]) {
     *len += take;
 }
 
-fn check_jxl_container(bytes: &[u8]) -> Result<(), ImageError> {
+fn check_jxl_container(bytes: &[u8], limits: ImageLimits) -> Result<(), ImageError> {
     let invalid = || ImageError("invalid JPEG XL container".into());
     let mut pos = JXL_CONTAINER_SIG.len();
     let mut version: Option<u32> = None;
@@ -732,7 +738,7 @@ fn check_jxl_container(bytes: &[u8]) -> Result<(), ImageError> {
             b"ftyp" => return Err(invalid()),
             b"jxlc" => {
                 if saw_jxlp { return Err(invalid()); }
-                return check_jxl_codestream(payload);
+                return check_jxl_codestream(payload, limits);
             }
             b"jxlp" => {
                 if saw_last_jxlp || payload.len() < 4 { return Err(invalid()); }
@@ -768,14 +774,14 @@ fn check_jxl_container(bytes: &[u8]) -> Result<(), ImageError> {
                 }
                 // Signature (2 B) + maximum SizeHeader (68 bits = 9 B) fits in 11 bytes.
                 if codestream_len >= 11 {
-                    return check_jxl_codestream(&codestream[..codestream_len]);
+                    return check_jxl_codestream(&codestream[..codestream_len], limits);
                 }
             }
             _ => {}
         }
     }
     if codestream_len > 0 {
-        check_jxl_codestream(&codestream[..codestream_len])
+        check_jxl_codestream(&codestream[..codestream_len], limits)
     } else {
         Err(invalid())
     }
