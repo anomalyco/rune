@@ -328,11 +328,7 @@ impl FramePresentReports {
 
 #[cfg(any(test, not(target_arch = "wasm32")))]
 fn record_first_on_display(at: Instant) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static FIRST: AtomicBool = AtomicBool::new(false);
-    if !FIRST.swap(true, Ordering::Relaxed) {
-        crate::marks::mark_at("frame.first.on_display", at);
-    }
+    crate::marks::on_display(|| at);
 }
 
 #[cfg(any(test, not(target_arch = "wasm32")))]

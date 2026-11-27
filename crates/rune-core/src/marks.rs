@@ -11,8 +11,9 @@
 //! Recording costs a lock the first time a name is reached and nothing after; the totals stop
 //! once the first frame presents.
 
+use std::cell::RefCell;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::time::Instant;
 
 #[derive(Default)]
@@ -22,12 +23,73 @@ struct Book {
     notes: Vec<(&'static str, &'static str)>,
 }
 
+#[derive(Default)]
+struct LocalStore {
+    book: Book,
+    totals_done: bool,
+    missed: bool,
+    text_complete: bool,
+    input_ready: bool,
+    on_display: bool,
+    key_arrived: bool,
+    key_handled: bool,
+    press_arrived: bool,
+    press_handled: bool,
+}
+
 static BOOK: Mutex<Book> = Mutex::new(Book { marks: Vec::new(), metrics: Vec::new(), notes: Vec::new() });
 /// Totals stop at the first presented frame.
 static TOTALS_DONE: AtomicBool = AtomicBool::new(false);
+static TEST_SCOPES: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    static LOCAL: RefCell<Option<LocalStore>> = const { RefCell::new(None) };
+}
+
+#[inline]
+fn with_local<R>(f: impl FnOnce(&mut LocalStore) -> R) -> Option<R> {
+    if TEST_SCOPES.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    LOCAL.with(|slot| slot.borrow_mut().as_mut().map(f))
+}
+
+/// Isolates launch marks, metrics, notes, and one-shot flags on the current thread for the
+/// lifetime of the guard, preventing parallel tests from interfering through the process-global
+/// store.
+#[doc(hidden)]
+#[must_use = "hold the returned TestScope for the duration of the marks test"]
+pub struct TestScope {
+    prev: Option<LocalStore>,
+}
+
+/// Installs a fresh thread-local launch-marks store until the returned [`TestScope`] drops.
+#[doc(hidden)]
+pub fn test_scope() -> TestScope {
+    TEST_SCOPES.fetch_add(1, Ordering::AcqRel);
+    let prev = LOCAL.with(|slot| slot.borrow_mut().replace(LocalStore::default()));
+    TestScope { prev }
+}
+
+impl Drop for TestScope {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        LOCAL.with(|slot| *slot.borrow_mut() = prev);
+        TEST_SCOPES.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 fn book() -> std::sync::MutexGuard<'static, Book> {
     BOOK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn record_mark(book: &mut Book, name: &'static str, at: Instant) {
+    if !book.marks.iter().any(|(n, _)| *n == name) {
+        book.marks.push((name, at));
+        // A page's marks are the browser's too: its performance timeline and DevTools show them.
+        #[cfg(target_arch = "wasm32")]
+        page_mark(name);
+    }
 }
 
 /// Records `name` at now, unless it was reached before. An app marks its own steps here too.
@@ -38,13 +100,11 @@ pub fn mark(name: &'static str) {
 /// Records `name` at `at`, unless it was reached before. Use this when a step's real timestamp
 /// arrives asynchronously (for example `frame.first.on_display` from a presentation handler).
 pub fn mark_at(name: &'static str, at: Instant) {
-    let mut book = book();
-    if !book.marks.iter().any(|(n, _)| *n == name) {
-        book.marks.push((name, at));
-        // A page's marks are the browser's too: its performance timeline and DevTools show them.
-        #[cfg(target_arch = "wasm32")]
-        page_mark(name);
+    if with_local(|s| record_mark(&mut s.book, name, at)).is_some() {
+        return;
     }
+    let mut book = book();
+    record_mark(&mut book, name, at);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -65,7 +125,7 @@ pub fn mark_once(flag: &AtomicBool, name: &'static str) {
 
 /// Every mark so far, in the order they were first reached.
 pub fn marks() -> Vec<(&'static str, Instant)> {
-    book().marks.clone()
+    with_local(|s| s.book.marks.clone()).unwrap_or_else(|| book().marks.clone())
 }
 
 /// Totals for the steps before the first presented frame: `text.glyphs` (glyphs rasterised or
@@ -75,31 +135,38 @@ pub fn marks() -> Vec<(&'static str, Instant)> {
 /// `text.shaped` (texts shaped and broken into lines: layout cache misses) and `text.shape_ns`
 /// (the UI thread's time doing it).
 pub fn metrics() -> Vec<(&'static str, u64)> {
-    book().metrics.clone()
+    with_local(|s| s.book.metrics.clone()).unwrap_or_else(|| book().metrics.clone())
 }
 
 /// What Rune chose on the way: `uber` names the uber shader the first renderer drew with.
 pub fn notes() -> Vec<(&'static str, &'static str)> {
-    book().notes.clone()
+    with_local(|s| s.book.notes.clone()).unwrap_or_else(|| book().notes.clone())
 }
 
 /// Whether totals are still being kept (the first frame hasn't presented).
 #[doc(hidden)]
 pub fn counting() -> bool {
-    !TOTALS_DONE.load(Ordering::Relaxed)
+    with_local(|s| !s.totals_done).unwrap_or_else(|| !TOTALS_DONE.load(Ordering::Relaxed))
+}
+
+fn add_metric(book: &mut Book, name: &'static str, amount: u64) {
+    match book.metrics.iter_mut().find(|(n, _)| *n == name) {
+        Some((_, total)) => *total += amount,
+        None => book.metrics.push((name, amount)),
+    }
 }
 
 /// Adds `amount` to total `name` while totals are kept.
 #[doc(hidden)]
 pub fn add(name: &'static str, amount: u64) {
+    if with_local(|s| if !s.totals_done { add_metric(&mut s.book, name, amount); }).is_some() {
+        return;
+    }
     if !counting() {
         return;
     }
     let mut book = book();
-    match book.metrics.iter_mut().find(|(n, _)| *n == name) {
-        Some((_, total)) => *total += amount,
-        None => book.metrics.push((name, amount)),
-    }
+    add_metric(&mut book, name, amount);
 }
 
 /// Adds the time since `started` to total `name` (in nanoseconds) when it drops.
@@ -122,30 +189,55 @@ impl Drop for Timed {
     }
 }
 
-/// Keeps `value` for `key`, the first one given.
-#[doc(hidden)]
-pub fn note(key: &'static str, value: &'static str) {
-    let mut book = book();
+fn record_note(book: &mut Book, key: &'static str, value: &'static str) {
     if !book.notes.iter().any(|(k, _)| *k == key) {
         book.notes.push((key, value));
     }
 }
 
+/// Keeps `value` for `key`, the first one given.
+#[doc(hidden)]
+pub fn note(key: &'static str, value: &'static str) {
+    if with_local(|s| record_note(&mut s.book, key, value)).is_some() {
+        return;
+    }
+    let mut book = book();
+    record_note(&mut book, key, value);
+}
+
 /// A glyph this frame draws found no room in the atlas, so the frame lacks it.
 #[doc(hidden)]
 pub fn text_missed() {
+    if with_local(|s| s.missed = true).is_some() {
+        return;
+    }
     MISSED.store(true, Ordering::Relaxed);
 }
 
 static MISSED: AtomicBool = AtomicBool::new(false);
 static TEXT_COMPLETE: AtomicBool = AtomicBool::new(false);
 static INPUT_READY: AtomicBool = AtomicBool::new(false);
+static ON_DISPLAY: AtomicBool = AtomicBool::new(false);
 
 /// A frame presented: the first one marks `frame.first.presented` and stops the totals; the first
 /// that drew every glyph it laid out marks `text.complete`. Returns whether this was the first
 /// presented frame.
 #[doc(hidden)]
 pub fn presented() -> bool {
+    if let Some((first, complete)) = with_local(|s| {
+        let first = !std::mem::replace(&mut s.totals_done, true);
+        let complete = !std::mem::replace(&mut s.missed, false)
+            && !std::mem::replace(&mut s.text_complete, true);
+        (first, complete)
+    }) {
+        if first {
+            mark("frame.first.presented");
+        }
+        if complete {
+            mark("text.complete");
+        }
+        return first;
+    }
     let first = !TOTALS_DONE.swap(true, Ordering::Relaxed);
     if first {
         mark("frame.first.presented");
@@ -154,6 +246,21 @@ pub fn presented() -> bool {
         mark_once(&TEXT_COMPLETE, "text.complete");
     }
     first
+}
+
+/// Records the first presented drawable's real display time as `frame.first.on_display`.
+/// Computes `at` lazily so subsequent frames only touch a single flag.
+#[doc(hidden)]
+pub fn on_display(at: impl FnOnce() -> Instant) {
+    if let Some(first) = with_local(|s| !std::mem::replace(&mut s.on_display, true)) {
+        if first {
+            mark_at("frame.first.on_display", at());
+        }
+        return;
+    }
+    if !ON_DISPLAY.load(Ordering::Relaxed) && !ON_DISPLAY.swap(true, Ordering::Relaxed) {
+        mark_at("frame.first.on_display", at());
+    }
 }
 
 static KEY_ARRIVED: AtomicBool = AtomicBool::new(false);
@@ -166,18 +273,42 @@ static PRESS_HANDLED: AtomicBool = AtomicBool::new(false);
 /// as a frame runs them, so a trace says how long the first input waited.
 #[doc(hidden)]
 pub fn input_arrived(key: bool) {
+    if let Some(record) = with_local(|s| {
+        let slot = if key { &mut s.key_arrived } else { &mut s.press_arrived };
+        !std::mem::replace(slot, true)
+    }) {
+        if record {
+            mark(if key { "input.key.arrived" } else { "input.press.arrived" });
+        }
+        return;
+    }
     if key { mark_once(&KEY_ARRIVED, "input.key.arrived") } else { mark_once(&PRESS_ARRIVED, "input.press.arrived") }
 }
 
 /// See [`input_arrived`].
 #[doc(hidden)]
 pub fn input_handled(key: bool) {
+    if let Some(record) = with_local(|s| {
+        let slot = if key { &mut s.key_handled } else { &mut s.press_handled };
+        !std::mem::replace(slot, true)
+    }) {
+        if record {
+            mark(if key { "input.key.handled" } else { "input.press.handled" });
+        }
+        return;
+    }
     if key { mark_once(&KEY_HANDLED, "input.key.handled") } else { mark_once(&PRESS_HANDLED, "input.press.handled") }
 }
 
 /// The event loop is about to wait for input: after the first present, `input.ready`.
 #[doc(hidden)]
 pub fn loop_waits() {
+    if let Some(record) = with_local(|s| s.totals_done && !std::mem::replace(&mut s.input_ready, true)) {
+        if record {
+            mark("input.ready");
+        }
+        return;
+    }
     if !counting() {
         mark_once(&INPUT_READY, "input.ready");
     }
@@ -186,7 +317,8 @@ pub fn loop_waits() {
 /// Whether `key` has a note.
 #[doc(hidden)]
 pub fn noted(key: &'static str) -> bool {
-    book().notes.iter().any(|(k, _)| *k == key)
+    with_local(|s| s.book.notes.iter().any(|(k, _)| *k == key))
+        .unwrap_or_else(|| book().notes.iter().any(|(k, _)| *k == key))
 }
 
 #[cfg(test)]
