@@ -1,0 +1,1 @@
+- `rune-kit`: `ProgressMetrics` gains `fill_radius` (corner radius of the filled bar inside the rounded track; `0.0` ends the fill square while the track clips it cleanly inside its pill ends). Defaults to `999.0` (today's pill), so bars look as before; code that writes `ProgressMetrics { .. }` in full without `..ProgressMetrics::kit(&k)` needs the new field.

@@ -276,25 +276,32 @@ impl SegmentedMetrics {
     }
 }
 
-/// A linear [`Progress`](crate::Progress) bar's track height and rim width.
+/// A linear [`Progress`](crate::Progress) bar's track height, rim width and fill corner radius.
 ///
 /// ```
 /// # use rune_kit::{Kit, Progress, ProgressMetrics};
 /// let mut k = Kit::neutral(true);
 /// k.metrics.progress = Some(ProgressMetrics { border_width: 0.0, ..ProgressMetrics::kit(&k) });
 /// let _ = Progress::new(Some(0.6)).build(&k);
+///
+/// // A slim 4-point bar with no rim and a square fill end inside the rounded track.
+/// k.metrics.progress = Some(ProgressMetrics { height: 4.0, border_width: 0.0, fill_radius: 0.0 });
+/// let _ = Progress::new(Some(0.4)).build(&k);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProgressMetrics {
     pub height: f32,
     /// Track rim width; `0.0` omits the border.
     pub border_width: f32,
+    /// Corner radius of the filled bar (`999.0` for a pill end; `0.0` ends the fill square while
+    /// the track still clips it inside its rounded ends).
+    pub fill_radius: f32,
 }
 
 impl ProgressMetrics {
-    /// The built-in track: 8 points tall with a 1 point rim.
+    /// The built-in track: 8 points tall with a 1 point rim and a pill fill (`fill_radius: 999.0`).
     pub fn kit(_k: &Kit) -> ProgressMetrics {
-        ProgressMetrics { height: 8.0, border_width: 1.0 }
+        ProgressMetrics { height: 8.0, border_width: 1.0, fill_radius: 999.0 }
     }
 }
 
@@ -642,7 +649,7 @@ pub struct Metrics {
     /// [`Collapsible`](crate::Collapsible) and [`Accordion`](crate::Accordion) header row height;
     /// else `32.0`.
     pub disclosure_header_height: Option<f32>,
-    /// Linear [`Progress`](crate::Progress) track height and rim width; else
+    /// Linear [`Progress`](crate::Progress) track height, rim width and fill corner radius; else
     /// [`ProgressMetrics::kit`].
     pub progress: Option<ProgressMetrics>,
     /// [`Divider`](crate::Divider) rule thickness in points; else `1.0`.
@@ -716,7 +723,11 @@ impl Kit {
     }
     pub(crate) fn progress_metrics(&self) -> ProgressMetrics {
         let m = self.metrics.progress.unwrap_or_else(|| ProgressMetrics::kit(self));
-        ProgressMetrics { height: non_neg(m.height), border_width: non_neg(m.border_width) }
+        ProgressMetrics {
+            height: non_neg(m.height),
+            border_width: non_neg(m.border_width),
+            fill_radius: non_neg(m.fill_radius),
+        }
     }
     pub(crate) fn divider_thickness(&self) -> f32 {
         non_neg(self.metrics.divider_thickness.unwrap_or(1.0))

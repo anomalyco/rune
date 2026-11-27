@@ -250,7 +250,7 @@ fn explicit_default_kit(base: &Kit) -> Kit {
     let mut k = base.clone();
     k.metrics.segmented = Some(SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0, inset: 0.0, gap: 0.0 });
     k.metrics.disclosure_header_height = Some(32.0);
-    k.metrics.progress = Some(ProgressMetrics { height: 8.0, border_width: 1.0 });
+    k.metrics.progress = Some(ProgressMetrics { height: 8.0, border_width: 1.0, fill_radius: 999.0 });
     k.metrics.divider_thickness = Some(1.0);
     k.metrics.keybind = Some(KeybindMetrics {
         height: 14.0,
@@ -321,7 +321,7 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         ("opencode-dark", rune_theme_opencode::kit(true).clone()),
     ] {
         assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0, inset: 0.0, gap: 0.0 });
-        assert_eq!(ProgressMetrics::kit(&base), ProgressMetrics { height: 8.0, border_width: 1.0 });
+        assert_eq!(ProgressMetrics::kit(&base), ProgressMetrics { height: 8.0, border_width: 1.0, fill_radius: 999.0 });
         assert_eq!(
             KeybindMetrics::kit(&base),
             KeybindMetrics {
@@ -354,6 +354,7 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         assert_eq!(find("/acc/item0/trigger").rect[3], 32.0, "{name}: Accordion");
         assert_eq!(find("/prog/track").rect[3], 8.0, "{name}: Progress height");
         assert!(find("/prog/track").border_color.is_some(), "{name}: Progress 1pt rim");
+        assert_eq!(find("/prog/track/fill").radius, 999.0, "{name}: Progress pill fill radius");
         assert_eq!(find("/div-h").rect[3], 1.0, "{name}: horizontal Divider");
         assert_eq!(find("/div-v").rect[2], 1.0, "{name}: vertical Divider");
         assert_eq!((find("/kb/key0").rect[3], find("/kb/key0").radius), (14.0, 2.0), "{name}: Keybind");
@@ -850,7 +851,7 @@ fn negative_and_non_finite_metrics_clamp_to_zero_without_panicking() {
         let mut k = Kit::neutral(true);
         k.metrics.segmented = Some(SegmentedMetrics { height: v, padding_x: v, radius: v, inset: v, gap: v });
         k.metrics.disclosure_header_height = Some(v);
-        k.metrics.progress = Some(ProgressMetrics { height: v, border_width: v });
+        k.metrics.progress = Some(ProgressMetrics { height: v, border_width: v, fill_radius: v });
         k.metrics.divider_thickness = Some(v);
         k.metrics.keybind = Some(KeybindMetrics { height: v, padding_x: v, radius: v, border_width: v, ..KeybindMetrics::kit(&k) });
         k.metrics.text_area_min_height = Some(v);
@@ -897,7 +898,7 @@ fn custom_metrics_stay_idle_at_rest_and_keep_accessibility() {
         k.radius.md = 8.0;
         k.metrics.segmented = Some(SegmentedMetrics { height: 34.0, padding_x: 14.0, ..SegmentedMetrics::kit(&k) });
         k.metrics.disclosure_header_height = Some(38.0);
-        k.metrics.progress = Some(ProgressMetrics { height: 10.0, border_width: 0.0 });
+        k.metrics.progress = Some(ProgressMetrics { height: 10.0, border_width: 0.0, fill_radius: 0.0 });
         k.metrics.divider_thickness = Some(2.0);
         k.metrics.keybind = Some(KeybindMetrics { height: 18.0, ..KeybindMetrics::kit(&k) });
         k.metrics.text_area_min_height = Some(96.0);
