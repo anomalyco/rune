@@ -842,7 +842,7 @@ impl RuntimeCore {
         let phased = self.scroll.wheel_phased();
         let momentum = self.scroll.wheel_momentum();
         if dy != 0.0 {
-            let ev = crate::WheelEvent { momentum, ..crate::WheelEvent::new(0.0, dy).at(x, y) };
+            let ev = crate::WheelEvent::new(0.0, dy).at(x, y).momentum(momentum);
             if self.dismiss_modal_on_wheel(self.scroll.wheel_gesture(), ev, phased) { return; }
         }
         self.wheel_from(x, y, dy, crate::Mods::default(), phased, momentum, crate::runtime::gesture_dispatch::WheelStart::Unknown);

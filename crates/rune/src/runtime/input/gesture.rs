@@ -372,7 +372,7 @@ impl RuntimeCore {
             None => return false,
         };
         if self.gesture_chain(x, y, |g| g.magnify.is_some()).is_empty() { return false; }
-        self.magnify_event(MagnifyEvent { wheel: true, ..MagnifyEvent::new(delta).at(x, y) });
+        self.magnify_event(MagnifyEvent::new(delta).at(x, y).wheel(true));
         true
     }
 
