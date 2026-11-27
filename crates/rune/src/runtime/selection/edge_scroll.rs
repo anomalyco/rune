@@ -14,7 +14,7 @@
 //! stops within half a point of the bottom, the list sticks there again. A viewport that scrolls
 //! sideways (an unwrapped code block's `scroll_x`) steps the same way while the pointer is at or
 //! past its left or right edge; a pointer past both a vertical and a horizontal edge steps the
-//! vertical one.
+//! vertical one while it still has room, and otherwise the horizontal one.
 use crate::machine::{Attempt, Effects, Seq};
 
 use super::*;
@@ -383,9 +383,9 @@ impl RuntimeCore {
     }
 
     /// Where (`x`, `y`) is against the edges of the viewports around the selection a held press
-    /// is extending: the innermost vertical one's top or bottom first, then the innermost
-    /// horizontal one's left or right (as drawn, inside its clips and the window), how fast that
-    /// scrolls, and how far it still can.
+    /// is extending: the innermost vertical one's top or bottom first when it still has room to
+    /// scroll that way, then the innermost horizontal one's left or right (as drawn, inside its
+    /// clips and the window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, x: f32, y: f32) -> Option<Edge> {
         if !self.dragging_selection() || !self.pointer.pressing() { return None; }
         let holder = self.drag_holder()?;
@@ -393,7 +393,11 @@ impl RuntimeCore {
             std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
                 .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(horizontal))
         };
-        innermost(false).and_then(|i| self.edge_of(i, false, y)).or_else(|| innermost(true).and_then(|i| self.edge_of(i, true, x)))
+        let v = innermost(false).and_then(|i| self.edge_of(i, false, y));
+        if v.is_some_and(|e| e.moves()) { return v; }
+        let h = innermost(true).and_then(|i| self.edge_of(i, true, x));
+        if h.is_some_and(|e| e.moves()) { return h; }
+        v.or(h)
     }
 
     /// Where `at` (a height, or across when `horizontal`) is against viewport `i`'s two edges on
