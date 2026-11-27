@@ -222,3 +222,71 @@ fn pointer_wheel_and_extra_buttons_drive_runtime_handlers() {
     }
     assert_eq!(rt.state.side, 2);
 }
+
+#[test]
+fn layer_shell_apply_wheel_line_scales_detents_and_keeps_touchpad_points() {
+    use super::{Axis, AxisSource, Effect, Event, FINGER_POINTS_PER_AXIS_UNIT, State, apply_wheel_line, step};
+    use crate::input::host_events::wheel_core;
+    use crate::{App, AppSpec, Cx, El, Env, Mods, col, el};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 200.0).child(
+            col().key("list").size(200.0, 200.0).scroll_xy().child(el().size(2000.0, 2000.0)),
+        )
+    }
+    let mut rt = App::new(AppSpec::new("layer-wheel", (200.0, 200.0), || (), view))
+        .wheel_line(60.0)
+        .wheel_glide(false)
+        .headless_runtime((200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(100.0, 100.0);
+    let offset = |rt: &crate::Runtime<()>| {
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        let st = &rt.scroll.scrolls[&id];
+        (st.offset, st.x.offset)
+    };
+
+    let mut ptr = State::default();
+    let plain = Mods::default();
+    // 1. One Wayland v8 wheel notch (value120 = +120) -> exactly 60 pt immediately.
+    step(&mut ptr, Event::AxisSource(AxisSource::Wheel));
+    step(&mut ptr, Event::AxisValue120 { axis: Axis::Vertical, value120: 120 });
+    for Effect::Wheel(wheel) in step(&mut ptr, Event::Frame { mods: plain, framed: true }) {
+        let wheel = apply_wheel_line(wheel, rt.wheel_line());
+        wheel_core(rt.core_mut(), wheel);
+    }
+    assert!(!rt.frame(1.0 / 60.0), "wheel_glide(false) lands immediately");
+    assert_eq!(offset(&rt), (60.0, 0.0));
+
+    // 2. High-resolution quarter detent (value120 = +30) -> 15 pt.
+    step(&mut ptr, Event::AxisSource(AxisSource::Wheel));
+    step(&mut ptr, Event::AxisValue120 { axis: Axis::Vertical, value120: 30 });
+    for Effect::Wheel(wheel) in step(&mut ptr, Event::Frame { mods: plain, framed: true }) {
+        let wheel = apply_wheel_line(wheel, rt.wheel_line());
+        wheel_core(rt.core_mut(), wheel);
+    }
+    assert!(!rt.frame(1.0 / 60.0));
+    assert_eq!(offset(&rt), (75.0, 0.0));
+
+    // 3. Pre-v8 discrete notch with Shift -> 60 pt horizontal.
+    let shift = Mods { shift: true, ..plain };
+    step(&mut ptr, Event::AxisSource(AxisSource::Wheel));
+    step(&mut ptr, Event::AxisDiscrete { axis: Axis::Vertical, discrete: 1 });
+    for Effect::Wheel(wheel) in step(&mut ptr, Event::Frame { mods: shift, framed: true }) {
+        let wheel = apply_wheel_line(wheel, rt.wheel_line());
+        wheel_core(rt.core_mut(), wheel);
+    }
+    assert!(!rt.frame(1.0 / 60.0));
+    assert_eq!(offset(&rt), (75.0, 60.0));
+
+    // 4. Touchpad finger delta keeps exact FINGER_POINTS_PER_AXIS_UNIT (12.0 * 2.5 = 30.0 pt).
+    step(&mut ptr, Event::AxisSource(AxisSource::Finger));
+    step(&mut ptr, Event::Axis { axis: Axis::Vertical, value: 2.5 });
+    for Effect::Wheel(wheel) in step(&mut ptr, Event::Frame { mods: plain, framed: true }) {
+        let wheel = apply_wheel_line(wheel, rt.wheel_line());
+        assert_eq!(wheel.dy, (-2.5 * FINGER_POINTS_PER_AXIS_UNIT) as f32);
+        wheel_core(rt.core_mut(), wheel);
+    }
+    assert!(!rt.frame(1.0 / 60.0));
+    assert_eq!(offset(&rt), (105.0, 60.0));
+}

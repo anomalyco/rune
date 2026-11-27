@@ -366,3 +366,124 @@ fn web_gesture_start_only_claims_magnify_or_rotate_outside_document_and_fit_heig
     rt.frame(0.0);
     assert!(!web_gesture_start(rt.core(), Some(zoom_pt), false, false), "modal blocks underlying on_magnify");
 }
+
+#[test]
+fn app_wheel_line_and_glide_apply_to_notches_while_touchpad_and_pinch_keep_defaults() {
+    #[derive(Default)]
+    struct S { magnified: Vec<f32> }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        col().size(200.0, 200.0).child(
+            col()
+                .key("board")
+                .size(200.0, 200.0)
+                .scroll_xy()
+                .on_magnify(|s: &mut S, ev, _| {
+                    s.magnified.push(ev.delta);
+                    true
+                })
+                .child(el().size(2000.0, 2000.0)),
+        )
+    }
+    let spec = crate::AppSpec::new("wheel-cfg", (200.0, 200.0), S::default, view);
+    let mut rt = crate::App::new(spec)
+        .wheel_line(60.0)
+        .wheel_glide(false)
+        .headless_runtime((200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(100.0, 100.0);
+
+    // 1. One vertical wheel notch scrolls 60 pt immediately with no glide frames.
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::LineDelta(0.0, -1.0),
+        GesturePhase::Moved,
+        2.0,
+        crate::Mods::default(),
+    );
+    assert!(!rt.frame(DT), "wheel_glide(false) must land notch without ease frames");
+    assert_eq!(scroll_offset(&rt, "board"), (60.0, 0.0));
+
+    // 2. Half-detent high-res wheel scrolls 30 pt immediately.
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::LineDelta(0.0, -0.5),
+        GesturePhase::Moved,
+        2.0,
+        crate::Mods::default(),
+    );
+    assert!(!rt.frame(DT));
+    assert_eq!(scroll_offset(&rt, "board"), (90.0, 0.0));
+
+    // 3. Horizontal line delta scrolls 60 pt immediately.
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::LineDelta(-1.0, 0.0),
+        GesturePhase::Moved,
+        2.0,
+        crate::Mods::default(),
+    );
+    assert!(!rt.frame(DT));
+    assert_eq!(scroll_offset(&rt, "board"), (90.0, 60.0));
+
+    // 4. Touchpad PixelDelta keeps its exact point delta (-48 px / 2.0 = -24 pt -> +24 pt).
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 0.0)),
+        GesturePhase::Began,
+        2.0,
+        crate::Mods::default(),
+    );
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -48.0)),
+        GesturePhase::Moved,
+        2.0,
+        crate::Mods::default(),
+    );
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 0.0)),
+        GesturePhase::Ended,
+        2.0,
+        crate::Mods::default(),
+    );
+    assert!(!rt.frame(DT));
+    assert_eq!(scroll_offset(&rt, "board"), (114.0, 60.0));
+
+    // 5. Ctrl + mouse wheel pinch still zooms by 1.2x (+0.2) per notch regardless of wheel_line.
+    let ctrl = crate::Mods { ctrl: true, ..crate::Mods::default() };
+    wheel_from_delta(
+        rt.core_mut(),
+        MouseScrollDelta::LineDelta(0.0, 1.0),
+        GesturePhase::Moved,
+        2.0,
+        ctrl,
+    );
+    rt.frame(0.0);
+    assert_eq!(rt.state.magnified.len(), 1);
+    assert!((rt.state.magnified[0] - 0.2).abs() < 1e-4, "expected +0.2 pinch delta, got {:?}", rt.state.magnified);
+
+    // 6. With default wheel_glide(true) + wheel_line(60.0), a whole notch eases and lands at 60 pt.
+    let mut rt_glide = crate::App::new(crate::AppSpec::new("wheel-glide", (200.0, 200.0), || (), board_view))
+        .wheel_line(60.0)
+        .headless_runtime((200.0, 200.0), Env::new(true, 1.0));
+    rt_glide.frame(0.0);
+    rt_glide.pointer_move(100.0, 100.0);
+    wheel_from_delta(
+        rt_glide.core_mut(),
+        MouseScrollDelta::LineDelta(0.0, -1.0),
+        GesturePhase::Moved,
+        1.0,
+        crate::Mods::default(),
+    );
+    assert!(rt_glide.frame(DT), "default wheel_glide(true) must ease whole notch");
+    let mut settled = false;
+    for _ in 0..30 {
+        if !rt_glide.frame(DT) {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "wheel ease must settle");
+    assert!((scroll_offset(&rt_glide, "board").0 - 60.0).abs() < 1e-3);
+}

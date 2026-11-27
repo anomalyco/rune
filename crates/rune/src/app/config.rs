@@ -26,6 +26,14 @@ pub(crate) fn ambient_period_from_fps(fps: f32) -> Option<std::time::Duration> {
         .filter(|period| !period.is_zero())
 }
 
+/// Normalizes a wheel-notch scroll distance (window points per line/notch): positive finite
+/// values override the platform default; zero, negative, NaN, and infinite values normalize
+/// to `None` (platform default).
+#[inline]
+pub(crate) fn normalize_wheel_line(points: f32) -> Option<f32> {
+    (points.is_finite() && points > 0.0).then_some(points)
+}
+
 /// Settings and callbacks copied from an `App` or `ConfiguredOverlay` into its `Runtime`.
 ///
 /// Exhaustively destructured in [`Runtime::configure`] so adding a field updates every host
@@ -45,6 +53,8 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) emoji_family: Option<String>,
     pub(crate) max_native_materials: usize,
     pub(crate) reveal_fps: f32,
+    pub(crate) wheel_glide: bool,
+    pub(crate) wheel_line: Option<f32>,
     pub(crate) dev_stats: Option<fn() -> String>,
 }
 
@@ -79,6 +89,8 @@ impl<S: 'static> Clone for RuntimeConfig<S> {
             emoji_family: self.emoji_family.clone(),
             max_native_materials: self.max_native_materials,
             reveal_fps: self.reveal_fps,
+            wheel_glide: self.wheel_glide,
+            wheel_line: self.wheel_line,
             dev_stats: self.dev_stats,
         }
     }
@@ -101,6 +113,8 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             emoji_family: None,
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
             reveal_fps: 0.0,
+            wheel_glide: true,
+            wheel_line: None,
             dev_stats: None,
         }
     }
@@ -114,6 +128,8 @@ pub(crate) struct CoreConfig {
     pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) emoji_family: Option<String>,
     pub(crate) max_native_materials: usize,
+    pub(crate) wheel_glide: bool,
+    pub(crate) wheel_line: Option<f32>,
     pub(crate) dev_stats: Option<fn() -> String>,
 }
 
@@ -127,6 +143,8 @@ impl crate::runtime::RuntimeCore {
             font_smoothing,
             emoji_family,
             max_native_materials,
+            wheel_glide,
+            wheel_line,
             dev_stats,
         } = core;
         self.set_modifier_keys(modifier_keys);
@@ -138,6 +156,8 @@ impl crate::runtime::RuntimeCore {
             self.set_emoji_family(Some(&emoji));
         }
         self.set_max_native_materials(max_native_materials);
+        self.set_wheel_glide(wheel_glide);
+        self.set_wheel_line(wheel_line);
         self.host.set_app_stats(dev_stats);
     }
 }
@@ -160,6 +180,8 @@ impl<S: 'static> Runtime<S> {
             emoji_family,
             max_native_materials,
             reveal_fps,
+            wheel_glide,
+            wheel_line,
             dev_stats,
         } = config;
         self.core_mut().set_reveal_fps(reveal_fps);
@@ -177,6 +199,8 @@ impl<S: 'static> Runtime<S> {
             font_smoothing,
             emoji_family,
             max_native_materials,
+            wheel_glide,
+            wheel_line,
             dev_stats,
         });
     }
@@ -240,6 +264,57 @@ impl<S: 'static> crate::App<S> {
         let _ = enabled;
         self
     }
+
+    /// Controls whether whole mouse-wheel notches ease smoothly rather than jumping immediately
+    /// for this app's window and overlays (default `true`; reduced motion still jumps).
+    ///
+    /// Overlays added with [`Self::overlay`] (before or after this call) inherit this setting
+    /// unless overridden with [`ConfiguredOverlay::wheel_glide`](crate::ConfiguredOverlay::wheel_glide).
+    /// Touchpad scrolling is unaffected.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Launcher", (480.0, 320.0), || (), |_, _| el()))
+    ///     .wheel_glide(false)
+    ///     .run();
+    /// ```
+    pub fn wheel_glide(mut self, on: bool) -> Self {
+        self.runtime.wheel_glide = on;
+        #[cfg(not(target_arch = "wasm32"))]
+        for overlay in &mut self.overlays {
+            overlay.inherit_wheel_glide(on);
+        }
+        self
+    }
+
+    /// Sets how many window points one mouse-wheel line/notch scrolls for this app's window and
+    /// overlays, overriding the platform default (Windows `SPI_GETWHEELSCROLLLINES`, 120 pt on
+    /// Linux, 40 pt on macOS and web).
+    ///
+    /// Positive finite values override the platform default; zero, negative, or non-finite values
+    /// restore the platform default. Overlays added with [`Self::overlay`] (before or after this
+    /// call) inherit this setting unless overridden with
+    /// [`ConfiguredOverlay::wheel_line`](crate::ConfiguredOverlay::wheel_line). Touchpad point
+    /// deltas and Ctrl+wheel pinch-zoom (`on_magnify`) are unaffected.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Launcher", (480.0, 320.0), || (), |_, _| el()))
+    ///     .wheel_line(60.0)
+    ///     .wheel_glide(false)
+    ///     .run();
+    /// ```
+    pub fn wheel_line(mut self, points: f32) -> Self {
+        let points = normalize_wheel_line(points);
+        self.runtime.wheel_line = points;
+        #[cfg(not(target_arch = "wasm32"))]
+        for overlay in &mut self.overlays {
+            overlay.inherit_wheel_line(points);
+        }
+        self
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +350,8 @@ mod tests {
             .emoji_family("Twemoji")
             .max_native_materials(6)
             .reveal_fps(30.0)
+            .wheel_glide(false)
+            .wheel_line(60.0)
             .dev_stats(stats)
     }
 
@@ -295,6 +372,8 @@ mod tests {
         assert_eq!(rt.emoji_family(), Some("Twemoji"));
         assert_eq!(rt.max_native_materials(), 6);
         assert_eq!(rt.reveal_fps(), 30.0);
+        assert!(!rt.wheel_glide());
+        assert_eq!(rt.wheel_line(), Some(60.0));
         assert_eq!(rt.host.app_stats.map(|f| f()).as_deref(), Some("ok"));
 
         // tab_visits_controls overrides full_keyboard_access(false) so Tab reaches a focusable control.
@@ -315,6 +394,14 @@ mod tests {
         assert!(rt.has_focus(), "tab_visits_controls lets Tab focus a control with full keyboard access off");
         rt.set_emoji_family(None);
         assert_eq!(rt.emoji_family(), None);
+        for invalid in [0.0, -10.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            rt.set_wheel_line(Some(invalid));
+            assert_eq!(rt.wheel_line(), None, "invalid wheel_line {invalid} normalizes to None");
+        }
+        rt.set_wheel_line(Some(45.0));
+        assert_eq!(rt.wheel_line(), Some(45.0));
+        rt.set_wheel_line(None);
+        assert_eq!(rt.wheel_line(), None);
     }
 
     #[test]
@@ -326,6 +413,8 @@ mod tests {
         assert_eq!(cfg.emoji_family, None);
         assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);
         assert_eq!(cfg.reveal_fps, 0.0);
+        assert!(cfg.wheel_glide);
+        assert_eq!(cfg.wheel_line, None);
         assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.on_field_menu.is_none() && cfg.on_popup_menu.is_none() && cfg.dev_stats.is_none());
     }
 }

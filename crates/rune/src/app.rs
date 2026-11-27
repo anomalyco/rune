@@ -680,7 +680,12 @@ impl<S: 'static> App<S> {
             if configured.runtime.emoji_family.is_none() {
                 configured.runtime.emoji_family = self.runtime.emoji_family.clone();
             }
-            let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
+            let defaults = crate::overlay::AppOverlayDefaults {
+                font_smoothing: self.runtime.font_smoothing,
+                wheel_glide: self.runtime.wheel_glide,
+                wheel_line: self.runtime.wheel_line,
+            };
+            let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, defaults);
             overlay.set_prewarm_effects(self.prewarm_effects);
             if let Some(latch) = &self.gpu_loss_latch {
                 overlay.set_gpu_loss_latch(Some(Arc::clone(latch)));
@@ -1406,7 +1411,7 @@ impl<S: 'static> AppHandle<S> {
 }
 
 mod config;
-pub(crate) use config::{ambient_period_from_fps, RuntimeConfig};
+pub(crate) use config::{ambient_period_from_fps, normalize_wheel_line, RuntimeConfig};
 mod requests;
 mod settle;
 pub(crate) use requests::{window_request_order, Activation, Shared, SharedCore, WindowRequest, WindowRequests};

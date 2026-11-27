@@ -181,6 +181,8 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) setup: Option<fn(&mut T, crate::Waker)>,
     pub(crate) runtime: crate::app::RuntimeConfig<T>,
     pub(crate) font_smoothing: Option<crate::FontSmoothing>,
+    pub(crate) wheel_glide: Option<bool>,
+    pub(crate) wheel_line: Option<Option<f32>>,
     pub(crate) macos_level: Option<isize>,
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
@@ -275,6 +277,17 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
     /// while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.font_smoothing = Some(mode); self }
+    /// Whether whole mouse-wheel notches ease smoothly rather than jumping immediately for this
+    /// overlay. Defaults to the app's [`App::wheel_glide`](crate::App::wheel_glide).
+    pub fn wheel_glide(mut self, on: bool) -> Self { self.wheel_glide = Some(on); self }
+    /// Window points scrolled per mouse-wheel line/notch for this overlay, overriding the app's
+    /// [`App::wheel_line`](crate::App::wheel_line) (and the platform default). Positive finite
+    /// values set an explicit distance; zero, negative, or non-finite values restore the
+    /// platform default for this overlay even if the app sets a custom distance.
+    pub fn wheel_line(mut self, points: f32) -> Self {
+        self.wheel_line = Some(crate::app::normalize_wheel_line(points));
+        self
+    }
     /// Called at the start of every frame (unless a resting timer's poll already stood for it)
     /// so background data and timers can update the tree before input routes. Queued input and
     /// event handlers then run; whenever a non-`live_only` handler runs, `poll` runs again at the
@@ -628,7 +641,8 @@ impl<T: 'static> OverlaySpec<T> {
     pub fn options(self, options: OverlayOptions) -> ConfiguredOverlay<T> {
         ConfiguredOverlay {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
-            setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
+            setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, wheel_glide: None,
+            wheel_line: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
             frame_latency: None, keyboard_dispatch: crate::KeyboardDispatch::Batched, on_materials: None, animate_reveal: false, release_after: None,
             renderer: crate::RendererKind::Gpu, sizing: crate::ContentSizing::Fixed, min_size: None, max_size: None,

@@ -341,26 +341,57 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
     }
 }
 
+/// App-wide runtime defaults inherited by overlays unless overridden on `ConfiguredOverlay`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AppOverlayDefaults {
+    pub(crate) font_smoothing: crate::FontSmoothing,
+    pub(crate) wheel_glide: bool,
+    pub(crate) wheel_line: Option<f32>,
+}
+
+impl Default for AppOverlayDefaults {
+    fn default() -> Self {
+        Self {
+            font_smoothing: crate::FontSmoothing::default(),
+            wheel_glide: true,
+            wheel_line: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InheritedOverlaySettings {
+    font_smoothing: bool,
+    wheel_glide: bool,
+    wheel_line: bool,
+}
+
 /// Non-generic overlay host stored in `App::overlays` and `Windows::hosts`.
 pub(crate) struct OverlayHost {
     pub(super) core: OverlayCore,
     pub(super) app: Box<dyn OverlayApp>,
-    inherits_font_smoothing: bool,
+    inherited: InheritedOverlaySettings,
 }
 
 fn build_parts<S, T: 'static>(
     configured: ConfiguredOverlay<T>,
     state: T,
     app: &AppSpec<S>,
-    app_font_smoothing: crate::FontSmoothing,
-) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
+    app_defaults: AppOverlayDefaults,
+) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, InheritedOverlaySettings) {
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
-        macos_level, macos_color_space, window_backdrop, frame_latency, keyboard_dispatch, on_materials, animate_reveal, release_after, renderer,
-        sizing, min_size, max_size,
+        wheel_glide, wheel_line, macos_level, macos_color_space, window_backdrop, frame_latency, keyboard_dispatch,
+        on_materials, animate_reveal, release_after, renderer, sizing, min_size, max_size,
     } = configured;
-    let inherits_font_smoothing = font_smoothing.is_none();
-    runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
+    let inherited = InheritedOverlaySettings {
+        font_smoothing: font_smoothing.is_none(),
+        wheel_glide: wheel_glide.is_none(),
+        wheel_line: wheel_line.is_none(),
+    };
+    runtime.font_smoothing = font_smoothing.unwrap_or(app_defaults.font_smoothing);
+    runtime.wheel_glide = wheel_glide.unwrap_or(app_defaults.wheel_glide);
+    runtime.wheel_line = wheel_line.unwrap_or(app_defaults.wheel_line);
     let shared_core = Arc::new(SharedCore::default());
     let shared = Arc::new(Shared {
         core: shared_core.clone(),
@@ -402,7 +433,7 @@ fn build_parts<S, T: 'static>(
     core.sizing = super::sizing::SizingConfig { mode: sizing, min_size, max_size };
     let after_hidden_slot = AfterHiddenSlot::new(shared.clone());
     let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone(), after_hidden_slot };
-    (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
+    (core, typed, OverlayHandle { shared }, inherited)
 }
 
 impl OverlayHost {
@@ -410,15 +441,27 @@ impl OverlayHost {
         configured: impl Into<ConfiguredOverlay<T>>,
         state: T,
         app: &AppSpec<S>,
-        app_font_smoothing: crate::FontSmoothing,
+        app_defaults: AppOverlayDefaults,
     ) -> (Self, OverlayHandle<T>) {
-        let (core, typed, handle, inherits_font_smoothing) = build_parts(configured.into(), state, app, app_font_smoothing);
-        (OverlayHost { core, app: Box::new(typed), inherits_font_smoothing }, handle)
+        let (core, typed, handle, inherited) = build_parts(configured.into(), state, app, app_defaults);
+        (OverlayHost { core, app: Box::new(typed), inherited }, handle)
     }
 
     pub(super) fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing) {
-        if self.inherits_font_smoothing {
+        if self.inherited.font_smoothing {
             self.app.rt_mut().set_font_smoothing(mode);
+        }
+    }
+
+    pub(super) fn inherit_wheel_glide(&mut self, on: bool) {
+        if self.inherited.wheel_glide {
+            self.app.rt_mut().set_wheel_glide(on);
+        }
+    }
+
+    pub(super) fn inherit_wheel_line(&mut self, points: Option<f32>) {
+        if self.inherited.wheel_line {
+            self.app.rt_mut().set_wheel_line(points);
         }
     }
 
@@ -552,7 +595,7 @@ macro_rules! with_app {
 #[cfg(test)]
 impl<T: 'static> Overlay<T> {
     pub(super) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
-        let (core, typed, handle, _) = build_parts(configured.into(), state, app, crate::FontSmoothing::default());
+        let (core, typed, handle, _) = build_parts(configured.into(), state, app, AppOverlayDefaults::default());
         let TypedOverlayApp { rt, compositor, setup, on_availability, shared, after_hidden_slot } = typed;
         (Overlay { core, rt, compositor, setup, on_availability, shared, after_hidden_slot }, handle)
     }

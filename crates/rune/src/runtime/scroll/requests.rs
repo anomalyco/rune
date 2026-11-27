@@ -34,6 +34,8 @@ pub(crate) struct ScrollTables {
     pub(super) wheel_lock: scroll_x::WheelLock,
     /// Whole notches of a mouse wheel ease where the platform's browsers do (`Runtime::set_wheel_glide`).
     wheel_glide: bool,
+    /// Optional override for window points scrolled per mouse-wheel line/notch (`None` = platform default).
+    wheel_line: Option<f32>,
 }
 
 impl ScrollTables {
@@ -49,6 +51,7 @@ impl ScrollTables {
             requests: Default::default(),
             wheel_lock: Default::default(),
             wheel_glide: true,
+            wheel_line: None,
         }
     }
 
@@ -59,8 +62,23 @@ impl ScrollTables {
     }
 
     #[inline]
+    pub(in crate::runtime) fn wheel_glide(&self) -> bool {
+        self.wheel_glide
+    }
+
+    #[inline]
     pub(in crate::runtime) fn set_wheel_glide(&mut self, on: bool) {
         self.wheel_glide = on;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn wheel_line(&self) -> Option<f32> {
+        self.wheel_line
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_wheel_line(&mut self, points: Option<f32>) {
+        self.wheel_line = points.and_then(crate::app::normalize_wheel_line);
     }
 
     #[inline]

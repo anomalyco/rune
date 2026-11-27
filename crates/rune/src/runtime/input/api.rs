@@ -136,8 +136,23 @@ impl<S: 'static> Runtime<S> {
     pub fn cursor(&self) -> crate::el::Cursor { self.core().cursor() }
     #[inline(always)]
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) { self.core_mut().wheel(x, y, dy); }
+    /// Whether whole mouse-wheel notches ease smoothly rather than jumping immediately
+    /// (default `true`, configured by [`App::wheel_glide`](crate::App::wheel_glide) or
+    /// [`ConfiguredOverlay::wheel_glide`](crate::ConfiguredOverlay::wheel_glide)).
     #[inline(always)]
-    pub fn set_wheel_glide(&mut self, on: bool) { self.core_mut().scroll.set_wheel_glide(on); }
+    pub fn wheel_glide(&self) -> bool { self.core().wheel_glide() }
+    /// Turns mouse-wheel notch easing on or off for this runtime (default `true`).
+    #[inline(always)]
+    pub fn set_wheel_glide(&mut self, on: bool) { self.core_mut().set_wheel_glide(on); }
+    /// Configured window points per mouse-wheel line/notch, or `None` when using the platform
+    /// default (Windows `SPI_GETWHEELSCROLLLINES`, 120 pt on Linux, 40 pt on macOS and web).
+    #[inline(always)]
+    pub fn wheel_line(&self) -> Option<f32> { self.core().wheel_line() }
+    /// Overrides how many window points one mouse-wheel line/notch scrolls for this runtime.
+    /// Positive finite values override the platform default; `None`, zero, negative, or
+    /// non-finite values restore the platform default.
+    #[inline(always)]
+    pub fn set_wheel_line(&mut self, points: Option<f32>) { self.core_mut().set_wheel_line(points); }
     #[inline(always)]
     pub fn fling(&mut self, x: f32, y: f32, velocity: f32) { self.core_mut().fling(x, y, velocity); }
     #[inline(always)]

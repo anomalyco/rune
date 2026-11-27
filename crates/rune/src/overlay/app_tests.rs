@@ -47,7 +47,7 @@ fn overlay_runtime_tracks_marks_only_when_compositor_is_attached() {
     let host_spec = OverlaySpec::new("overlay-host-marks-on", app.size, view)
         .options(Default::default())
         .compositor(NoopCompositor);
-    let (mut host_with, _) = OverlayHost::new(host_spec, (), &app, FontSmoothing::default());
+    let (mut host_with, _) = OverlayHost::new(host_spec, (), &app, Default::default());
     assert!(host_with.app.rt().track_marks);
     host_with.app.frame(0.0);
     let host_marks: Vec<u32> = host_with
@@ -62,7 +62,7 @@ fn overlay_runtime_tracks_marks_only_when_compositor_is_attached() {
     assert_eq!(host_marks, [42]);
 
     let host_without_spec = OverlaySpec::new("overlay-host-marks-off", app.size, view).options(Default::default());
-    let (mut host_without, _) = OverlayHost::new(host_without_spec, (), &app, FontSmoothing::default());
+    let (mut host_without, _) = OverlayHost::new(host_without_spec, (), &app, Default::default());
     assert!(!host_without.app.rt().track_marks);
     host_without.app.frame(0.0);
     assert!(host_without.app.rt().marks.is_empty());
@@ -118,6 +118,70 @@ fn overlay_font_smoothing_builder_overrides_app() {
 }
 
 #[test]
+fn overlay_inherits_app_wheel_settings_before_and_after_registration() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let spec = AppSpec::new("overlay-wheel", (120.0, 80.0), || (), view);
+
+    // App::wheel_line and App::wheel_glide set before App::overlay.
+    let mut app = App::new(spec).wheel_line(60.0).wheel_glide(false);
+    let _ = app.overlay(OverlaySpec::new("before", (120.0, 80.0), view), ());
+    assert_eq!(app.overlays[0].wheel_line(), Some(60.0));
+    assert!(!app.overlays[0].wheel_glide());
+
+    // App::wheel_line and App::wheel_glide set after App::overlay (and via WindowSpec).
+    let mut app = App::new(AppSpec::new("overlay-wheel-after", (120.0, 80.0), || (), view));
+    let _ = app.overlay(OverlaySpec::new("after", (120.0, 80.0), view), ());
+    assert_eq!(app.overlays[0].wheel_line(), None);
+    assert!(app.overlays[0].wheel_glide());
+    let window = WindowSpec::from_app("main", app).wheel_line(60.0).wheel_glide(false);
+    assert_eq!(window.app.overlays[0].wheel_line(), Some(60.0));
+    assert!(!window.app.overlays[0].wheel_glide());
+}
+
+#[test]
+fn overlay_wheel_settings_override_app_in_either_order() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+
+    // Explicit overrides beat App settings set before App::overlay, including restoring defaults.
+    let mut app = App::new(AppSpec::new("overlay-wheel-override-before", (120.0, 80.0), || (), view))
+        .wheel_line(60.0)
+        .wheel_glide(false);
+    let _ = app.overlay(
+        OverlaySpec::new("override-custom", (120.0, 80.0), view)
+            .options(Default::default())
+            .wheel_line(90.0)
+            .wheel_glide(true),
+        (),
+    );
+    let _ = app.overlay(
+        OverlaySpec::new("override-platform-default", (120.0, 80.0), view)
+            .options(Default::default())
+            .wheel_line(0.0),
+        (),
+    );
+    assert_eq!(app.overlays[0].wheel_line(), Some(90.0));
+    assert!(app.overlays[0].wheel_glide());
+    assert_eq!(app.overlays[1].wheel_line(), None);
+    assert!(!app.overlays[1].wheel_glide());
+
+    // Explicit overrides also survive App::wheel_line and App::wheel_glide called after App::overlay.
+    let mut app = App::new(AppSpec::new("overlay-wheel-override-after", (120.0, 80.0), || (), view));
+    let _ = app.overlay(
+        OverlaySpec::new("explicit", (120.0, 80.0), view)
+            .options(Default::default())
+            .wheel_line(0.0)
+            .wheel_glide(true),
+        (),
+    );
+    let _ = app.overlay(OverlaySpec::new("inherit", (120.0, 80.0), view), ());
+    let app = app.wheel_line(60.0).wheel_glide(false);
+    assert_eq!(app.overlays[0].wheel_line(), None);
+    assert!(app.overlays[0].wheel_glide());
+    assert_eq!(app.overlays[1].wheel_line(), Some(60.0));
+    assert!(!app.overlays[1].wheel_glide());
+}
+
+#[test]
 fn overlay_app_forwards_release_compositor_gpu() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -134,7 +198,7 @@ fn overlay_app_forwards_release_compositor_gpu() {
     let spec = OverlaySpec::new("overlay-release-gpu", app.size, view)
         .options(Default::default())
         .compositor(CountingComp(releases.clone()));
-    let (mut host, _) = OverlayHost::new(spec, (), &app, FontSmoothing::default());
+    let (mut host, _) = OverlayHost::new(spec, (), &app, Default::default());
     host.app.release_compositor_gpu();
     assert_eq!(releases.load(Ordering::Relaxed), 1);
 }
@@ -213,7 +277,7 @@ fn overlay_macos_color_space_defaults_to_srgb_and_retains_unmanaged() {
     let host_cfg = OverlaySpec::new("host-unmanaged", app.size, view)
         .options(Default::default())
         .macos_color_space(crate::MacColorSpace::Unmanaged);
-    let (host, _) = OverlayHost::new(host_cfg, (), &app, FontSmoothing::default());
+    let (host, _) = OverlayHost::new(host_cfg, (), &app, Default::default());
     assert_eq!(host.core.macos_color_space, crate::MacColorSpace::Unmanaged);
 
     let back_to_srgb = OverlaySpec::new("toggle", app.size, view)
@@ -257,7 +321,7 @@ fn overlay_frame_latency_defaults_to_none_clamps_and_retains() {
         let host_cfg = OverlaySpec::new("host-clamped", app.size, view)
             .options(Default::default())
             .frame_latency(input);
-        let (host, _) = OverlayHost::new(host_cfg, (), &app, FontSmoothing::default());
+        let (host, _) = OverlayHost::new(host_cfg, (), &app, Default::default());
         assert_eq!(host.core.frame_latency, Some(expected), "OverlayHost input {input}");
     }
 }
@@ -311,7 +375,7 @@ fn overlay_setup_measures_use_overlay_text_system_and_stay_warm_for_first_frame(
             .setup(|s, _| {
                 s.setup_width = crate::text::measure(LABEL, &[], STYLE, None).0;
             });
-        let (mut host, _) = OverlayHost::new(host_cfg, State::default(), &app, FontSmoothing::default());
+        let (mut host, _) = OverlayHost::new(host_cfg, State::default(), &app, Default::default());
         assert_eq!(host.app.rt().text.shaped, 0);
         host.app.run_setup(Arc::new(|| {}));
         let host_shaped = host.app.rt().text.shaped;

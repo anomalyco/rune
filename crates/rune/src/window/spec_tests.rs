@@ -160,6 +160,8 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     let window = WindowSpec::new("secondary", spec)
         .srgb_blend(false)
         .font_smoothing(crate::FontSmoothing::Off)
+        .wheel_glide(false)
+        .wheel_line(60.0)
         .max_native_materials(8)
         .fit_content_height()
         .float_on_open()
@@ -199,6 +201,8 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .map_app(|app| app.keep_running());
     assert!(!window.app.runtime.srgb_blend);
     assert_eq!(window.app.runtime.font_smoothing, crate::FontSmoothing::Off);
+    assert!(!window.app.runtime.wheel_glide);
+    assert_eq!(window.app.runtime.wheel_line, Some(60.0));
     assert_eq!(window.app.runtime.max_native_materials, 8);
     assert!(window.app.runtime.modifier_keys && window.app.runtime.media_keys && window.app.runtime.tab_visits_controls);
     assert!(window.app.runtime.on_focus.is_some() && window.app.runtime.on_mods.is_some());

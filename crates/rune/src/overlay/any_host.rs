@@ -570,6 +570,12 @@ impl PendingOverlay for OverlayHost {
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing) {
         OverlayHost::inherit_font_smoothing(self, mode);
     }
+    fn inherit_wheel_glide(&mut self, on: bool) {
+        OverlayHost::inherit_wheel_glide(self, on);
+    }
+    fn inherit_wheel_line(&mut self, points: Option<f32>) {
+        OverlayHost::inherit_wheel_line(self, points);
+    }
     fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
         OverlayHost::set_prewarm_effects(self, effects);
     }
@@ -579,6 +585,14 @@ impl PendingOverlay for OverlayHost {
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing {
         self.app.rt().font_smoothing()
+    }
+    #[cfg(test)]
+    fn wheel_glide(&self) -> bool {
+        self.app.rt().wheel_glide()
+    }
+    #[cfg(test)]
+    fn wheel_line(&self) -> Option<f32> {
+        self.app.rt().wheel_line()
     }
     #[cfg(test)]
     fn gpu_loss_latch(&self) -> Option<Arc<crate::render::loss_latch::GpuLossLatch>> {

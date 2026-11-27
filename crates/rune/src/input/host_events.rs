@@ -486,9 +486,9 @@ pub(crate) fn wheel_from_delta(
     // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
     // and a pinch is the same gesture whatever the zoom.
     #[cfg(target_os = "windows")]
-    let points = rt.windows_wheel_points(delta, shift);
+    let points = rt.wheel_line().unwrap_or_else(|| rt.windows_wheel_points(delta, shift));
     #[cfg(not(target_os = "windows"))]
-    let points = crate::runtime::LINE_POINTS;
+    let points = rt.wheel_line().unwrap_or(crate::runtime::LINE_POINTS);
     let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
     let precise = matches!(delta, MouseScrollDelta::PixelDelta(_));
     let ticks = match delta {
