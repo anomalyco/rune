@@ -166,6 +166,9 @@ impl RuntimeCore {
                 write!(attrs, " aria-roledescription=\"{}\"", escape(rd)).ok();
             }
         }
+        if !n.a11y.hidden && let Some(cur) = n.a11y.more.as_deref().and_then(|m| m.current) {
+            write!(attrs, " aria-current=\"{}\"", cur.as_aria()).ok();
+        }
         if n.a11y.hidden || n.role == "list-marker" { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);
         let [x0, y0, x1, y1] = n.target;

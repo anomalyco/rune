@@ -114,6 +114,20 @@ impl Tree<'_> {
                 accesskit::AutoComplete::Both => "both",
             }.into();
         }
+        if let Some(cur) = n.aria_current() {
+            let s = match cur {
+                accesskit::AriaCurrent::Page => Some("page"),
+                accesskit::AriaCurrent::Step => Some("step"),
+                accesskit::AriaCurrent::Location => Some("location"),
+                accesskit::AriaCurrent::Date => Some("date"),
+                accesskit::AriaCurrent::Time => Some("time"),
+                accesskit::AriaCurrent::True => Some("true"),
+                accesskit::AriaCurrent::False => None,
+            };
+            if let Some(s) = s {
+                v["current"] = s.into();
+            }
+        }
         match n.sort_direction() {
             Some(accesskit::SortDirection::Ascending) => v["sort"] = "ascending".into(),
             Some(accesskit::SortDirection::Descending) => v["sort"] = "descending".into(),

@@ -162,15 +162,17 @@ accesskit_windows = { path = "vendor/accesskit_windows" }
 # accesskit_atspi_common as published plus `vendor/accesskit_atspi_common.patch`: item roles read
 # their own `size_of_set` before falling back to `size_of_set_from_container`, so levelled items in
 # a flat tree report their own level's `setsize` to AT-SPI without leaking container sizes onto
-# containers. Re-made by `scripts/vendor-accesskit-atspi-common.sh <version>` when AccessKit is
-# bumped; apps that build Rune patch it too (omitting it still compiles and falls back to the
-# container's set size on Linux).
+# containers; and `aria_current` maps to the AT-SPI2 `current` object attribute (W3C Core-AAM 1.2).
+# Re-made by `scripts/vendor-accesskit-atspi-common.sh <version>` when AccessKit is bumped; apps
+# that build Rune patch it too (omitting it still compiles and falls back to the container's set
+# size on Linux).
 accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
 # accesskit_macos as published plus `vendor/accesskit_macos.patch`: headings reach NSAccessibility as
 # AppKit's `AXHeading` with their level as the value (the published role, `Heading`, is none VoiceOver
 # knows), so VoiceOver's rotor and VO-Command-H find them and say their level; scroll views reach
 # NSAccessibility as AppKit's `AXScrollArea` (`NSAccessibilityScrollAreaRole`, matching WebKit and
-# Chromium) instead of `AXUnknown`; and the accessibility
+# Chromium) instead of `AXUnknown`; `aria_current` reaches VoiceOver as WebKit/Chromium's
+# `AXARIACurrent` attribute; and the accessibility
 # children, focused element and hit test leave the adapter alone off the main thread, which AppKit
 # calls them on while the process queries itself, so they answer from the superclass instead of
 # racing or panicking on the main thread's borrow; and a field past Rune's 64 KiB text-run limit keeps

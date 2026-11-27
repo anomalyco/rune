@@ -105,3 +105,23 @@ fn vendored_accesskit_macos_maps_scroll_view_to_scroll_area_and_patch_preserves_
         "vendor/accesskit_macos.patch must carry the ScrollView -> NSAccessibilityScrollAreaRole mapping"
     );
 }
+
+#[test]
+fn vendored_accesskit_macos_exposes_ax_aria_current_and_patch_preserves_it() {
+    assert!(
+        MACOS_NODE_RS.contains("ns_string!(\"AXARIACurrent\")")
+            && MACOS_NODE_RS.contains("aria_current_str(node).is_some()"),
+        "vendor/accesskit_macos/src/node.rs must expose AXARIACurrent via accessibilityAttributeValue:"
+    );
+    for token in ["\"page\"", "\"step\"", "\"location\"", "\"date\"", "\"time\"", "\"true\""] {
+        assert!(
+            MACOS_NODE_RS.contains(token),
+            "vendor/accesskit_macos/src/node.rs must map AriaCurrent token {token}"
+        );
+    }
+    assert!(
+        MACOS_PATCH.contains("+                } else if attr == ns_string!(\"AXARIACurrent\") {")
+            && MACOS_PATCH.contains("+                        || aria_current_str(node).is_some()"),
+        "vendor/accesskit_macos.patch must carry the AXARIACurrent mapping"
+    );
+}

@@ -9,8 +9,8 @@
 // found in the LICENSE.chromium file.
 
 use accesskit::{
-    Action, ActionData, ActionRequest, Affine, Live, NodeId, Orientation, Point, Rect, Role,
-    Toggled, TreeId,
+    Action, ActionData, ActionRequest, Affine, AriaCurrent, Live, NodeId, Orientation, Point, Rect,
+    Role, Toggled, TreeId,
 };
 use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree, TreeState};
 use atspi_common::{
@@ -419,6 +419,20 @@ impl NodeWrapper<'_> {
         self.0.braille_role_description()
     }
 
+    // Rune (vendor/accesskit_atspi_common.patch): expose `aria-current` as the AT-SPI2
+    // `current` object attribute (W3C Core-AAM 1.2) for Orca and other Linux assistive tech.
+    fn aria_current(&self) -> Option<&'static str> {
+        match self.0.aria_current()? {
+            AriaCurrent::False => None,
+            AriaCurrent::True => Some("true"),
+            AriaCurrent::Page => Some("page"),
+            AriaCurrent::Step => Some("step"),
+            AriaCurrent::Location => Some("location"),
+            AriaCurrent::Date => Some("date"),
+            AriaCurrent::Time => Some("time"),
+        }
+    }
+
     fn attributes(&self) -> HashMap<&'static str, String> {
         let mut attributes = HashMap::new();
         if let Some(placeholder) = self.placeholder() {
@@ -438,6 +452,9 @@ impl NodeWrapper<'_> {
         }
         if let Some(role_description) = self.braille_role_description() {
             attributes.insert("brailleroledescription", role_description.to_string());
+        }
+        if let Some(current) = self.aria_current() {
+            attributes.insert("current", current.to_string());
         }
 
         attributes
@@ -2157,5 +2174,42 @@ mod tests {
         assert_eq!(attrs("treegrid").get("setsize"), None, "treegrid container must not report its own children count");
         assert_eq!(attrs("row").get("setsize").map(String::as_str), Some("5"), "levelled treegrid row reads its own size");
         assert_eq!(attrs("group").get("setsize"), None, "group container must not report its own children count");
+    }
+
+    #[test]
+    fn aria_current_maps_to_atspi_current_attribute_and_omits_false() {
+        let cases = [
+            ("none", None, None),
+            ("false", Some(AriaCurrent::False), None),
+            ("page", Some(AriaCurrent::Page), Some("page")),
+            ("step", Some(AriaCurrent::Step), Some("step")),
+            ("location", Some(AriaCurrent::Location), Some("location")),
+            ("date", Some(AriaCurrent::Date), Some("date")),
+            ("time", Some(AriaCurrent::Time), Some("time")),
+            ("true", Some(AriaCurrent::True), Some("true")),
+        ];
+        let mut root = Node::new(Role::Window);
+        root.set_children((1..=cases.len()).map(|i| NodeId(i as u64)).collect::<Vec<_>>());
+        let mut nodes = vec![(NodeId(0), root)];
+        for (idx, (key, cur, _)) in cases.iter().enumerate() {
+            let mut n = Node::new(Role::Link);
+            n.set_author_id(*key);
+            if let Some(cur) = *cur {
+                n.set_aria_current(cur);
+            }
+            nodes.push((NodeId((idx + 1) as u64), n));
+        }
+        let update = TreeUpdate {
+            nodes,
+            tree: Some(TreeInfo::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        };
+        let t = Tree::new(update, false);
+        for (key, _, expected) in cases {
+            let node = t.state().root().children().find(|c| c.author_id() == Some(key)).unwrap();
+            let attrs = NodeWrapper(&node).attributes();
+            assert_eq!(attrs.get("current").map(String::as_str), expected, "current attribute mismatch for {key}");
+        }
     }
 }
