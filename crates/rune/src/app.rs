@@ -37,8 +37,10 @@ mod quit_request;
 pub use quit_request::QuitResponse;
 #[path = "app/web.rs"]
 mod web;
+pub use web::{GpuFallback, GpuFallbackStage};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::with_font;
+pub(crate) use web::OnGpuFallback;
 
 pub(crate) type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
@@ -162,6 +164,8 @@ pub struct App<S: 'static> {
     pub(crate) keep_layout: Option<Box<dyn FnMut(crate::LayoutSeed)>>,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) on_gpu_fallback: Option<OnGpuFallback>,
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) windows_window: crate::WindowsWindowOptions,
     pub(crate) exclude_from_capture: Option<bool>,
@@ -242,6 +246,7 @@ impl<S: 'static> App<S> {
             layout_seed: None,
             keep_layout: None,
             same_tab_router: None,
+            on_gpu_fallback: None,
             macos_window: crate::MacWindowOptions::default(),
             windows_window: crate::WindowsWindowOptions::default(),
             exclude_from_capture: None,
@@ -1033,15 +1038,6 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn on_open_files(mut self, f: fn(&mut S, &[std::path::PathBuf], &mut Tx)) -> Self {
         self.on_open_files = Some(f);
-        self
-    }
-
-    /// On web, routes [`Tx::open_url_same_tab`] links inside a single-page app: `route` gets the
-    /// absolute URL of each link on the page's own origin and returns true when it handled it
-    /// (`history.pushState` and a render), or false to let the browser load it with
-    /// `location.assign`. Links to other origins always load. Ignored on native.
-    pub fn same_tab_router(mut self, route: impl Fn(&str) -> bool + 'static) -> Self {
-        self.same_tab_router = Some(Box::new(route));
         self
     }
 

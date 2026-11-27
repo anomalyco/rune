@@ -62,6 +62,8 @@ pub use accesskit;
 pub use app::App;
 pub use app::AppHandle;
 pub use app::CloseResponse;
+pub use app::GpuFallback;
+pub use app::GpuFallbackStage;
 pub use app::QuitResponse;
 pub use audio::AudioBackend;
 pub use audio::AudioEvent;

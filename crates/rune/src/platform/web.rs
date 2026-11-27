@@ -21,6 +21,7 @@ mod page;
 mod page_fonts;
 mod pipelines;
 pub(crate) mod platform;
+mod recovery;
 pub(crate) use rune_text::segmenter;
 
 thread_local! {
@@ -84,6 +85,10 @@ enum Wake {
     StartGpu(crate::machine::Attempt),
     /// A CPU-first WebGPU probe failed; defer WebGL2 fallback until quiet or stay on CPU.
     WebGpuFailed,
+    /// Scheduled WebGPU device-loss recovery backoff expired (`Browser::on_webgpu_recover_due`).
+    WebGpuRecover(crate::machine::Attempt),
+    /// Async WebGPU device-loss re-acquisition answered (`Browser::on_webgpu_recovered`).
+    WebGpuRecovered(crate::machine::Attempt),
     /// An async browser WebGPU error-scope check (`uber_check` or feature breaker) answered.
     GpuCheck,
     /// The empty-queue barrier after `Renderer::try_new` resolved (`HandoverEvent::Built`).
@@ -152,7 +157,8 @@ fn spawn(mut app: PendingApp) -> Result<(), String> {
     event_loop.spawn_app(Browser { app: Some(app), shared, proxy, resize_redraw, window: None, embedded: false, document: false, owns_canvas: true,
         borrowed: page::Borrowed::default(), start: Start::GpuFirst, fonts: Rc::default(), pending: Rc::default(), warmed: Rc::default(), running: Rc::default(),
         gpu_loss_policy: crate::GpuLossPolicy::Recover, terminal_failed: false, terminal_poll_pending: false,
-        lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None,
+        on_gpu_fallback: None, webgpu_recovery: (crate::machine::Seq::default(), web_math::gpu_recovery::WebGpuRecovery::default()),
+        pending_webgpu_recovery: Rc::default(), lost: Rc::default(), webgl_watch: None, webgl_restored: Rc::default(), webgl_restoring: false, waiting: None,
         gpu_startup: (crate::machine::Seq::default(), web_math::GpuStartup::default()), webgpu_err: Rc::default() });
     Ok(())
 }
@@ -191,6 +197,12 @@ struct Browser {
     terminal_failed: bool,
     /// One-shot `AppSpec::poll` wake owed after entering terminal GPU failure.
     terminal_poll_pending: bool,
+    /// Configured `App::on_gpu_fallback` hook, run on permanent GPU fallback or exhausted recovery.
+    on_gpu_fallback: Option<crate::app::OnGpuFallback>,
+    /// Bounded WebGPU device-loss recovery state machine (`GpuLossPolicy::Recover`).
+    webgpu_recovery: (crate::machine::Seq, web_math::gpu_recovery::WebGpuRecovery),
+    /// Replacement WebGPU device answered by an async recovery probe, tagged with its `Attempt`.
+    pending_webgpu_recovery: Rc<RefCell<Option<(crate::machine::Attempt, Result<gpu::ReadyGpu, String>)>>>,
     /// Why the browser lost the GPU device or WebGL2 context, until `lost_device` handles it.
     lost: Rc<RefCell<Option<gpu::Loss>>>,
     /// Active `webglcontextlost` / `webglcontextrestored` listeners once WebGL2 has run on the canvas.
@@ -308,7 +320,8 @@ impl Browser {
         let fonts = self.fonts.borrow_mut().take().unwrap_or_default();
         let mut terminal_init_error = None;
         let gpu = if gpu_first {
-            match self.pending.borrow_mut().take() {
+            let taken = self.pending.borrow_mut().take();
+            match taken {
                 Some(Ok(gpu)) => Some(gpu),
                 Some(Err(e)) => {
                     if self.gpu_loss_policy == crate::GpuLossPolicy::Terminal {
@@ -316,6 +329,7 @@ impl Browser {
                         None
                     } else {
                         self.shared.set_window_error(Some(e.clone()));
+                        self.notify_gpu_fallback(crate::GpuFallbackStage::Init, &e);
                         error(&e, window.canvas().as_ref(), self.embedded, self.document);
                         self.end(event_loop);
                         return;
@@ -410,6 +424,7 @@ impl Browser {
                             Draw::TerminalFailed
                         } else {
                             self.shared.set_window_error(Some(e.clone()));
+                            self.notify_gpu_fallback(crate::GpuFallbackStage::Init, &e);
                             error(&e, window.canvas().as_ref(), self.embedded, self.document);
                             self.end(event_loop);
                             return;
@@ -441,7 +456,8 @@ impl Browser {
             cursor, _menus: menus, shortcuts });
         crate::marks::mark("web.started");
         if let Some(reason) = terminal_init_error {
-            self.enter_terminal_gpu_loss(reason);
+            self.enter_terminal_gpu_loss(reason.clone());
+            self.notify_gpu_fallback(crate::GpuFallbackStage::Init, &reason);
         } else {
             window.request_redraw();
         }
@@ -451,6 +467,7 @@ impl Browser {
 impl ApplicationHandler<Wake> for Browser {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() { return; }
+        self.on_gpu_fallback = self.app.as_mut().expect("app before canvas").on_gpu_fallback.take();
         let app = self.app.as_ref().expect("app before canvas");
         self.document = app.document;
         self.embedded = app.embedded;
@@ -573,6 +590,8 @@ impl ApplicationHandler<Wake> for Browser {
             }
             Wake::StartGpu(attempt) => { self.gpu_startup_due(attempt); return; }
             Wake::WebGpuFailed => { self.webgpu_probe_failed(); return; }
+            Wake::WebGpuRecover(attempt) => { self.on_webgpu_recover_due(attempt); return; }
+            Wake::WebGpuRecovered(attempt) => { let _ = self.on_webgpu_recovered(event_loop, attempt); return; }
             Wake::GpuCheck => { self.on_gpu_check(); return; }
             Wake::HandoverBuilt => { self.on_handover_built(); return; }
             Wake::HandoverDone(attempt) => { self.on_handover_done(attempt); return; }
@@ -694,6 +713,7 @@ impl ApplicationHandler<Wake> for Browser {
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.shared.quitting.store(true, Ordering::Release);
+        self.cancel_webgpu_recovery();
         self.webgl_watch = None;
         let running = self.running.borrow_mut().take();
         if let Some(r) = running { r.close(); }

@@ -146,9 +146,15 @@ marked `data-rune-canvas`, which takes input and stays see-through until the GPU
 canvas inserted just before it, marked `data-rune-cpu` and `aria-hidden="true"`, which shows
 the CPU frames and takes no input. The CPU canvas is removed once the GPU's frames are on
 screen. It stays for the life of the page with `CpuFirst::Only`, or when WebGPU and WebGL2
-both fail to start. A full-window page puts one back if its WebGL2 context is lost, or if it
-started on the CPU and later loses its WebGPU device or has its shader rejected; a
-`CpuFirst::Off` page that loses its WebGPU device shows an error and ends instead.
+both fail to start. Under `CpuFirst::Auto`, software/fallback WebGPU and WebGL2 adapters (such as SwiftShader or
+`llvmpipe`) are rejected so the page stays on the faster CPU canvas. Under `GpuLossPolicy::Recover`,
+WebGPU device loss triggers bounded re-acquisition (3 losses per 5-minute window): full-window
+`CpuFirst` pages draw on the CPU canvas while recovering and hand back over when restored, while
+`CpuFirst::Off`, `App::web_document`, and inline `App::canvas_id` pages pause in place until
+restored or exhausted. When a page permanently falls back off the GPU or exhausts recovery (initial
+async failure, shader rejection, hand-over timeout, or exhausted device-loss recovery), Rune calls
+`App::on_gpu_fallback` and dispatches a bubbling `runegpufallback` `CustomEvent`
+(`detail: { stage, reason }`) on `canvas[data-rune-canvas]`.
 `CpuFirst::Off`, `GpuLossPolicy::Terminal` (which never falls back to the CPU),
 `App::web_document` and inline `App::canvas_id` pages start without one.
 Both attributes are a stable hook: select the app's canvas with `canvas[data-rune-canvas]`

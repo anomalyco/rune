@@ -52,6 +52,7 @@ pub(super) struct PendingApp {
     pub(super) late_font_urls: Vec<String>,
     pub(super) on_ready: Option<OnWindow>,
     pub(super) same_tab_router: Option<Box<dyn Fn(&str) -> bool>>,
+    pub(super) on_gpu_fallback: Option<crate::app::OnGpuFallback>,
     pub(super) compositor_features: wgpu::Features,
     pub(super) shared: Arc<SharedCore>,
     start: StartFn,
@@ -251,6 +252,7 @@ impl<S: 'static> TypedWebApp<S> {
         let late_font_urls = std::mem::take(&mut app.late_font_urls);
         let on_ready = app.on_ready.take();
         let same_tab_router = app.same_tab_router.take();
+        let on_gpu_fallback = app.on_gpu_fallback.take();
         let compositor_features = app.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features());
         let shared = app.shared.core.clone();
         let start: StartFn = Box::new(move |fonts, viewport, env, wake, live_wake| {
@@ -280,6 +282,7 @@ impl<S: 'static> TypedWebApp<S> {
             late_font_urls,
             on_ready,
             same_tab_router,
+            on_gpu_fallback,
             compositor_features,
             shared,
             start,

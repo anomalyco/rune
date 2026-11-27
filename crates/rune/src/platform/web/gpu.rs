@@ -113,19 +113,28 @@ impl Draw {
 /// `requestAdapter` or `requestDevice` then fails, blocking any WebGL2 fallback on the same
 /// canvas. wgpu's WebGPU backend does not need a surface to request an adapter or device, so
 /// the canvas surface is created only after both succeed.
-pub(super) async fn try_webgpu(canvas: &web_sys::HtmlCanvasElement, features: wgpu::Features)
-    -> Result<(Gpu, wgpu::Surface<'static>), String> {
+pub(super) async fn try_webgpu(
+    canvas: &web_sys::HtmlCanvasElement,
+    features: wgpu::Features,
+    reject_software: bool,
+) -> Result<(Gpu, wgpu::Surface<'static>), String> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
     let instance = wgpu::Instance::new(descriptor);
     let adapter = instance.request_adapter(&super::web_math::adapter_options(None))
         .await.map_err(|e| e.to_string())?;
+    super::web_math::gpu_recovery::check_adapter(&adapter.get_info(), reject_software)?;
     let required_limits = wgpu::Limits::default().using_resolution(adapter.limits());
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("rune web"), required_features: adapter.features() & features,
         required_limits, experimental_features: Default::default(),
         memory_hints: Default::default(), trace: Default::default(),
     }).await.map_err(|e| format!("GPU device: {e}"))?;
+    if reject_software && health::is_software_device(&device) {
+        let summary = health::summary(&device);
+        device.destroy();
+        return Err(format!("software/fallback WebGPU adapter rejected ({summary})"));
+    }
     let surface = match instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())) {
         Ok(surface) => surface,
         Err(e) => {
@@ -145,6 +154,7 @@ pub(super) async fn try_webgl2(
     canvas: &web_sys::HtmlCanvasElement,
     features: wgpu::Features,
     quitting: &std::sync::atomic::AtomicBool,
+    reject_software: bool,
 ) -> Result<(Gpu, wgpu::Surface<'static>), String> {
     use std::sync::atomic::Ordering;
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -155,6 +165,7 @@ pub(super) async fn try_webgl2(
     if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
     let adapter = instance.request_adapter(&super::web_math::adapter_options(Some(&surface)))
         .await.map_err(|e| e.to_string())?;
+    super::web_math::gpu_recovery::check_adapter(&adapter.get_info(), reject_software)?;
     super::yield_turn().await;
     if quitting.load(Ordering::Acquire) { return Err("app quit".into()); }
     let adapter_limits = adapter.limits();
@@ -177,13 +188,14 @@ pub(super) async fn gpu(
     canvas: web_sys::HtmlCanvasElement,
     features: wgpu::Features,
     quitting: &std::sync::atomic::AtomicBool,
+    reject_software: bool,
 ) -> Result<(Gpu, wgpu::Surface<'static>), String> {
     #[cfg(not(feature = "webgl"))]
     let _ = quitting;
     let mut webgpu_err = None;
     for &backend in super::web_math::backend_order(health::has_navigator_gpu(), cfg!(feature = "webgl")) {
         match backend {
-            super::web_math::WebBackend::WebGpu => match try_webgpu(&canvas, features).await {
+            super::web_math::WebBackend::WebGpu => match try_webgpu(&canvas, features, reject_software).await {
                 Ok(pair) => return Ok(pair),
                 Err(err) => webgpu_err = Some(err),
             },
@@ -196,7 +208,7 @@ pub(super) async fn gpu(
                             return Err("app quit".into());
                         }
                     }
-                    match try_webgl2(&canvas, features, quitting).await {
+                    match try_webgl2(&canvas, features, quitting, reject_software).await {
                         Ok(pair) => return Ok(pair),
                         Err(gl_err) => {
                             let webgpu = webgpu_err.as_deref().unwrap_or("navigator.gpu unavailable");

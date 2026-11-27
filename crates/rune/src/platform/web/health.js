@@ -8,6 +8,8 @@ export function hasNavigatorGpu() {
     return typeof globalThis.navigator?.gpu === 'object' && globalThis.navigator.gpu !== null;
 }
 
+const SOFTWARE_ADAPTER_RE = /swiftshader|llvmpipe|lavapipe|mesa offscreen|microsoft basic render driver|software rasterizer/i;
+
 // The adapter a device runs on, as far as the browser says: vendor, architecture, device and
 // description (each may be empty), whether it is a fallback adapter, and its texture limit.
 export function gpuSummary(device) {
@@ -16,6 +18,26 @@ export function gpuSummary(device) {
     if (info.isFallbackAdapter) parts.push('fallback adapter');
     parts.push(`max texture ${device.limits.maxTextureDimension2D}`);
     return parts.join(', ');
+}
+
+// Whether `device.adapterInfo` reports a software/fallback WebGPU adapter (catching both
+// `isFallbackAdapter` and software rasterizer strings in vendor/architecture/device/description).
+export function isSoftwareDevice(device) {
+    const info = device?.adapterInfo;
+    if (!info) return false;
+    if (info.isFallbackAdapter) return true;
+    const fields = [info.vendor, info.architecture, info.device, info.description];
+    return fields.some((value) => typeof value === 'string' && SOFTWARE_ADAPTER_RE.test(value));
+}
+
+// Dispatches a bubbling `runegpufallback` CustomEvent on `canvas` when Rune permanently falls
+// back off the GPU or exhausts GPU recovery, mirroring `runepresent` in `bridge.js`.
+export function dispatchGpuFallback(canvas, stage, reason) {
+    if (!canvas || typeof canvas.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+    canvas.dispatchEvent(new CustomEvent('runegpufallback', {
+        bubbles: true,
+        detail: { stage, reason },
+    }));
 }
 
 // Calls `onError(kind, message)` for each uncaptured error and keeps it out of the browser's own
