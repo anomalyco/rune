@@ -28,7 +28,7 @@ use objc2_foundation::{
     NSMutableDictionary, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSString,
     NSURL, ns_string,
 };
-use std::rc::{Rc, Weak};
+use std::{cell::RefCell, rc::{Rc, Weak}};
 
 use crate::{
     context::Context,
@@ -439,9 +439,75 @@ fn downcast_ref<T: ClassType>(obj: &NSObject) -> Option<&T> {
         .then(|| unsafe { &*(obj as *const NSObject).cast::<T>() })
 }
 
+// Rune (vendor/accesskit_macos.patch): target object for `NSAccessibilityCustomAction`
+// (which holds its target weakly, so `PlatformNodeIvars::custom_action_targets` retains it).
+struct CustomActionTargetIvars {
+    context: Weak<Context>,
+    node_id: FullNodeId,
+    action_id: i32,
+}
+
+declare_class!(
+    struct CustomActionTarget;
+
+    unsafe impl ClassType for CustomActionTarget {
+        type Super = NSObject;
+        type Mutability = InteriorMutable;
+        const NAME: &'static str = "AccessKitCustomActionTarget";
+    }
+
+    impl DeclaredClass for CustomActionTarget {
+        type Ivars = CustomActionTargetIvars;
+    }
+
+    unsafe impl CustomActionTarget {
+        #[method(performCustomAction)]
+        fn perform_custom_action(&self) -> bool {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let ivars = self.ivars();
+                let Some(context) = ivars.context.upgrade() else {
+                    return false;
+                };
+                let tree = context.tree.borrow();
+                let state = tree.state();
+                let Some(node) = state.node_by_id(ivars.node_id) else {
+                    return false;
+                };
+                if !node.supports_action(Action::CustomAction, &filter) {
+                    return false;
+                }
+                let Some((target_node, target_tree)) = state.locate_node(node.id()) else {
+                    return false;
+                };
+                drop(tree);
+                context.do_action(ActionRequest {
+                    action: Action::CustomAction,
+                    target_tree,
+                    target_node,
+                    data: Some(ActionData::CustomAction(ivars.action_id)),
+                });
+                true
+            }))
+            .unwrap_or(false)
+        }
+    }
+);
+
+impl CustomActionTarget {
+    fn new(context: Weak<Context>, node_id: FullNodeId, action_id: i32) -> Id<Self> {
+        let this = Self::alloc().set_ivars(CustomActionTargetIvars {
+            context,
+            node_id,
+            action_id,
+        });
+        unsafe { msg_send_id![super(this), init] }
+    }
+}
+
 pub(crate) struct PlatformNodeIvars {
     context: Weak<Context>,
     node_id: FullNodeId,
+    custom_action_targets: RefCell<Vec<Id<NSObject>>>,
 }
 
 declare_class!(
@@ -1329,6 +1395,49 @@ declare_class!(
         // of the legacy methods below only needs to cover actions not already
         // handled by the newer methods.
 
+        // Rune (vendor/accesskit_macos.patch): expose AccessKit custom actions to VoiceOver's
+        // Actions rotor as `NSAccessibilityCustomAction` entries.
+        #[method_id(accessibilityCustomActions)]
+        fn custom_actions(&self) -> Option<Id<NSArray<NSAccessibilityCustomAction>>> {
+            self.resolve(|node| {
+                let custom_actions = node.data().custom_actions();
+                if !node.supports_action(Action::CustomAction, &filter)
+                    || custom_actions.is_empty()
+                {
+                    if let Ok(mut targets) = self.ivars().custom_action_targets.try_borrow_mut() {
+                        targets.clear();
+                    }
+                    return None;
+                }
+                let mut targets = Vec::with_capacity(custom_actions.len());
+                let mut actions = Vec::with_capacity(custom_actions.len());
+                for ca in custom_actions {
+                    let target = CustomActionTarget::new(
+                        self.ivars().context.clone(),
+                        self.ivars().node_id,
+                        ca.id,
+                    );
+                    let target_obj = Id::into_super(target);
+                    let name = NSString::from_str(&ca.description);
+                    let action = unsafe {
+                        NSAccessibilityCustomAction::initWithName_target_selector(
+                            NSAccessibilityCustomAction::alloc(),
+                            &name,
+                            &target_obj,
+                            sel!(performCustomAction),
+                        )
+                    };
+                    targets.push(target_obj);
+                    actions.push(action);
+                }
+                if let Ok(mut stored) = self.ivars().custom_action_targets.try_borrow_mut() {
+                    *stored = targets;
+                }
+                Some(NSArray::from_vec(actions))
+            })
+            .flatten()
+        }
+
         #[method_id(accessibilityActionNames)]
         fn action_names(&self) -> Id<NSArray<NSString>> {
             let mut result = vec![];
@@ -1423,6 +1532,10 @@ declare_class!(
                 if selector == sel!(accessibilityURL) {
                     return node.supports_url();
                 }
+                if selector == sel!(accessibilityCustomActions) {
+                    return node.supports_action(Action::CustomAction, &filter)
+                        && !node.data().custom_actions().is_empty();
+                }
                 selector == sel!(accessibilityParent)
                     || selector == sel!(accessibilityChildren)
                     || selector == sel!(accessibilityChildrenInNavigationOrder)
@@ -1458,7 +1571,11 @@ declare_class!(
 
 impl PlatformNode {
     pub(crate) fn new(context: Weak<Context>, node_id: FullNodeId) -> Id<Self> {
-        let this = Self::alloc().set_ivars(PlatformNodeIvars { context, node_id });
+        let this = Self::alloc().set_ivars(PlatformNodeIvars {
+            context,
+            node_id,
+            custom_action_targets: RefCell::new(Vec::new()),
+        });
 
         unsafe { msg_send_id![super(this), init] }
     }

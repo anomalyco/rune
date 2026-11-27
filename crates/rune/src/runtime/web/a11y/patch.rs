@@ -28,9 +28,13 @@ pub(crate) fn item_tag(item: &A11yItem) -> String {
     }
 }
 
-/// Stable DOM-node map key matching `bridge.js` (`"${tag}:${item.p}"`).
+/// Stable DOM-node map key matching `bridge.js` (`"${tag}:${item.p}"`, suffixed with
+/// `\x1f${item.ca}` for custom accessibility action buttons).
 pub(crate) fn item_key(item: &A11yItem) -> String {
-    format!("{}:{}", item_tag(item), item.path)
+    match item.custom_action.as_deref() {
+        Some(ca) => format!("{}:{}\x1f{ca}", item_tag(item), item.path),
+        None => format!("{}:{}", item_tag(item), item.path),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +69,7 @@ pub(crate) struct SentItem {
     pub scroll: Option<[f32; 2]>,
     pub aria: MirrorAria,
     pub dir: Option<&'static str>,
+    pub custom_action: Option<String>,
 }
 
 impl SentItem {
@@ -103,6 +108,7 @@ impl SentItem {
             scroll: item.scroll.map(|[x, y]| [clean_zero(x), clean_zero(y)]),
             aria: item.aria.clone(),
             dir: item.dir,
+            custom_action: item.custom_action.clone(),
         }
     }
 
@@ -137,6 +143,7 @@ impl SentItem {
             self.scroll,
             &self.aria,
             self.dir,
+            self.custom_action.as_deref(),
         ))
     }
 }
@@ -172,6 +179,7 @@ pub(super) fn item_json_fields(
     scroll: Option<[f32; 2]>,
     aria: &MirrorAria,
     dir: Option<&'static str>,
+    custom_action: Option<&str>,
 ) -> serde_json::Map<String, Value> {
     let mut obj = serde_json::Map::new();
     obj.insert("k".into(), json!(kind));
@@ -224,6 +232,9 @@ pub(super) fn item_json_fields(
     if let Some(st) = aria.list_start { obj.insert("st".into(), json!(st)); }
     if let Some(dir) = dir {
         obj.insert("dir".into(), json!(dir));
+    }
+    if let Some(ca) = custom_action {
+        obj.insert("ca".into(), json!(ca));
     }
     if !runs.is_empty() {
         let out: Vec<Value> = runs.iter().map(|r| {

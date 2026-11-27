@@ -1968,17 +1968,22 @@ function contentParent(el) {
     return el._scrollContent ?? el;
 }
 
+function a11yItemKey(tag, item) {
+    return item.ca ? `${tag}:${item.p}\x1f${item.ca}` : `${tag}:${item.p}`;
+}
+
 function ensureA11yNode(h, item, tag, key) {
     let el = h.a11yNodes.get(key);
     if (!el) {
         el = document.createElement(tag);
         if (tag === 'button') {
             el.type = 'button';
-            el.tabIndex = h.page ? 0 : -1;
+            el.tabIndex = (h.page && !item.ca) ? 0 : -1;
             el.addEventListener('click', ev => {
                 ev.preventDefault();
                 if (el.getAttribute('aria-disabled') === 'true') return;
-                h.send({ kind: 'a11y_press', path: el._a11yPath });
+                if (el._a11yAction) h.send({ kind: 'a11y_custom', path: el._a11yPath, id: el._a11yAction });
+                else h.send({ kind: 'a11y_press', path: el._a11yPath });
             });
         } else if (tag === 'a') {
             el._blockLink = true;
@@ -2009,7 +2014,8 @@ function ensureA11yNode(h, item, tag, key) {
         });
     }
     el._a11yPath = item.p;
-    h.a11yByPath.set(item.p, el);
+    el._a11yAction = item.ca || '';
+    if (!item.ca) h.a11yByPath.set(item.p, el);
     return el;
 }
 
@@ -2105,6 +2111,12 @@ function applyA11yItem(h, el, item, tag, origin) {
         }
     }
     if (tag === 'button') {
+        if (item.ca) {
+            el.tabIndex = -1;
+            if (el.getAttribute('data-rune-a11y-action') !== item.ca) el.setAttribute('data-rune-a11y-action', item.ca);
+        } else if (el.getAttribute('data-rune-a11y-action') !== null) {
+            el.removeAttribute('data-rune-a11y-action');
+        }
         // A control's role and states (a palette's option, a tab, a switch, a toggle button, a range control).
         const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
             ['aria-checked', item.c], ['aria-pressed', item.pr]];
@@ -2202,7 +2214,7 @@ function syncA11yPatch(h, patch) {
     if (patch.u) {
         for (const item of patch.u) {
             const tag = itemTag(item);
-            const key = `${tag}:${item.p}`;
+            const key = a11yItemKey(tag, item);
             const el = ensureA11yNode(h, item, tag, key);
             applyA11yItem(h, el, item, tag, [0, 0]);
         }
@@ -2237,7 +2249,7 @@ export function syncA11y(h, json) {
     const cursors = new Map([[h.a11y, firstItem(h.a11y)]]);
     for (const item of items) {
         const tag = itemTag(item);
-        const key = `${tag}:${item.p}`;
+        const key = a11yItemKey(tag, item);
         seen.add(key);
         const el = ensureA11yNode(h, item, tag, key);
         const parent = item.a === undefined ? null : items[item.a];

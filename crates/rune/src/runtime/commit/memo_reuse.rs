@@ -341,6 +341,7 @@ fn same_handlers(
     }
     let crate::el::Handlers {
         on_a11y_action,
+        custom_a11y_actions,
         on_paste,
         on_window_focus,
         on_spellcheck,
@@ -390,6 +391,12 @@ fn same_handlers(
     a.modal.is_none()
         && modal.is_none()
         && opt_rc_eq(&a.on_a11y_action, on_a11y_action)
+        && match (&a.custom_a11y_actions, custom_a11y_actions) {
+            (None, None) => true,
+            (Some(xa), Some(xb)) => xa.len() == xb.len()
+                && xa.iter().zip(xb.iter()).all(|(x, y)| x.id == y.id && x.label == y.label && Rc::ptr_eq(&x.handler, &y.handler)),
+            _ => false,
+        }
         && match (&a.on_paste, on_paste) {
             (None, None) => true,
             (Some(pa), Some(pb)) => pa.rich == pb.rich && Rc::ptr_eq(&pa.call, &pb.call),

@@ -4,7 +4,8 @@
 # AXHeading with their level as the value, which the published adapter reports as a "Heading" role
 # VoiceOver doesn't know, so VoiceOver's rotor and VO-Command-H found no heading; ScrollView as
 # AppKit's AXScrollArea (NSAccessibilityScrollAreaRole) instead of AXUnknown; aria_current as
-# AXARIACurrent for VoiceOver; and accessibility
+# AXARIACurrent for VoiceOver; custom accessibility actions as NSAccessibilityCustomAction
+# (VoiceOver's Actions rotor); and accessibility
 # children, focus and hit test reading the adapter's state only on the main thread, since AppKit
 # calls them from a background thread while the process queries itself and the main thread may hold
 # that borrow, which raced or aborted). Run it when

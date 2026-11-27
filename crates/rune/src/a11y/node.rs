@@ -55,15 +55,17 @@ impl RuntimeCore {
             has_text: text.is_some_and(|t| !t.source_text().trim().is_empty() || t.redacted),
             image: n.vis.pixels.is_some() || n.vis.surface.is_some(),
         };
-        // A control the keyboard reaches is always in the tree, whatever its role says; an
-        // explicit `role("group")` with a role description also enters the tree as a group.
+        // A control the keyboard reaches (or that declares custom accessibility actions) is always
+        // in the tree, whatever its role says; an explicit `role("group")` with a role description
+        // also enters the tree as a group.
+        let has_custom_actions = handlers.is_some_and(|h| h.custom_a11y_actions.as_deref().is_some_and(|a| !a.is_empty()));
         roles::map(n.role, &cx).or_else(|| {
             let explicit_group_rd = n.role == "group"
                 && n.a11y.explicit_group
                 && n.a11y.more.as_deref()
                     .and_then(|m| m.role_description.as_deref())
                     .is_some_and(|s| !s.trim().is_empty());
-            (input.is_some() || self.can_focus(i) || explicit_group_rd).then_some(Role::Group)
+            (input.is_some() || self.can_focus(i) || explicit_group_rd || has_custom_actions).then_some(Role::Group)
         })
     }
 
@@ -177,6 +179,14 @@ impl RuntimeCore {
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
+        if let Some(actions) = handlers.and_then(|h| h.custom_a11y_actions.as_deref()) {
+            actions.len().hash(&mut h);
+            for action in actions {
+                (&action.id, &action.label).hash(&mut h);
+            }
+        } else {
+            0usize.hash(&mut h);
+        }
         (n.focus.selected, n.focus.step.is_some(), n.focus.set_value.is_some(), n.focus.default, n.focus.caret_browsing, self.focus_group(i).is_some()).hash(&mut h);
         if n.input.is_none() && self.is_caret_browsing_node(n) {
             self.a11y_caret_selection(i)
@@ -410,6 +420,17 @@ impl RuntimeCore {
         if actionable {
             if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() || (w.delegated_a11y && roles::composite_item(role)) { node.add_action(Ak::Click); }
             if handlers.is_some_and(|h| h.on_secondary_press.is_some()) || self.has_image_menu(i) { node.add_action(Ak::ShowContextMenu); }
+            if let Some(actions) = handlers.and_then(|h| h.custom_a11y_actions.as_deref()).filter(|a| !a.is_empty()) {
+                let ids = super::actions::resolve_custom_action_ids(actions);
+                node.add_action(Ak::CustomAction);
+                node.set_custom_actions(
+                    actions
+                        .iter()
+                        .zip(ids)
+                        .map(|(a, id)| accesskit::CustomAction { id, description: a.label.clone() })
+                        .collect::<Vec<_>>(),
+                );
+            }
             if n.a11y.expanded.is_some() && handlers.is_some_and(|h| h.on_press.is_some()) {
                 node.add_action(if n.a11y.expanded == Some(true) { Ak::Collapse } else { Ak::Expand });
             }

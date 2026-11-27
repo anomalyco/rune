@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::a11y::roles;
 
+mod actions;
 pub(crate) mod patch;
 pub(crate) mod schedule;
 
@@ -109,6 +110,8 @@ pub(crate) struct A11yItem {
     /// Explicit HTML `dir` (`"rtl"` or `"ltr"`) when this item's resolved `Flow` flips from its
     /// mirror parent's; `None` when inherited.
     pub dir: Option<&'static str>,
+    /// Custom accessibility action id (`El::a11y_action`) when this button mirrors a custom action.
+    pub custom_action: Option<String>,
 }
 
 /// Extra WAI-ARIA states and relations mirrored onto a web DOM item.
@@ -170,7 +173,7 @@ impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
             runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
-            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None, aria: MirrorAria::default(), dir: None }
+            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None, aria: MirrorAria::default(), dir: None, custom_action: None }
     }
 
     fn to_json(&self) -> Value {
@@ -204,6 +207,7 @@ impl A11yItem {
             self.scroll,
             &self.aria,
             self.dir,
+            self.custom_action.as_deref(),
         ))
     }
 }
@@ -620,6 +624,7 @@ impl RuntimeCore {
                 item_flows.push(node_flow);
             };
 
+
             let in_control = i < control_end;
             if let Some(inp) = n.input.as_deref() {
                 let secure = n.is_secure();
@@ -672,11 +677,12 @@ impl RuntimeCore {
             let live_role = roles::default_live(n.role).and_then(|_| roles::container_aria(n.role));
             let text_aria = (n.text.is_some() && end == i + 1).then(|| roles::container_aria(n.role)).flatten();
             let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
-            // A labelled `group` (a game's surface naming its keys, a set of controls) or an
-            // explicit `role("group")` with a role description is a div with `role="group"`; a
-            // plain unlabelled one adds nothing a reader would say unless it is a live region.
+            // A labelled `group` (a game's surface naming its keys, a set of controls), an
+            // explicit `role("group")` with a role description, or a group carrying custom actions
+            // is a div with `role="group"`.
             let explicit_group_rd = n.role == "group" && n.a11y.explicit_group && self.a11y_role_description(i).is_some();
-            let labelled_group = n.role == "group" && (self.mirror_name(i).is_some() || explicit_group_rd);
+            let has_custom = n.handlers.get().is_some_and(|h| h.custom_a11y_actions.as_deref().is_some_and(|a| !a.is_empty()));
+            let labelled_group = n.role == "group" && (self.mirror_name(i).is_some() || explicit_group_rd || has_custom);
             let live_group = n.role == "group" && n.text.is_none() && n.handlers.on_press.is_none()
                 && raw_href.is_none() && live.is_some();
             let ordered_list = n.role == "list" && n.a11y.more.as_deref().is_some_and(|m| m.list_start.is_some());
@@ -710,7 +716,9 @@ impl RuntimeCore {
                     scrollers.push((end, [f64::from(sx), f64::from(sy)]));
                 }
                 push(&mut out, item);
-                open.push((end, out.len() - 1));
+                let host = out.len() - 1;
+                open.push((end, host));
+                self.push_web_custom_actions(i, rect, Some(host), node_flow, None, &mut out, &mut item_flows);
                 last_flow_parent = None;
                 i += 1;
                 continue;
@@ -816,6 +824,7 @@ impl RuntimeCore {
                         }
                     }
                     push(&mut out, item);
+                    self.push_web_custom_actions(i, rect, parent, node_flow, item_dir, &mut out, &mut item_flows);
                     if nested_press {
                         control_end = control_end.max(end);
                         i += 1;
@@ -1349,33 +1358,7 @@ impl RuntimeCore {
         Value::Object(o)
     }
 
-    /// Dispatches assistive-tech activation of a mirrored button or inline link.
-    pub(crate) fn web_a11y_action(&mut self, event: &serde_json::Value) -> bool {
-        let Some(path) = event["path"].as_str() else { return false };
-        match event["kind"].as_str() {
-            Some("a11y_press") => {
-                let Some(i) = self.live(path) else { return false };
-                if self.node_disabled(i) || !self.allowed(i) { return false; }
-                if self.tree.nodes[i].handlers.on_press.is_some() {
-                    self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false, None));
-                    true
-                } else if self.tree.nodes[i].input.is_some() {
-                    self.queue_a11y(path.to_owned(), crate::a11y::actions::A11yAct::Focus(None));
-                    true
-                } else {
-                    self.queue_a11y_delegate(i, accesskit::Action::Click)
-                }
-            }
-            Some("a11y_link") => {
-                let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
-                let Some(i) = self.live(path) else { return false };
-                if self.node_disabled(i) || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
-                self.frame.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
-                true
-            }
-            _ => false,
-        }
-    }
+
 }
 
 /// Joins one more flowed word run into the paragraph item before it.

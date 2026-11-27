@@ -551,9 +551,9 @@ impl Running {
                 }
             }
             Some("key") => activate = self.app.web_key(event),
-            Some("a11y_press" | "a11y_link") => {
+            Some("a11y_press" | "a11y_link" | "a11y_custom") => {
                 let _ = self.app.rt_mut().web_a11y_action(event);
-                a11y_press = event["kind"].as_str() == Some("a11y_press");
+                a11y_press = matches!(event["kind"].as_str(), Some("a11y_press" | "a11y_custom"));
                 flush_a11y = true;
             }
             // The page's menu (`showMenu`) was picked from or dismissed.

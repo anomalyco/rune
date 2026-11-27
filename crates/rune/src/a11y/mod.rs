@@ -20,6 +20,8 @@ mod aria_tests;
 mod auto_complete_tests;
 #[cfg(test)]
 mod current_tests;
+#[cfg(test)]
+mod custom_actions_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;

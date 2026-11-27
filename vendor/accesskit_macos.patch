@@ -1,3 +1,15 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 2704a74..21092a4 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -58,6 +58,7 @@ version = "0.2.0"
+ features = [
+     "NSAccessibility",
+     "NSAccessibilityConstants",
++    "NSAccessibilityCustomAction",
+     "NSAccessibilityElement",
+     "NSAccessibilityProtocols",
+     "NSColor",
 diff --git a/src/event.rs b/src/event.rs
 index 445419c..a7b4389 100644
 --- a/src/event.rs
@@ -33,7 +45,7 @@ index 5b79542..fbd7b8b 100644
  mod node;
  mod util;
  
-diff --git a/new/src/long_text.rs b/src/long_text.rs
+diff --git a/src/long_text.rs b/src/long_text.rs
 new file mode 100644
 index 0000000..ae053e0
 --- /dev/null
@@ -836,7 +848,7 @@ index 0000000..ae053e0
 +    }
 +}
 diff --git a/src/node.rs b/src/node.rs
-index 7be2e59..9412122 100644
+index 7be2e59..26f6c97 100644
 --- a/src/node.rs
 +++ b/src/node.rs
 @@ -11,7 +11,8 @@
@@ -849,9 +861,12 @@ index 7be2e59..9412122 100644
  };
  use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree};
  use objc2::{
-@@ -29,10 +30,48 @@ use objc2_foundation::{
+@@ -27,12 +28,50 @@ use objc2_foundation::{
+     NSMutableDictionary, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSString,
+     NSURL, ns_string,
  };
- use std::rc::{Rc, Weak};
+-use std::rc::{Rc, Weak};
++use std::{cell::RefCell, rc::{Rc, Weak}};
  
 -use crate::{context::Context, filters::filter, util::*};
 +use crate::{
@@ -936,7 +951,83 @@ index 7be2e59..9412122 100644
          if let Some(value) = self.0.value() {
              return Some(Value::String(value));
          }
-@@ -755,6 +806,10 @@ declare_class!(
+@@ -388,9 +439,75 @@ fn downcast_ref<T: ClassType>(obj: &NSObject) -> Option<&T> {
+         .then(|| unsafe { &*(obj as *const NSObject).cast::<T>() })
+ }
+ 
++// Rune (vendor/accesskit_macos.patch): target object for `NSAccessibilityCustomAction`
++// (which holds its target weakly, so `PlatformNodeIvars::custom_action_targets` retains it).
++struct CustomActionTargetIvars {
++    context: Weak<Context>,
++    node_id: FullNodeId,
++    action_id: i32,
++}
++
++declare_class!(
++    struct CustomActionTarget;
++
++    unsafe impl ClassType for CustomActionTarget {
++        type Super = NSObject;
++        type Mutability = InteriorMutable;
++        const NAME: &'static str = "AccessKitCustomActionTarget";
++    }
++
++    impl DeclaredClass for CustomActionTarget {
++        type Ivars = CustomActionTargetIvars;
++    }
++
++    unsafe impl CustomActionTarget {
++        #[method(performCustomAction)]
++        fn perform_custom_action(&self) -> bool {
++            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                let ivars = self.ivars();
++                let Some(context) = ivars.context.upgrade() else {
++                    return false;
++                };
++                let tree = context.tree.borrow();
++                let state = tree.state();
++                let Some(node) = state.node_by_id(ivars.node_id) else {
++                    return false;
++                };
++                if !node.supports_action(Action::CustomAction, &filter) {
++                    return false;
++                }
++                let Some((target_node, target_tree)) = state.locate_node(node.id()) else {
++                    return false;
++                };
++                drop(tree);
++                context.do_action(ActionRequest {
++                    action: Action::CustomAction,
++                    target_tree,
++                    target_node,
++                    data: Some(ActionData::CustomAction(ivars.action_id)),
++                });
++                true
++            }))
++            .unwrap_or(false)
++        }
++    }
++);
++
++impl CustomActionTarget {
++    fn new(context: Weak<Context>, node_id: FullNodeId, action_id: i32) -> Id<Self> {
++        let this = Self::alloc().set_ivars(CustomActionTargetIvars {
++            context,
++            node_id,
++            action_id,
++        });
++        unsafe { msg_send_id![super(this), init] }
++    }
++}
++
+ pub(crate) struct PlatformNodeIvars {
+     context: Weak<Context>,
+     node_id: FullNodeId,
++    custom_action_targets: RefCell<Vec<Id<NSObject>>>,
+ }
+ 
+ declare_class!(
+@@ -755,6 +872,10 @@ declare_class!(
          #[method(accessibilityNumberOfCharacters)]
          fn number_of_characters(&self) -> NSInteger {
              self.resolve(|node| {
@@ -947,7 +1038,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      node.document_range().end().to_global_utf16_index() as _
                  } else {
-@@ -767,6 +822,9 @@ declare_class!(
+@@ -767,6 +888,9 @@ declare_class!(
          #[method_id(accessibilitySelectedText)]
          fn selected_text(&self) -> Option<Id<NSString>> {
              self.resolve(|node| {
@@ -957,7 +1048,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = node.text_selection() {
                          let text = range.text();
-@@ -781,6 +839,10 @@ declare_class!(
+@@ -781,6 +905,10 @@ declare_class!(
          #[method(accessibilitySelectedTextRange)]
          fn selected_text_range(&self) -> NSRange {
              self.resolve(|node| {
@@ -968,7 +1059,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = node.text_selection() {
                          return to_ns_range(&range);
-@@ -794,6 +856,10 @@ declare_class!(
+@@ -794,6 +922,10 @@ declare_class!(
          #[method(accessibilityInsertionPointLineNumber)]
          fn insertion_point_line_number(&self) -> NSInteger {
              self.resolve(|node| {
@@ -979,7 +1070,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(pos) = node.text_selection_focus() {
                          return pos.to_line_index() as _;
-@@ -807,6 +873,11 @@ declare_class!(
+@@ -807,6 +939,11 @@ declare_class!(
          #[method(accessibilityRangeForLine:)]
          fn range_for_line(&self, line_index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -991,7 +1082,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() && line_index >= 0 {
                      if let Some(range) = node.line_range_from_index(line_index as _) {
                          return to_ns_range(&range);
-@@ -827,6 +898,12 @@ declare_class!(
+@@ -827,6 +964,12 @@ declare_class!(
                      }
                  };
  
@@ -1004,7 +1095,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      let point = from_ns_point(&view, node, point);
                      let pos = node.text_position_at_point(point);
-@@ -840,6 +917,11 @@ declare_class!(
+@@ -840,6 +983,11 @@ declare_class!(
          #[method_id(accessibilityStringForRange:)]
          fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
              self.resolve(|node| {
@@ -1016,7 +1107,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let text = range.text();
-@@ -854,6 +936,12 @@ declare_class!(
+@@ -854,6 +1002,12 @@ declare_class!(
          #[method_id(accessibilityAttributedStringForRange:)]
          fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
              self.resolve(|node| {
@@ -1029,7 +1120,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let mut result = NSMutableAttributedString::new();
-@@ -967,6 +1055,15 @@ declare_class!(
+@@ -967,6 +1121,15 @@ declare_class!(
                      }
                  };
  
@@ -1045,7 +1136,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let rects = range.bounding_boxes();
-@@ -985,6 +1082,10 @@ declare_class!(
+@@ -985,6 +1148,10 @@ declare_class!(
          #[method(accessibilityLineForIndex:)]
          fn line_for_index(&self, index: NSInteger) -> NSInteger {
              self.resolve(|node| {
@@ -1056,7 +1147,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          return pos.to_line_index() as _;
-@@ -998,6 +1099,10 @@ declare_class!(
+@@ -998,6 +1165,10 @@ declare_class!(
          #[method(accessibilityRangeForIndex:)]
          fn range_for_index(&self, index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -1067,7 +1158,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          return to_ns_range_for_character(&pos);
-@@ -1011,6 +1116,11 @@ declare_class!(
+@@ -1011,6 +1182,11 @@ declare_class!(
          #[method(accessibilityStyleRangeForIndex:)]
          fn style_range_for_index(&self, index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -1079,7 +1170,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          let start = if pos.is_format_start() {
-@@ -1031,6 +1141,19 @@ declare_class!(
+@@ -1031,6 +1207,19 @@ declare_class!(
          #[method(setAccessibilitySelectedTextRange:)]
          fn set_selected_text_range(&self, range: NSRange) {
              self.resolve_with_context(|node, tree, context| {
@@ -1099,7 +1190,7 @@ index 7be2e59..9412122 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -1096,6 +1219,8 @@ declare_class!(
+@@ -1096,6 +1285,8 @@ declare_class!(
                      return Some(NSString::from_str(node.braille_role_description().unwrap()))
                  } else if attr == ns_string!("AXDOMIdentifier") && node.has_html_id() {
                      return Some(NSString::from_str(node.html_id().unwrap()))
@@ -1108,7 +1199,57 @@ index 7be2e59..9412122 100644
                  }
  
                  None
-@@ -1260,7 +1385,7 @@ declare_class!(
+@@ -1204,6 +1395,49 @@ declare_class!(
+         // of the legacy methods below only needs to cover actions not already
+         // handled by the newer methods.
+ 
++        // Rune (vendor/accesskit_macos.patch): expose AccessKit custom actions to VoiceOver's
++        // Actions rotor as `NSAccessibilityCustomAction` entries.
++        #[method_id(accessibilityCustomActions)]
++        fn custom_actions(&self) -> Option<Id<NSArray<NSAccessibilityCustomAction>>> {
++            self.resolve(|node| {
++                let custom_actions = node.data().custom_actions();
++                if !node.supports_action(Action::CustomAction, &filter)
++                    || custom_actions.is_empty()
++                {
++                    if let Ok(mut targets) = self.ivars().custom_action_targets.try_borrow_mut() {
++                        targets.clear();
++                    }
++                    return None;
++                }
++                let mut targets = Vec::with_capacity(custom_actions.len());
++                let mut actions = Vec::with_capacity(custom_actions.len());
++                for ca in custom_actions {
++                    let target = CustomActionTarget::new(
++                        self.ivars().context.clone(),
++                        self.ivars().node_id,
++                        ca.id,
++                    );
++                    let target_obj = Id::into_super(target);
++                    let name = NSString::from_str(&ca.description);
++                    let action = unsafe {
++                        NSAccessibilityCustomAction::initWithName_target_selector(
++                            NSAccessibilityCustomAction::alloc(),
++                            &name,
++                            &target_obj,
++                            sel!(performCustomAction),
++                        )
++                    };
++                    targets.push(target_obj);
++                    actions.push(action);
++                }
++                if let Ok(mut stored) = self.ivars().custom_action_targets.try_borrow_mut() {
++                    *stored = targets;
++                }
++                Some(NSArray::from_vec(actions))
++            })
++            .flatten()
++        }
++
+         #[method_id(accessibilityActionNames)]
+         fn action_names(&self) -> Id<NSArray<NSString>> {
+             let mut result = vec![];
+@@ -1260,7 +1494,7 @@ declare_class!(
                      || selector == sel!(accessibilityStyleRangeForIndex:)
                      || selector == sel!(setAccessibilitySelectedTextRange:)
                  {
@@ -1117,7 +1258,7 @@ index 7be2e59..9412122 100644
                  }
                  if selector == sel!(setAccessibilityValue:) {
                      return (node.supports_text_ranges() && !node.is_read_only()) || node.supports_action(Action::SetValue, &filter);
-@@ -1293,6 +1418,7 @@ declare_class!(
+@@ -1293,10 +1527,15 @@ declare_class!(
                      return node.has_braille_label()
                          || node.has_braille_role_description()
                          || node.has_html_id()
@@ -1125,7 +1266,28 @@ index 7be2e59..9412122 100644
                  }
                  if selector == sel!(accessibilityURL) {
                      return node.supports_url();
-@@ -1341,11 +1467,15 @@ impl PlatformNode {
+                 }
++                if selector == sel!(accessibilityCustomActions) {
++                    return node.supports_action(Action::CustomAction, &filter)
++                        && !node.data().custom_actions().is_empty();
++                }
+                 selector == sel!(accessibilityParent)
+                     || selector == sel!(accessibilityChildren)
+                     || selector == sel!(accessibilityChildrenInNavigationOrder)
+@@ -1332,7 +1571,11 @@ declare_class!(
+ 
+ impl PlatformNode {
+     pub(crate) fn new(context: Weak<Context>, node_id: FullNodeId) -> Id<Self> {
+-        let this = Self::alloc().set_ivars(PlatformNodeIvars { context, node_id });
++        let this = Self::alloc().set_ivars(PlatformNodeIvars {
++            context,
++            node_id,
++            custom_action_targets: RefCell::new(Vec::new()),
++        });
+ 
+         unsafe { msg_send_id![super(this), init] }
+     }
+@@ -1341,11 +1584,15 @@ impl PlatformNode {
      where
          F: FnOnce(&NodeRef, &Tree, &Rc<Context>) -> T,
      {

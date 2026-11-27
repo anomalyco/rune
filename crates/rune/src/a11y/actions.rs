@@ -28,6 +28,8 @@ pub(crate) enum A11yAct {
     ScrollTo(f32, f32),
     /// Delegate an unhandled element action to the nearest ancestor `El::on_a11y_action`.
     Delegate { target_key: String, action: Ak },
+    /// Run a custom accessibility action registered via `El::a11y_action`.
+    CustomAction(String),
 }
 
 impl std::fmt::Debug for A11yAct {
@@ -44,8 +46,34 @@ impl std::fmt::Debug for A11yAct {
             Self::Scroll { x, y, pages } => f.debug_struct("Scroll").field("x", x).field("y", y).field("pages", pages).finish(),
             Self::ScrollTo(x, y) => f.debug_tuple("ScrollTo").field(x).field(y).finish(),
             Self::Delegate { target_key, action } => f.debug_struct("Delegate").field("target_key", target_key).field("action", action).finish(),
+            Self::CustomAction(id) => f.debug_tuple("CustomAction").field(id).finish(),
         }
     }
+}
+
+/// Stable 32-bit FNV-1a id for an AccessKit `CustomAction`, derived from `El::a11y_action`'s
+/// string id so reordering or removing sibling actions does not shift remaining ids.
+fn hash_custom_action_id(id: &str) -> i32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in id.as_bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h as i32
+}
+
+/// Resolves unique, deterministic AccessKit `CustomAction::id` values for one element's custom
+/// actions in registration order.
+pub(crate) fn resolve_custom_action_ids(actions: &[crate::el::CustomA11yAction]) -> Vec<i32> {
+    let mut ids = Vec::with_capacity(actions.len());
+    for action in actions {
+        let mut id = hash_custom_action_id(&action.id);
+        while ids.contains(&id) {
+            id = id.wrapping_add(1);
+        }
+        ids.push(id);
+    }
+    ids
 }
 
 /// One scroll "item" in points: about a line of body text.
@@ -104,6 +132,14 @@ impl RuntimeCore {
                 let ev = self.pointer_event(i, r[0], r[3]);
                 self.queue_a11y_secondary_press(path, ev);
             }
+            (Ak::CustomAction, None) if enabled => {
+                let Some(ActionData::CustomAction(target_id)) = request.data else { return false };
+                let Some(actions) = handlers.and_then(|h| h.custom_a11y_actions.as_deref()) else { return false };
+                let ids = resolve_custom_action_ids(actions);
+                let Some(pos) = ids.iter().position(|&id| id == target_id) else { return false };
+                self.queue_a11y(path, A11yAct::CustomAction(actions[pos].id.clone()));
+            }
+            (Ak::CustomAction, _) => return false,
             (Ak::Increment, None) if steps => self.queue_a11y(path, A11yAct::Step(1)),
             (Ak::Decrement, None) if steps => self.queue_a11y(path, A11yAct::Step(-1)),
             (Ak::SetValue, None) if editable && matches!(request.data, Some(ActionData::Value(_))) => {
@@ -307,6 +343,22 @@ impl RuntimeCore {
                 if handlers.is_empty() { return false; }
                 log_event!(self, "a11y delegate {action:?} {target_key}");
                 handlers.into_iter().any(|f| Tx::took(f(app.states(), &target_key, action, tx), tx))
+            }
+            A11yAct::CustomAction(action_id) => {
+                let Some(i) = self.node_index(&path) else { return false };
+                if !self.allowed(i) || self.node_disabled(i) || self.subtree_exiting(i) { return false; }
+                let Some(handler) = self.tree.nodes[i]
+                    .handlers
+                    .get()
+                    .and_then(|h| h.custom_a11y_actions.as_deref())
+                    .and_then(|list| list.iter().find(|a| a.id == action_id))
+                    .map(|a| a.handler.clone())
+                else {
+                    return false;
+                };
+                log_event!(self, "a11y custom_action {action_id} {path}");
+                handler(app.states(), tx);
+                true
             }
         }
     }
