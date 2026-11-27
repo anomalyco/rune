@@ -191,6 +191,11 @@ define_flags! {
         value: FlagValue::Required("MODE"),
         description: "scroll bar mode: when-scrolling, always, or automatic",
     },
+    FontSmoothing => {
+        name: "--font-smoothing",
+        value: FlagValue::Required("MODE"),
+        description: "font smoothing mode: on, off, windfoil, windfoil-chromium, windfoil-rgb, slug, hinted-gpu, hinted, direct-write, or clear-type",
+    },
     Script => {
         name: "--script",
         value: FlagValue::Required("FILE.json"),

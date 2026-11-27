@@ -396,7 +396,9 @@ pub struct Harness {
 
 impl Harness {
     pub fn new() -> Result<Harness, String> {
-        Ok(Harness { gpu: Gpu::try_new(Gpu::instance(), None)?, text: text_system()?, renderer: None })
+        let mut text = text_system()?;
+        text.set_respect_user_font_smoothing(false);
+        Ok(Harness { gpu: Gpu::try_new(Gpu::instance(), None)?, text, renderer: None })
     }
 
     /// `cases` in `pair`'s colours on a `size` (points) canvas at `scale`.

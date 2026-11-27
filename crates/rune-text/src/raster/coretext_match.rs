@@ -147,8 +147,14 @@ impl FontSmoothing {
     /// `On` draws as `Off` when the user turned smoothing off (`AppleFontSmoothing` 0), as AppKit
     /// and SwiftUI then do.
     pub fn pipeline(self) -> ApplePipeline {
+        self.pipeline_with_user_smoothing(smoothing_allowed_by_user())
+    }
+
+    /// [`Self::pipeline`] with macOS's `AppleFontSmoothing` user setting supplied explicitly
+    /// (`true` ignores a host `AppleFontSmoothing = 0`, as deterministic headless snapshots do).
+    pub(crate) fn pipeline_with_user_smoothing(self, user_smoothing_allowed: bool) -> ApplePipeline {
         match self {
-            FontSmoothing::On if !smoothing_allowed_by_user() => ApplePipeline::UNSMOOTHED,
+            FontSmoothing::On if !user_smoothing_allowed => ApplePipeline::UNSMOOTHED,
             FontSmoothing::On | FontSmoothing::Windfoil => ApplePipeline::SMOOTHED,
             _ => ApplePipeline::UNSMOOTHED,
         }

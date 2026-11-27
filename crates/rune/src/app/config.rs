@@ -50,6 +50,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
     pub(crate) font_smoothing: crate::FontSmoothing,
+    pub(crate) respect_user_font_smoothing: bool,
     pub(crate) emoji_family: Option<String>,
     pub(crate) max_native_materials: usize,
     pub(crate) reveal_fps: f32,
@@ -86,6 +87,7 @@ impl<S: 'static> Clone for RuntimeConfig<S> {
             tab_visits_controls: self.tab_visits_controls,
             srgb_blend: self.srgb_blend,
             font_smoothing: self.font_smoothing,
+            respect_user_font_smoothing: self.respect_user_font_smoothing,
             emoji_family: self.emoji_family.clone(),
             max_native_materials: self.max_native_materials,
             reveal_fps: self.reveal_fps,
@@ -110,6 +112,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             tab_visits_controls: false,
             srgb_blend: true,
             font_smoothing: crate::FontSmoothing::default(),
+            respect_user_font_smoothing: true,
             emoji_family: None,
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
             reveal_fps: 0.0,
@@ -126,6 +129,7 @@ pub(crate) struct CoreConfig {
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
     pub(crate) font_smoothing: crate::FontSmoothing,
+    pub(crate) respect_user_font_smoothing: bool,
     pub(crate) emoji_family: Option<String>,
     pub(crate) max_native_materials: usize,
     pub(crate) wheel_glide: bool,
@@ -141,6 +145,7 @@ impl crate::runtime::RuntimeCore {
             tab_visits_controls,
             srgb_blend,
             font_smoothing,
+            respect_user_font_smoothing,
             emoji_family,
             max_native_materials,
             wheel_glide,
@@ -151,6 +156,7 @@ impl crate::runtime::RuntimeCore {
         self.set_media_keys(media_keys);
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
+        self.set_respect_user_font_smoothing(respect_user_font_smoothing);
         self.set_font_smoothing(font_smoothing);
         if let Some(emoji) = emoji_family {
             self.set_emoji_family(Some(&emoji));
@@ -177,6 +183,7 @@ impl<S: 'static> Runtime<S> {
             tab_visits_controls,
             srgb_blend,
             font_smoothing,
+            respect_user_font_smoothing,
             emoji_family,
             max_native_materials,
             reveal_fps,
@@ -197,6 +204,7 @@ impl<S: 'static> Runtime<S> {
             tab_visits_controls,
             srgb_blend,
             font_smoothing,
+            respect_user_font_smoothing,
             emoji_family,
             max_native_materials,
             wheel_glide,
@@ -410,6 +418,7 @@ mod tests {
         assert!(cfg.srgb_blend);
         assert!(!cfg.modifier_keys && !cfg.media_keys && !cfg.tab_visits_controls);
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
+        assert!(cfg.respect_user_font_smoothing);
         assert_eq!(cfg.emoji_family, None);
         assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);
         assert_eq!(cfg.reveal_fps, 0.0);

@@ -155,6 +155,7 @@ fn flags_and_parser_stay_synchronized() {
             "--scale" => (vec![], Some("2")),
             "--theme" => (vec![], Some("dark")),
             "--scroll-bars" => (vec![], Some("always")),
+            "--font-smoothing" => (vec![], Some("off")),
             "--script" => (vec![], Some("script.json")),
             "--frames" | "--every" | "--cols" | "--cpu-boot-threads" => (vec![], Some("4")),
             "--fps" => (vec![], Some("60")),
@@ -289,4 +290,42 @@ fn flags_empty_without_dev_tooling() {
     assert_eq!(flags(), flags_for(true));
     #[cfg(not(any(feature = "tooling", feature = "hot", debug_assertions)))]
     assert!(flags().is_empty());
+}
+
+#[test]
+fn font_smoothing_flag_parses_all_modes_and_rejects_unknown() {
+    use super::args::parse_font_smoothing;
+    use crate::FontSmoothing;
+
+    let cases = [
+        ("on", FontSmoothing::On),
+        ("On", FontSmoothing::On),
+        ("off", FontSmoothing::Off),
+        ("OFF", FontSmoothing::Off),
+        ("windfoil", FontSmoothing::Windfoil),
+        ("windfoil-chromium", FontSmoothing::WindfoilChromium),
+        ("WindfoilChromium", FontSmoothing::WindfoilChromium),
+        ("windfoil-rgb", FontSmoothing::WindfoilRgb),
+        ("WindfoilRgb", FontSmoothing::WindfoilRgb),
+        ("slug", FontSmoothing::Slug),
+        ("hinted-gpu", FontSmoothing::HintedGpu),
+        ("HintedGpu", FontSmoothing::HintedGpu),
+        ("hinted", FontSmoothing::Hinted),
+        ("direct-write", FontSmoothing::DirectWrite),
+        ("DirectWrite", FontSmoothing::DirectWrite),
+        ("clear-type", FontSmoothing::ClearType),
+        ("ClearType", FontSmoothing::ClearType),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(parse_font_smoothing(raw), Ok(expected), "parse {raw:?}");
+        let args = Args::parse_from(vec_s(&["--font-smoothing", raw]));
+        assert_eq!(args.font_smoothing, Some(expected), "argv {raw:?}");
+    }
+    // Every FontSmoothing::ALL variant is reachable by its Debug name.
+    for mode in FontSmoothing::ALL {
+        let name = format!("{mode:?}");
+        assert_eq!(parse_font_smoothing(&name), Ok(mode), "Debug name {name}");
+    }
+    assert!(parse_font_smoothing("unknown").is_err());
+    assert!(parse_font_smoothing("").is_err());
 }

@@ -137,3 +137,101 @@ fn headless_run_quit_request_defers_commits_dialog_and_quits_when_allowed() {
     assert_eq!(plain.run_quit_request(), crate::QuitResponse::Quit);
     assert_eq!(plain.rt.state.quits, 1);
 }
+
+#[test]
+fn headless_runtime_ignores_user_font_smoothing_and_distinguishes_on_and_off() {
+    use crate::{Color, FontSmoothing, text};
+
+    let spec = || {
+        AppSpec::new("smoothing", (240.0, 80.0), || (), |_: &(), _: &mut Cx<()>| {
+            el().w_full().h_full().fill(crate::color::hex("#141518").unwrap()).child(
+                text("Hamburgefonstiv 12345").size(14.0, 400.0).color(Color::WHITE),
+            )
+        })
+    };
+
+    let mut on = App::new(spec()).font_smoothing(FontSmoothing::On).headless_runtime((240.0, 80.0), Env::new(true, 2.0));
+    let mut off = App::new(spec()).font_smoothing(FontSmoothing::Off).headless_runtime((240.0, 80.0), Env::new(true, 2.0));
+    assert!(!on.core().respect_user_font_smoothing());
+    assert!(!off.core().respect_user_font_smoothing());
+    assert_eq!(on.font_smoothing(), FontSmoothing::On);
+    assert_eq!(off.font_smoothing(), FontSmoothing::Off);
+    assert_eq!(on.text.apple_pipeline(), crate::text::ApplePipeline::SMOOTHED);
+    assert_eq!(off.text.apple_pipeline(), crate::text::ApplePipeline::UNSMOOTHED);
+
+    on.frame(0.0);
+    off.frame(0.0);
+    let ink = |rt: &Runtime<()>| -> u64 {
+        rt.instances.iter()
+            .filter(|i| i.params[1] == crate::render::KIND_GLYPH)
+            .map(|i| {
+                let page = rt.text.atlas.page_data(i.params[2] as usize).unwrap();
+                let (ux, uy) = (i.uv[0] as u32, i.uv[1] as u32);
+                let (w, h) = (i.rect[2] as u32, i.rect[3] as u32);
+                let mut sum = 0u64;
+                for y in 0..h {
+                    for x in 0..w {
+                        sum += page[((uy + y) * crate::text::ATLAS_SIZE + ux + x) as usize] as u64;
+                    }
+                }
+                sum
+            })
+            .sum()
+    };
+    assert!(ink(&off) < ink(&on), "On must dilate more than Off in headless runtime: off={} on={}", ink(&off), ink(&on));
+}
+
+#[test]
+fn headless_snap_font_smoothing_on_and_off_differ_and_cli_flag_overrides_app() {
+    use crate::{Color, FontSmoothing, text};
+    let _turn = crate::tooling::headless_run::test_turn();
+
+    let spec = || {
+        AppSpec::new("smoothing-snap", (240.0, 80.0), || (), |_: &(), _: &mut Cx<()>| {
+            el().w_full().h_full().fill(crate::color::hex("#141518").unwrap()).child(
+                text("Hamburgefonstiv 12345").size(14.0, 400.0).color(Color::WHITE),
+            )
+        })
+    };
+
+    let dir = std::env::temp_dir().join(format!("rune-smoothing-snap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let app_on = dir.join("app_on.png");
+    let app_off = dir.join("app_off.png");
+    let cli_on = dir.join("cli_on.png");
+    let cli_off = dir.join("cli_off.png");
+
+    let snap = |mode: FontSmoothing, extra: &[&str], out: &PathBuf| {
+        let mut argv: Vec<String> = vec![
+            "--size".into(), "240x80".into(),
+            "--scale".into(), "2".into(),
+            "--theme".into(), "dark".into(),
+            "--snap".into(), out.to_string_lossy().into_owned(),
+        ];
+        argv.extend(extra.iter().map(|s| (*s).into()));
+        super::super::try_headless(App::new(spec()).font_smoothing(mode), crate::tooling::Args::parse_from(argv))
+            .map_err(|e| e.message())
+    };
+
+    let res_on = snap(FontSmoothing::On, &[], &app_on);
+    if let Err(err) = &res_on {
+        if err.contains("adapter") || err.contains("GPU") {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    }
+    res_on.expect("snap On");
+    snap(FontSmoothing::Off, &[], &app_off).expect("snap Off");
+    snap(FontSmoothing::Off, &["--font-smoothing", "on"], &cli_on).expect("snap --font-smoothing on");
+    snap(FontSmoothing::On, &["--font-smoothing", "off"], &cli_off).expect("snap --font-smoothing off");
+
+    let bytes_app_on = std::fs::read(&app_on).unwrap();
+    let bytes_app_off = std::fs::read(&app_off).unwrap();
+    let bytes_cli_on = std::fs::read(&cli_on).unwrap();
+    let bytes_cli_off = std::fs::read(&cli_off).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_ne!(bytes_app_on, bytes_app_off, "FontSmoothing::On and Off must not render identical headless PNGs");
+    assert_eq!(bytes_cli_on, bytes_app_on, "--font-smoothing on overrides App::font_smoothing(Off)");
+    assert_eq!(bytes_cli_off, bytes_app_off, "--font-smoothing off overrides App::font_smoothing(On)");
+}
