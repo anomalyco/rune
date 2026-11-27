@@ -111,6 +111,15 @@ fn walk_row_el<'a>(
     texts: &mut Vec<OffscreenText>,
     copy_providers: &mut Vec<(String, SelectionCopy)>,
 ) {
+    if el.vis.opacity <= 0.001
+        || el.vis.cold.get().is_some_and(|c| c.layer_opacity <= 0.001)
+        || el.cold.live.iter().any(|b| {
+            b.property == crate::live::Property::Opacity
+                && b.peek_f32().is_some_and(|v| v <= 0.001)
+        })
+    {
+        return;
+    }
     let inert = parent_inert || el.flags.has(crate::el::ElFlags::INERT);
     let selection_off = crate::el::selection_off(el.cold.selection_enabled, parent_selection_off);
     let group = if el.flags.has(crate::el::ElFlags::SELECTION_GROUP) { Some(path) } else { parent_group };

@@ -86,7 +86,9 @@ pub(in crate::runtime) fn push_mark(out: &mut Vec<Instance>, flow: TextFlow<'_>,
     for line in marked.split_inclusive('\n') {
         let (from, to) = laid(at, at + line.trim_end_matches(['\n', '\r']).len());
         for (bb, _) in flow.range_boxes(from, to, true) {
-            out.push(rect_inst(pixel_rect(origin, bb, k), fill, 0.0, clip, fade));
+            let rect = pixel_rect(origin, bb, k);
+            if !super::visibility::rect_in_clip(rect, clip) { continue; }
+            out.push(rect_inst(rect, fill, 0.0, clip, fade));
         }
         at += line.len();
     }

@@ -701,7 +701,10 @@ impl RuntimeCore {
             return edge.cursor();
         }
         loop {
-            if let Some(c) = self.tree.nodes[i].handlers.cursor {
+            if let Some(c) = self.tree.nodes[i].handlers.cursor
+                && !(self.tree.nodes[i].text.as_ref().is_some_and(|t| t.flags.has(crate::el::TextFlags::SELECTABLE_CURSOR))
+                    && !self.is_selectable(i))
+            {
                 return c;
             }
             if let Some(pc) = self.commit.defaults.press_cursor {
