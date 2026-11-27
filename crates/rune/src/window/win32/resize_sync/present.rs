@@ -94,7 +94,8 @@ impl DxgiDragSwapChain {
         target: &SharedDragTarget,
         copy_size: (u32, u32),
         ready_value: u64,
-    ) -> Result<u64, String> {
+        wait_for_present: bool,
+    ) -> Result<(u64, Option<u64>), String> {
         let src_box = D3D11_BOX {
             left: 0,
             top: 0,
@@ -136,7 +137,8 @@ impl DxgiDragSwapChain {
                 .ok()
                 .map_err(|e| format!("drag swap chain Present: {e}"))?;
         }
-        Ok(release_value)
+        let present_done = if wait_for_present { Some(drag.signal_post_present()?) } else { None };
+        Ok((release_value, present_done))
     }
 }
 
@@ -170,6 +172,7 @@ impl DragSeam for Win32DragSeam<'_> {
         target: &SharedDragTarget,
         copy_size: (u32, u32),
         ready_value: u64,
+        wait_for_present: bool,
     ) -> Result<u64, String> {
         let win_hwnd = HWND(self.hwnd);
         if self.swap_chain.is_none() {
@@ -179,17 +182,31 @@ impl DragSeam for Win32DragSeam<'_> {
         // Resize the copy-model swap chain before `BeginPaint` so the paint critical section only
         // executes the GPU wait, sub-rect copy, release signal, and `Present(0, 0)`.
         sc.ensure_size(copy_size, target.format)?;
-        let mut present_result: Option<Result<u64, String>> = None;
+        let mut present_result: Option<Result<(u64, Option<u64>), String>> = None;
         let ran = crate::platform::win32::run_in_paint(self.hwnd, || {
-            present_result = Some(sc.copy_and_present(drag, target, copy_size, ready_value));
+            present_result = Some(sc.copy_and_present(
+                drag,
+                target,
+                copy_size,
+                ready_value,
+                wait_for_present,
+            ));
         });
-        match present_result {
-            Some(result) => result,
+        let (release_value, present_done) = match present_result {
+            Some(result) => result?,
             // If `UpdateWindow` found nothing to paint (for example a transiently empty clip),
             // present directly so the copy-model back buffer still receives the frame.
-            None if !ran => sc.copy_and_present(drag, target, copy_size, ready_value),
-            None => Ok(0),
+            None if !ran => sc.copy_and_present(drag, target, copy_size, ready_value, wait_for_present)?,
+            None => (0, None),
+        };
+        // On `BeginDrag`, wait outside `BeginPaint..EndPaint` until the GPU has finished the
+        // D3D12 render, D3D11 copy, and DXGI `Present(0, 0)` blt into the HWND redirection surface
+        // so the subsequent `detach_dcomp` never exposes a stale pre-drag redirection bitmap.
+        if let Some(done) = present_done {
+            drag.wait_for_release(done)?;
+            return Ok(done);
         }
+        Ok(release_value)
     }
 
     fn detach_dcomp(&mut self) -> Result<(), String> {

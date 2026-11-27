@@ -24,6 +24,8 @@ pub(crate) mod machine;
 mod present;
 
 #[cfg(test)]
+mod entry_tests;
+#[cfg(test)]
 mod tests;
 
 use gpu::{DragDevice, DragSeam, DragSlot, DragTargetRing, SharedDragTarget};

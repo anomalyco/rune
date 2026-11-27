@@ -71,8 +71,23 @@ pub(crate) struct DragDevice {
     d3d12_raw: usize,
     pub(super) ready: SharedFence,
     pub(super) release: SharedFence,
+    /// Auto-reset Win32 event waited on once per drag (`BeginDrag`) to confirm the first D3D11
+    /// `Present(0, 0)` blt finished on the GPU before detaching DirectComposition.
+    fence_event: *mut std::ffi::c_void,
     next_ready: u64,
     last_release: u64,
+}
+
+impl Drop for DragDevice {
+    fn drop(&mut self) {
+        if !self.fence_event.is_null() {
+            // SAFETY: `fence_event` is an owned Win32 event handle created by `CreateEventW`.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.fence_event);
+            }
+            self.fence_event = std::ptr::null_mut();
+        }
+    }
 }
 
 impl DragDevice {
@@ -84,8 +99,20 @@ impl DragDevice {
         let d3d11 = create_d3d11_device_for_luid(luid, false, false)?;
         let ready = create_shared_fence(&d3d12, &d3d11.device5)?;
         let release = create_shared_fence(&d3d12, &d3d11.device5)?;
+        // SAFETY: creates an unnamed, unsignaled auto-reset Win32 event owned by `Self`.
+        let fence_event = unsafe {
+            windows_sys::Win32::System::Threading::CreateEventW(
+                std::ptr::null(),
+                0,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if fence_event.is_null() {
+            return Err("CreateEventW for drag resize sync fence failed".into());
+        }
         let d3d12_raw = d3d12.as_raw() as usize;
-        Ok(Self { d3d11, d3d12_raw, ready, release, next_ready: 0, last_release: 0 })
+        Ok(Self { d3d11, d3d12_raw, ready, release, fence_event, next_ready: 0, last_release: 0 })
     }
 
     /// Whether this D3D11 device matches `device`'s live D3D12 device.
@@ -133,6 +160,53 @@ impl DragDevice {
     pub(super) fn next_release_value(&mut self) -> u64 {
         self.last_release += 1;
         self.last_release
+    }
+
+    /// Enqueues a post-present fence signal on the D3D11 immediate context and flushes it so the
+    /// caller can wait for a copy-model `Present(0, 0)` blt into the HWND redirection surface to
+    /// complete on the GPU before detaching DirectComposition (`BeginDrag` only).
+    pub(super) fn signal_post_present(&mut self) -> Result<u64, String> {
+        let value = self.next_release_value();
+        // SAFETY: `self.release.d3d11` was opened on this live D3D11 device.
+        unsafe {
+            self.d3d11
+                .context
+                .Signal(&self.release.d3d11, value)
+                .map_err(|e| format!("D3D11 post-present signal: {e}"))?;
+            self.d3d11.context.Flush();
+        }
+        Ok(value)
+    }
+
+    /// Blocks on the CPU (up to a bounded safety timeout) until the D3D11 release fence reaches
+    /// `value`. Used once per drag (`BeginDrag`) right before `detach_dcomp` so DWM never reveals
+    /// a stale redirection surface from a previous drag or startup frame before the first drag
+    /// frame's `Present(0, 0)` blt has completed on the GPU.
+    pub(super) fn wait_for_release(&self, value: u64) -> Result<(), String> {
+        if value == 0 {
+            return Ok(());
+        }
+        const WAIT_TIMEOUT_MS: u32 = 1_000;
+        // SAFETY: `self.release.d3d11` and `self.fence_event` are owned by `self` and live for
+        // the duration of this synchronous wait.
+        unsafe {
+            if self.release.d3d11.GetCompletedValue() >= value {
+                return Ok(());
+            }
+            self.release
+                .d3d11
+                .SetEventOnCompletion(value, windows::Win32::Foundation::HANDLE(self.fence_event))
+                .map_err(|e| format!("D3D11 release fence SetEventOnCompletion: {e}"))?;
+            let waited = windows_sys::Win32::System::Threading::WaitForSingleObject(
+                self.fence_event,
+                WAIT_TIMEOUT_MS,
+            );
+            if waited == windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
+                Ok(())
+            } else {
+                Err(format!("D3D11 present fence wait timed out or failed ({waited:#x})"))
+            }
+        }
     }
 
     /// Waits for `ready_value` on D3D11, copies the top-left `copy_size` sub-rectangle of `target`
@@ -494,6 +568,7 @@ pub(super) trait DragSeam {
         target: &SharedDragTarget,
         copy_size: (u32, u32),
         ready_value: u64,
+        wait_for_present: bool,
     ) -> Result<u64, String>;
     fn detach_dcomp(&mut self) -> Result<(), String>;
     fn attach_dcomp(&mut self) -> Result<(), String>;
