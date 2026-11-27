@@ -68,11 +68,12 @@ impl RuntimeCore {
     }
 
     /// Queue a native focus transition. Repeated notifications do not repeat the callback.
-    /// Losing focus is also `keys_lost`.
-    pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) {
+    /// Losing focus is also `keys_lost`. Returns whether the window's focus state changed.
+    pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) -> bool {
         // Every focus gain, even one a hide without blur left unreported.
         if focused { self.kbd.keys_lost = false; self.kbd.focus_lost_sent = false; }
-        if self.host.window_focused != Some(focused) {
+        let changed = self.host.window_focused != Some(focused);
+        if changed {
             // Refocused, the pointer where it was hovers again; blurred, it waits for a move.
             if focused && self.host.window_focused == Some(false) { self.pointer.hover_paused = false; }
             // A selection takes its active or inactive pair (`El::selection_style`): a focused
@@ -113,6 +114,7 @@ impl RuntimeCore {
             }
         }
         if !focused { self.edit.clear_input_click(); self.wheel_lost(); }
+        changed
     }
 
     /// The last focus change the window reported was a gain.

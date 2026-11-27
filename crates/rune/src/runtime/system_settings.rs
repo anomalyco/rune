@@ -340,9 +340,12 @@ impl RuntimeCore {
 
     /// What [`Cx::system_contrast`] reports. Native Windows windows set it from the system's
     /// contrast theme as they open and when it changes; headless runs keep None.
+    /// Returns whether the stored contrast changed.
     #[inline]
-    pub fn set_system_contrast(&mut self, contrast: Option<crate::SystemContrast>) {
-        if self.host.set_system_contrast(contrast) { self.commit.dirty = true; }
+    pub fn set_system_contrast(&mut self, contrast: Option<crate::SystemContrast>) -> bool {
+        let changed = self.host.set_system_contrast(contrast);
+        if changed { self.commit.dirty = true; }
+        changed
     }
     /// What [`Cx::system_increased_contrast`] reports. Native windows set it from the system as
     /// they open, gain focus, and when its display options change; headless runs keep false.
@@ -350,16 +353,21 @@ impl RuntimeCore {
     pub fn set_system_increased_contrast(&mut self, on: bool) {
         if self.host.set_system_increased_contrast(on) { self.commit.dirty = true; }
     }
+    /// Returns whether the stored reduced-motion preference changed.
     #[inline]
-    pub fn set_system_reduced_motion(&mut self, reduced: bool) {
-        if self.host.set_system_reduced_motion(reduced) { self.commit.dirty = true; }
+    pub fn set_system_reduced_motion(&mut self, reduced: bool) -> bool {
+        let changed = self.host.set_system_reduced_motion(reduced);
+        if changed { self.commit.dirty = true; }
+        changed
     }
 
     /// Sets the preferred language list reported by [`Cx::system_languages`] and [`Cx::locale`],
     /// as BCP 47 tags in preference order. Empty and duplicate tags are dropped. A change re-runs
-    /// the view and its memos.
-    pub fn set_languages(&mut self, languages: Vec<String>) {
-        if self.host.set_languages(languages) { self.commit.dirty = true; }
+    /// the view and its memos. Returns whether the normalized language list changed.
+    pub fn set_languages(&mut self, languages: Vec<String>) -> bool {
+        let changed = self.host.set_languages(languages);
+        if changed { self.commit.dirty = true; }
+        changed
     }
 
     /// Current safe-area insets `[top, right, bottom, left]` in logical points: the host override

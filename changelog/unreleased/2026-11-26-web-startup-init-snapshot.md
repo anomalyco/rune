@@ -1,0 +1,1 @@
+- Web startup runs the view once before the first paint instead of once per initial viewport, motion, pointer, contrast, focus and visibility setting, and repeated reduced-motion, contrast, language, focus or visibility notifications whose value has not changed no longer rebuild the view.
