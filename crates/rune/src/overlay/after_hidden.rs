@@ -42,8 +42,10 @@ pub(super) enum Event {
     /// A new event-loop turn began (`AnyHost::new_events`).
     NewTurn,
     /// The in-flight Wayland `wl_display.sync` callback answered (`wl_callback.done`).
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     SyncAnswered,
     /// Starting or polling the Wayland `wl_display.sync` failed (fatal display error).
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     SyncFailed,
     /// The host reached `about_to_wait` while hidden (`Presence::Hidden`).
     AboutToWaitHidden,
@@ -137,16 +139,20 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
         }
         (_, Event::NewTurn) => Effects::none(),
 
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         (Phase::WaitingSync, Event::SyncAnswered) => {
             *phase = Phase::Idle;
             Effects::one(Effect::RunCallbacks)
         }
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         (_, Event::SyncAnswered) => Effects::none(),
 
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         (Phase::WaitingSync, Event::SyncFailed) => {
             *phase = Phase::Idle;
             Effects::two(Effect::CancelSync, Effect::DropCallbacks)
         }
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         (_, Event::SyncFailed) => Effects::none(),
 
         (Phase::ReadyToRun, Event::AboutToWaitHidden) => {

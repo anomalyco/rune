@@ -141,7 +141,7 @@ HTML
 # and Make-escaped spaces); Cargo omits non-path (git/registry) crates from dep-info, so fall back to following
 # the package's resolved dependencies in cargo metadata when dep-info has no match.
 copy_inter_faces() {
-    local dep=$1 dest=$2 cut= dir= has_dep=0 full_meta= face=
+    local dep=$1 dest=$2 cut= dir= has_dep=0 need_meta=1 full_meta= face=
     local faces=(Inter-Regular.ttf Inter-Medium.ttf Inter-SemiBold.ttf)
     if [[ -f $dep ]]; then
         has_dep=1
@@ -166,10 +166,23 @@ copy_inter_faces() {
             dir=${cut%/first/Inter-Regular.ttf}
         fi
     fi
-    if [[ -z $dir ]]; then
-        if ! full_meta=$("$cargo" metadata --format-version 1 --offline --filter-platform wasm32-unknown-unknown); then
-            echo "failed to locate Rune Inter faces: cargo metadata failed" >&2
-            return 1
+    if [[ -z $dir && $has_dep == 1 && -f "${root:-}/Cargo.lock" ]]; then
+        # Dep-info already covers every path dependency. Only fall back to `cargo metadata` when
+        # the lockfile contains a non-path (git/registry) `rune` crate; otherwise `cargo metadata`
+        # tries to resolve unrelated workspace members whose crates were never fetched.
+        need_meta=$(python3 -c '
+import sys, tomllib
+pkgs = tomllib.load(open(sys.argv[1], "rb")).get("package", [])
+print("1" if any(p.get("name") == "rune" and p.get("source") for p in pkgs) else "0")
+' "$root/Cargo.lock") || return 1
+        need_meta=${need_meta%$'\r'}
+    fi
+    if [[ -z $dir && $need_meta == 1 ]]; then
+        if ! full_meta=$("$cargo" metadata --format-version 1 --offline --filter-platform wasm32-unknown-unknown 2>/dev/null); then
+            if ! full_meta=$("$cargo" metadata --format-version 1 --filter-platform wasm32-unknown-unknown); then
+                echo "failed to locate Rune Inter faces: cargo metadata failed" >&2
+                return 1
+            fi
         fi
         dir=$(python3 -c '
 import json, sys
