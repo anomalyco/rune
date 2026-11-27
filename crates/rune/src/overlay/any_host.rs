@@ -367,6 +367,8 @@ impl AnyHost for OverlayHost {
                 {
                     let rt = app.rt_mut();
                     rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+                    let has_contrast = rt.system_contrast().is_some();
+                    rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(has_contrast));
                     rt.double_click_interval = crate::platform::preferences::double_click_interval();
                 }
                 core.dirty = true;

@@ -348,10 +348,17 @@ impl RuntimeCore {
         self.kbd.tab_visits_controls = on;
     }
     /// What [`Cx::system_contrast`] currently reports.
-    #[cfg_attr(not(all(target_os = "windows", feature = "windows-system-material")), allow(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "linux", all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
     #[inline]
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> {
         self.host.system_contrast
+    }
+
+    /// What [`Cx::system_increased_contrast`] currently reports.
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn system_increased_contrast(&self) -> bool {
+        self.host.system_increased_contrast
     }
 
     /// What [`Cx::system_contrast`] reports. Native Windows windows set it from the system's
@@ -363,11 +370,14 @@ impl RuntimeCore {
         if changed { self.commit.dirty = true; }
         changed
     }
-    /// What [`Cx::system_increased_contrast`] reports. Native windows set it from the system as
-    /// they open, gain focus, and when its display options change; headless runs keep false.
+    /// What [`Cx::system_increased_contrast`] reports. Native windows and web hosts set it from
+    /// the system as they open, gain focus, and when its contrast setting changes; headless runs
+    /// keep false. Returns whether the stored value changed.
     #[inline]
-    pub fn set_system_increased_contrast(&mut self, on: bool) {
-        if self.host.set_system_increased_contrast(on) { self.commit.dirty = true; }
+    pub fn set_system_increased_contrast(&mut self, on: bool) -> bool {
+        let changed = self.host.set_system_increased_contrast(on);
+        if changed { self.commit.dirty = true; }
+        changed
     }
     /// Returns whether the stored reduced-motion preference changed.
     #[inline]

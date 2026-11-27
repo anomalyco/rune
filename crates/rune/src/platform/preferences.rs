@@ -36,6 +36,9 @@ static CACHED_REDUCED_MOTION: CachedReducedMotion = CachedReducedMotion::new();
 static CACHED_DOUBLE_CLICK: CachedDoubleClick = CachedDoubleClick::new();
 
 #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+static CACHED_INCREASED_CONTRAST: CachedPref<bool> = CachedPref::new(false);
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
 static FALLBACK_WINDOWS: std::sync::Mutex<Vec<std::sync::Weak<winit::window::Window>>> =
     std::sync::Mutex::new(Vec::new());
 
@@ -49,6 +52,7 @@ pub(crate) fn follow_fallback(window: &std::sync::Arc<winit::window::Window>) {
     drop(windows);
     if CACHED_REDUCED_MOTION.late_changed()
         || CACHED_DOUBLE_CLICK.late_changed()
+        || CACHED_INCREASED_CONTRAST.late_changed()
         || crate::platform::text_scale::linux_fallback_late_changed()
     {
         window.request_redraw();
@@ -442,6 +446,30 @@ unsafe fn gnome_double_click_ms() -> Option<u32> {
     }
 }
 
+#[cfg(target_os = "linux")]
+unsafe fn gnome_high_contrast() -> Option<bool> {
+    use std::ffi::{c_char, c_void};
+    // SAFETY: `g_settings_get_boolean` matches GIO's C ABI and `settings` is valid for the closure.
+    unsafe {
+        with_gsettings(c"org.gnome.desktop.a11y.interface", c"high-contrast", |gio, settings, key| {
+            let get = gio.get::<unsafe extern "C" fn(*mut c_void, *const c_char) -> i32>(b"g_settings_get_boolean\0").ok()?;
+            Some(get(settings, key) != 0)
+        })
+    }
+}
+
+/// Fallback increased-contrast read for Linux desktops whose Settings portal does not answer
+/// `org.freedesktop.appearance` `contrast`, or builds without the `dbus` feature. Called at
+/// most once per process, on a background worker thread.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_increased_contrast_fallback() -> bool {
+    // Optional GNOME GSettings, with schema lookup before constructing settings (missing
+    // schemas otherwise abort GLib). No subprocess or required GNOME dependency.
+    // SAFETY: `gnome_high_contrast` dynamically resolves GIO symbols, checks every pointer for
+    // null, and releases each GLib object before returning.
+    unsafe { gnome_high_contrast().unwrap_or(false) }
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
 
@@ -451,9 +479,11 @@ pub(crate) fn increased_contrast_preset() -> bool {
 }
 
 /// Whether the system asks apps for more contrast: macOS's Increase Contrast (Accessibility >
-/// Display), or a Windows contrast theme. `RUNE_INCREASE_CONTRAST=1` reports it on, for captures
-/// and checks, without turning it on for the whole machine. Read as [`reduced_motion`] is, and on
-/// macOS again when the display options change (`a11y/macos.rs`).
+/// Display), a Windows contrast theme, or Linux's XDG desktop portal `org.freedesktop.appearance`
+/// `contrast` setting (falling back to GNOME's `high-contrast` GSettings key when the portal
+/// does not answer). `RUNE_INCREASE_CONTRAST=1` reports it on, for captures and checks, without
+/// turning it on for the whole machine. Read as [`reduced_motion`] is, on macOS again when the
+/// display options change (`a11y/macos.rs`), and on Linux on redraws requested by the portal.
 ///
 /// Reuses an already-sampled `contrast().is_some()` on Windows so callers that read both avoid
 /// querying `SPI_GETHIGHCONTRAST` twice and always see a consistent pair.
@@ -475,7 +505,22 @@ pub(crate) fn increased_contrast_with(has_contrast: bool) -> bool {
     }
     #[cfg(target_os = "windows")]
     { has_contrast }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
+    {
+        let _ = has_contrast;
+        crate::platform::portal_appearance::increased_contrast()
+    }
+    #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+    {
+        let _ = has_contrast;
+        CACHED_INCREASED_CONTRAST.get_or_init_with(
+            "rune-increased-contrast",
+            CachedPref::<bool>::FIRST_ANSWER,
+            read_increased_contrast_fallback,
+            redraw_fallback_windows,
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = has_contrast;
         false
