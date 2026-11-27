@@ -123,3 +123,79 @@ fn relative_el_href_routes_custom_on_press_and_has_scheme_distinguishes_colons_i
     rt.frame(0.0);
     assert!(rt.take_url_requests().is_empty());
 }
+
+#[test]
+fn anchor_id_accepts_html5_numeric_leading_keys_in_live_mirror_and_aria_relations() {
+    for good in ["3d-device-view", "0", "404", "1_2-3", "--html", "-flag", "_intro", "views"] {
+        assert_eq!(anchor_id(Some(good)).as_deref(), Some(good), "expected valid anchor_id for {good:?}");
+    }
+    for bad in ["", "3d view", "3d#dup1", "a\"b", "a<b", "a/b", "a.b", "a:b"] {
+        assert_eq!(anchor_id(Some(bad)), None, "expected None for invalid key {bad:?}");
+    }
+    assert_eq!(anchor_id(None), None);
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::col().w_full().role("main")
+            .child(
+                crate::col().key("100-section").role("region").label("3D Section").w_full()
+                    .child(
+                        crate::text("3D Device View")
+                            .key("3d-device-view")
+                            .role("heading")
+                            .level(2)
+                            .font(crate::tok::type_::TITLE),
+                    )
+                    .child(
+                        crate::col()
+                            .key("2d-label-heading")
+                            .role("heading")
+                            .level(3)
+                            .label("2D Heading")
+                            .size(120.0, 24.0),
+                    )
+                    .child(
+                        crate::row()
+                            .key("42-link")
+                            .href("#3d-device-view")
+                            .child(crate::text("Jump").font(crate::tok::type_::BODY)),
+                    )
+                    .child(
+                        crate::row()
+                            .key("toggle")
+                            .role("button")
+                            .label("Toggle")
+                            .controls("0-panel")
+                            .owns("0-panel")
+                            .size(80.0, 24.0)
+                            .on_press(|_: &mut ()| {}),
+                    )
+                    .child(
+                        crate::col()
+                            .key("0-panel")
+                            .role("region")
+                            .label("Zero Panel")
+                            .size(200.0, 40.0),
+                    ),
+            )
+    }
+
+    let mut rt = Runtime::new((), view, (480.0, 400.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    let by_key = |k: &str| {
+        let suffix = format!("/{k}");
+        items
+            .iter()
+            .find(|i| i.path.ends_with(&suffix))
+            .unwrap_or_else(|| panic!("missing mirrored item ending with {suffix}: {items:?}"))
+    };
+    assert_eq!(by_key("100-section").id.as_deref(), Some("100-section"));
+    assert_eq!(by_key("3d-device-view").id.as_deref(), Some("3d-device-view"));
+    assert_eq!(by_key("2d-label-heading").id.as_deref(), Some("2d-label-heading"));
+    assert_eq!(by_key("42-link").id.as_deref(), Some("42-link"));
+    assert_eq!(by_key("0-panel").id.as_deref(), Some("0-panel"));
+    let toggle = by_key("toggle");
+    assert_eq!(toggle.aria.controls.as_deref(), Some("0-panel"));
+    assert_eq!(toggle.aria.owns.as_deref(), Some("0-panel"));
+}

@@ -2939,6 +2939,39 @@ export function presented(h) {
     if (h.page) requestAnimationFrame(() => requestAnimationFrame(() => { if (!h.disposed) dropStatic(h); }));
 }
 
+// CSSOM `CSS.escape` for `#id` selectors (leading digits, `-<digit>`, lone `-`, etc.).
+export function cssEscape(value) {
+    const s = String(value);
+    if (typeof globalThis.CSS?.escape === 'function') return globalThis.CSS.escape(s);
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+        const code = s.charCodeAt(i);
+        if (code === 0) { out += '\uFFFD'; continue; }
+        if (
+            (code >= 0x0001 && code <= 0x001f)
+            || code === 0x007f
+            || (i === 0 && code >= 0x0030 && code <= 0x0039)
+            || (i === 1 && code >= 0x0030 && code <= 0x0039 && s.charCodeAt(0) === 0x002d)
+        ) {
+            out += `\\${code.toString(16)} `;
+            continue;
+        }
+        if (i === 0 && s.length === 1 && code === 0x002d) { out += '\\-'; continue; }
+        if (
+            code >= 0x0080
+            || code === 0x002d || code === 0x005f
+            || (code >= 0x0030 && code <= 0x0039)
+            || (code >= 0x0041 && code <= 0x005a)
+            || (code >= 0x0061 && code <= 0x007a)
+        ) {
+            out += s.charAt(i);
+        } else {
+            out += `\\${s.charAt(i)}`;
+        }
+    }
+    return out;
+}
+
 function dropStatic(h) {
     if (h.disposed || h.swapped) return;
     const parts = [...document.querySelectorAll('[data-rune-static]')];
@@ -2968,7 +3001,7 @@ function dropStatic(h) {
         el.removeAttribute('data-rune-static');
         el.setAttribute('data-rune-static-hidden', '');
     }
-    const live = anchor && h.a11y.querySelector(`#${CSS.escape(anchor)}`);
+    const live = anchor && h.a11y.querySelector(`#${cssEscape(anchor)}`);
     if (live) {
         const delta = live.getBoundingClientRect().top - offset;
         // The export's CSS and the live layout differ by a pixel or two here and there; taking the

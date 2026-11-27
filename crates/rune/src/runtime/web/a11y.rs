@@ -212,11 +212,12 @@ impl A11yItem {
     }
 }
 
-/// An element id from a key, for anchors: letters, digits, `-` and `_`, starting with a letter.
+/// An element id from a key, for anchors: non-empty ASCII letters, digits, `-` and `_`.
+/// Leading digits are valid HTML5 ids (fragment links match verbatim; CSS selectors escape them).
 pub(crate) fn anchor_id(key: Option<&str>) -> Option<String> {
     let key = key?;
-    let ok = key.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let ok = !key.is_empty()
+        && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     ok.then(|| key.to_owned())
 }
 

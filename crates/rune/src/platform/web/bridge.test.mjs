@@ -41,6 +41,8 @@ class FakeNode {
         this.selectionDirection = 'forward';
     }
 
+    get id() { return this._attrs.get('id') ?? ''; }
+    set id(next) { this._attrs.set('id', String(next)); }
     get attributes() { return [...this._attrs].map(([name, value]) => ({ name, value })); }
     setAttribute(name, value) { this._attrs.set(name, String(value)); }
     removeAttribute(name) {
@@ -125,11 +127,18 @@ class FakeNode {
     querySelectorAll(selector) {
         const parts = selector.split(',').map(s => s.trim());
         const out = [];
+        const unescapeCssId = raw => {
+            if (/^[0-9]|^-[0-9]|^-$/.test(raw)) throw new SyntaxError(`Invalid CSS id selector: #${raw}`);
+            return raw.replace(/\\([0-9a-fA-F]{1,6}) ?|\\(.)/g, (_, hex, ch) => hex ? String.fromCodePoint(parseInt(hex, 16)) : ch);
+        };
         const walk = node => {
             for (const child of node.children) {
                 if (parts.some(sel => {
                     if (sel === 'a[target="_blank"]') return child.tagName === 'A' && child.target === '_blank';
                     if (sel === 'a[href]') return child.tagName === 'A' && typeof child.href === 'string' && child.href.length > 0;
+                    if (sel === '[data-rune-static]') return child.hasAttribute('data-rune-static');
+                    if (sel === '[id]') return child.hasAttribute('id');
+                    if (sel.startsWith('#')) return child.id === unescapeCssId(sel.slice(1));
                     return child.tagName === sel.toUpperCase();
                 })) out.push(child);
                 walk(child);
@@ -137,6 +146,10 @@ class FakeNode {
         };
         walk(this);
         return out;
+    }
+
+    querySelector(selector) {
+        return this.querySelectorAll(selector)[0] ?? null;
     }
 
     getBoundingClientRect() {
@@ -5102,6 +5115,82 @@ test('syncWebImages follows page height in document mode and cleans up on destro
         assert.equal(h.webImages, null);
         assert.equal(layer.parentElement, null);
     } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('cssEscape follows CSSOM escaping for numeric-leading and punctuation element ids', () => {
+    const savedCss = globalThis.CSS;
+    Object.defineProperty(globalThis, 'CSS', { value: undefined, configurable: true, writable: true });
+    try {
+        assert.equal(bridge.cssEscape('3d-device-view'), '\\33 d-device-view');
+        assert.equal(bridge.cssEscape('0'), '\\30 ');
+        assert.equal(bridge.cssEscape('-1a'), '-\\31 a');
+        assert.equal(bridge.cssEscape('-'), '\\-');
+        assert.equal(bridge.cssEscape('--html'), '--html');
+        assert.equal(bridge.cssEscape('_intro'), '_intro');
+        assert.equal(bridge.cssEscape('views'), 'views');
+    } finally {
+        Object.defineProperty(globalThis, 'CSS', { value: savedCss, configurable: true, writable: true });
+    }
+});
+
+test('presented hands off scroll anchor with numeric-leading id from static export to live mirror via CSSOM escaping', () => {
+    const { doc, win, body, h } = setup({ page: true });
+    const savedRaf = globalThis.requestAnimationFrame;
+    const savedCustomEvent = globalThis.CustomEvent;
+    const savedCss = globalThis.CSS;
+    const rafQueue = [];
+    const scrolls = [];
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+        value: fn => { rafQueue.push(fn); return rafQueue.length; },
+        configurable: true,
+        writable: true,
+    });
+    Object.defineProperty(globalThis, 'CustomEvent', {
+        value: class CustomEvent { constructor(type, init = {}) { this.type = type; this.bubbles = !!init.bubbles; } },
+        configurable: true,
+        writable: true,
+    });
+    Object.defineProperty(globalThis, 'CSS', { value: undefined, configurable: true, writable: true });
+    try {
+        win.scrollY = 240;
+        win.scrollTo = opts => scrolls.push(opts);
+        h.lastScrollAt = -1000;
+
+        // Build static export DOM under document with a numeric-leading heading id.
+        doc.append(body);
+        const staticStyle = doc.createElement('style');
+        staticStyle.setAttribute('data-rune-static', '');
+        const staticRoot = doc.createElement('main');
+        staticRoot.setAttribute('data-rune-static', '');
+        staticRoot.id = 'root';
+        const staticHeading = doc.createElement('h2');
+        staticHeading.id = '3d-device-view';
+        staticHeading.getBoundingClientRect = () => ({ left: 0, top: 40, right: 300, bottom: 72, width: 300, height: 32 });
+        staticRoot.append(staticHeading);
+        body.append(staticStyle, staticRoot);
+
+        // Populate live mirror with matching numeric-leading heading id at a slightly different y.
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'heading', p: '#0/3d-device-view', r: [0, 300, 300, 32], l: 2, t: '3D Device View', i: '3d-device-view' },
+        ]));
+        const liveHeading = h.a11y.children.find(el => el.tagName === 'H2');
+        assert.equal(liveHeading.id, '3d-device-view');
+        liveHeading.getBoundingClientRect = () => ({ left: 0, top: 64, right: 300, bottom: 96, width: 300, height: 32 });
+
+        // Two rAF ticks trigger dropStatic(), which strips static ids and anchors scroll to `#\33 d-device-view`.
+        bridge.presented(h);
+        while (rafQueue.length) rafQueue.shift()();
+
+        assert.equal(staticStyle.parentElement, null, 'static style tag removed');
+        assert.equal(staticHeading.hasAttribute('id'), false, 'static export heading id stripped');
+        assert.equal(liveHeading.id, '3d-device-view', 'live mirror keeps numeric-leading id');
+        assert.deepEqual(scrolls, [{ top: 264, behavior: 'instant' }]);
+    } finally {
+        Object.defineProperty(globalThis, 'requestAnimationFrame', { value: savedRaf, configurable: true, writable: true });
+        Object.defineProperty(globalThis, 'CustomEvent', { value: savedCustomEvent, configurable: true, writable: true });
+        Object.defineProperty(globalThis, 'CSS', { value: savedCss, configurable: true, writable: true });
         bridge.destroy(h);
     }
 });
