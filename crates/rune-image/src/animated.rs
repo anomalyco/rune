@@ -2,14 +2,19 @@
 //! chain on the cache worker, with the time each one ends. A paint picks the frame for its
 //! clock (`Motion::at`) and wakes for the next only while the image is drawn, so an animation
 //! off screen or in a hidden window costs nothing.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 use std::io::Cursor;
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 use image::{AnimationDecoder, ImageDecoder};
 
-use super::{Decoded, ImageError, Mip, icc, mip_chain};
+use super::{Decoded, ImageError, Mip};
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+use super::{icc, mip_chain};
 
 /// Decoded pixels the frames of one animation may take, mips included; a larger one shows its
 /// first frame still.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 const BUDGET: usize = 256 << 20;
 
 /// The frames after the first (which is [`Decoded::mips`]) and when each frame ends.
@@ -42,8 +47,16 @@ impl Motion {
     }
 }
 
+/// Without the `png` feature on `wasm32`, animated formats decode their first frame in the
+/// browser (`createImageBitmap`).
+#[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+pub(super) fn decode(_bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
+    None
+}
+
 /// Which animated format `bytes` sniff as. A web build hands GIF and WebP to the browser,
 /// which decodes their first frame.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 #[derive(Clone, Copy)]
 enum Kind {
     #[cfg(not(target_arch = "wasm32"))]
@@ -53,6 +66,7 @@ enum Kind {
     Png,
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 fn sniff(bytes: &[u8]) -> Option<Kind> {
     #[cfg(not(target_arch = "wasm32"))]
     if bytes.starts_with(b"GIF8") { return Some(Kind::Gif); }
@@ -63,6 +77,7 @@ fn sniff(bytes: &[u8]) -> Option<Kind> {
 
 /// An animation of more than one frame, or `None` for a still (or a format that isn't
 /// animated), which decodes as any image does.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
     let kind = sniff(bytes)?;
     let error = |e: image::ImageError| ImageError(e.to_string());
@@ -134,11 +149,13 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
 }
 
 /// The first frame alone, for an animation too large to hold.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 fn still(chains: Vec<Vec<Mip>>) -> Result<Decoded, ImageError> {
     let first = chains.into_iter().next().ok_or_else(|| ImageError("animation has no frames".into()))?;
     Ok(Decoded { mips: first, motion: None, intrinsic: None })
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 fn finite(count: image::metadata::LoopCount) -> Option<u32> {
     match count {
         image::metadata::LoopCount::Infinite => None,

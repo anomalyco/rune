@@ -20,7 +20,7 @@ const _: () = {
 /// Windfoil's WGSL: shader.wgsl with outline.wgsl's glyph branch, joined when Rune builds
 /// (`build.rs`, render/uber_wgsl.rs).
 pub(crate) fn windfoil_wgsl() -> &'static str {
-    super::uber_wgsl::WINDFOIL
+    super::uber_wgsl::windfoil()
 }
 
 /// Windfoil's fragment entry, which the subpixel variant renames for its own entry to call.

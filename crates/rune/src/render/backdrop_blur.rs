@@ -124,10 +124,10 @@ struct Pyramid {
 }
 
 /// The down and up passes' shader (`backdrop_blur.wgsl`).
-pub(crate) const BLUR_WGSL: &str = include_str!("../shaders/backdrop_blur.wgsl");
+pub(crate) const BLUR_WGSL: &str = super::uber_wgsl::BACKDROP_BLUR;
 
 /// The composite's shader: the clip helpers, then `backdrop_composite.wgsl`.
-pub(crate) fn composite_wgsl() -> String { format!("{CLIP_WGSL}\n{}", include_str!("../shaders/backdrop_composite.wgsl")) }
+pub(crate) fn composite_wgsl() -> String { format!("{CLIP_WGSL}\n{}", super::uber_wgsl::BACKDROP_COMPOSITE) }
 
 fn composite_from_wgsl(device: &wgpu::Device, wgsl: &str) -> super::dxbc::Shaders {
     super::dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("backdrop blur composite"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }))

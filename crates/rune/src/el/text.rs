@@ -844,8 +844,8 @@ impl El {
     }
     /// Mark this text field's misspelled words, as a browser's `spellcheck` does: the platform's
     /// checker (Windows' spell checking API, AppKit's `NSSpellChecker` on macOS, installed system
-    /// Hunspell dictionaries on Linux when the default-on `hunspell` feature is enabled, or fetched
-    /// Hunspell dictionaries on the web) puts a red
+    /// Hunspell dictionaries on Linux or fetched Hunspell dictionaries on the web when the
+    /// default-on `hunspell` feature is enabled) puts a red
     /// marker under each word the caret has left, and the field's menu offers its suggestions and
     /// Learn Spelling. Off by default; a secure field never checks.
     pub fn spellcheck(mut self, on: bool) -> Self {

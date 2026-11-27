@@ -1,7 +1,9 @@
 //! Evidence for a finding: a dump of the tracks around it and a contact strip of its frames.
 
 use super::paint::{self, CHANNELS, Paint};
-use super::{Recording, Snap};
+use super::Recording;
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+use super::Snap;
 
 fn paint_line(p: &Paint) -> String {
     let mut out = String::new();
@@ -33,7 +35,9 @@ pub fn dump(rec: &Recording, filter: &str, from: usize, to: usize) -> String {
     out
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 const Z: f32 = 0.25;
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 const SWATCH: u32 = 10;
 
 /// A contact strip of frames `at-4..=at+4`: the composited window (see `raster`), every
@@ -41,6 +45,7 @@ const SWATCH: u32 = 10;
 /// Under each frame, a swatch per colour `focus` paints (fill, border, text, shadow, gradient,
 /// outline), so the colour that broke shows frame by frame. Secondary evidence: the findings are
 /// the gate.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 pub fn sheet(rec: &Recording, at: usize, focus: &str) -> ::image::RgbImage {
     let (w, h) = ((rec.size.0 * Z) as u32, (rec.size.1 * Z) as u32);
     let frames: Vec<usize> = (at.saturating_sub(4)..=at + 4).filter(|&k| k < rec.frames).collect();
@@ -87,6 +92,7 @@ pub fn sheet(rec: &Recording, at: usize, focus: &str) -> ::image::RgbImage {
     img
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 fn outline(img: &mut ::image::RgbImage, x0: u32, (w, h): (u32, u32), s: &Snap, hot: bool) {
     let a = s.op.clamp(0.0, 1.0) * if hot { 1.0 } else { 0.5 };
     let ink = if hot { [255.0, 70.0, 70.0] } else { [200.0, 205.0, 215.0] };

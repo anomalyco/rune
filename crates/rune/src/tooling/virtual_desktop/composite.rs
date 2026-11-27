@@ -11,6 +11,7 @@ pub(super) const SHADOW: (f32, f32, f32) = (6.0, 5.0, 0.32);
 /// Shadow masks are this many window pixels to a texel.
 pub(super) const DOWN: u32 = 4;
 /// Largest backdrop image, in pixels per side, decoded.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 pub(super) const MAX_BACKDROP: u32 = 16384;
 
 #[repr(C)]
@@ -330,6 +331,13 @@ fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniform: &wgpu::B
 }
 
 /// The backdrop scaled to cover `size` pixels, centred and cropped, as opaque sRGB RGBA.
+#[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+pub(super) fn fit_backdrop(path: &Path, _size: (u32, u32)) -> Result<Vec<u8>, String> {
+    Err(format!("{}: desktop backdrop images require native or the `png` feature", path.display()))
+}
+
+/// The backdrop scaled to cover `size` pixels, centred and cropped, as opaque sRGB RGBA.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 pub(super) fn fit_backdrop(path: &Path, (w, h): (u32, u32)) -> Result<Vec<u8>, String> {
     let fail = |e: ::image::ImageError| format!("{}: {e}", path.display());
     let (iw, ih) = ::image::image_dimensions(path).map_err(fail)?;

@@ -79,7 +79,12 @@ pub(crate) fn on() -> bool { gate::on() }
 
 /// Whether a timed frame is underway on this thread, so phases should time themselves.
 #[inline(always)]
-pub(crate) fn active() -> bool { ACTIVE.get() }
+pub(crate) fn active() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return false;
+    #[cfg(not(target_arch = "wasm32"))]
+    ACTIVE.get()
+}
 
 /// Phase `phase` of the timed frame took `ms`.
 pub(crate) fn add(phase: Phase, ms: f64) {

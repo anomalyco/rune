@@ -131,7 +131,7 @@ fn precompiled_builtin_and_windfoil_metallibs_match_rune_wgsl() {
     let shader = include_str!("../shaders/shader.wgsl");
     let springs = include_str!("../../../rune-gpu/src/springs.wgsl");
     let rune_shaders: [(&str, String); 7] = [
-        ("rune/uber (classic)", super::super::uber_wgsl::CLASSIC.to_owned()),
+        ("rune/uber (classic)", super::super::uber_wgsl::classic().to_owned()),
         ("rune/backdrop_blur.wgsl", include_str!("../shaders/backdrop_blur.wgsl").to_owned()),
         ("rune/backdrop_composite.wgsl", format!("{clip}\n{}", include_str!("../shaders/backdrop_composite.wgsl"))),
         ("rune/layer_blur.wgsl", include_str!("../shaders/layer_blur.wgsl").to_owned()),

@@ -86,3 +86,36 @@ fn a_source_set_loads_the_narrowest_wide_enough_and_keeps_every_size() {
     assert_eq!(cache.url_set(&sources, 900.0, 2.0).pixels().source_url(), Some("https://example.com/a-1280.avif"), "the widest when none is wide enough");
     assert_eq!(cache.url("https://example.com/a-640.avif", 300.0, 2.0).pixels().source_set(), None);
 }
+
+#[test]
+fn manifest_gates_wasm_png_and_moxcms_behind_default_on_png_feature() {
+    let image_manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("read crates/rune-image/Cargo.toml");
+    assert!(
+        image_manifest.contains(r#"default = ["png", "svg"]"#),
+        "rune-image must enable png by default"
+    );
+    assert!(
+        image_manifest.contains(r#"png = ["dep:image", "dep:moxcms"]"#),
+        "rune-image png feature must gate optional wasm32 image and moxcms dependencies"
+    );
+    assert!(
+        image_manifest.contains(r#"image = { workspace = true, features = ["png"], optional = true }"#),
+        "rune-image wasm32 image dependency must be optional"
+    );
+    assert!(
+        image_manifest.contains(r#"moxcms = { workspace = true, optional = true }"#),
+        "rune-image wasm32 moxcms dependency must be optional"
+    );
+
+    let rune_manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../rune/Cargo.toml"))
+        .expect("read crates/rune/Cargo.toml");
+    assert!(
+        rune_manifest.contains(r#"png = ["rune-image/png", "dep:image", "dep:png"]"#),
+        "rune must forward png feature to rune-image/png and optional wasm32 image/png"
+    );
+    assert!(
+        rune_manifest.contains(r#"png = { workspace = true, optional = true }"#),
+        "rune wasm32 png dependency must be optional"
+    );
+}

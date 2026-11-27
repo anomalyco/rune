@@ -6,7 +6,13 @@ license.workspace = true
 description = "Content-addressed image decoding, linear-light mip generation, shelf pixel atlas, SVG/AVIF codecs, and OS app icon rasterization for Rune."
 
 [features]
-default = ["svg"]
+default = ["png", "svg"]
+# Web (`wasm32`): decode PNG, APNG and ICNS bytes and convert embedded ICC profiles in Rust
+# (`image/png`, `moxcms`). Off (for example with `default-features = false`), `wasm32` hands
+# PNG and ICNS bytes to the browser's `createImageBitmap` decoder (which applies ICC colour
+# conversion natively) and omits `image`, `png`, `fdeflate`/`flate2`/`miniz_oxide` and `moxcms`.
+# No effect on native targets, which always link the Rust raster decoders and ICC conversion.
+png = ["dep:image", "dep:moxcms"]
 # SVG and SVGZ images (`ImageCache::svg`, `file`, `load_mime`, and `load` on sniffed SVG bytes),
 # and scalable Linux app icons, rasterized by resvg. Off, those images resolve to `Image::error`.
 svg = ["dep:resvg"]
@@ -18,15 +24,14 @@ avif = ["dep:avif-decode"]
 
 [dependencies]
 blake3 = { workspace = true }
-image = { workspace = true, features = ["png"] }
-moxcms = { workspace = true }
 resvg = { workspace = true, optional = true }
 rune-core = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 avif-decode = { version = "3", optional = true }
-# JPEG, GIF, WebP, BMP and ICO decoding; a web build hands them to the browser's codecs instead.
+# Native raster decoders and embedded ICC conversion; always linked on native targets.
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+moxcms = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
@@ -40,6 +45,10 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Graphic
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
+# Optional on wasm32 (enabled by the default-on `png` feature); off, PNG and ICNS bytes decode
+# through the browser's `createImageBitmap` instead.
+image = { workspace = true, features = ["png"], optional = true }
+moxcms = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 

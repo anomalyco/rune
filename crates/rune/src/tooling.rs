@@ -689,8 +689,16 @@ pub(crate) fn desktop(args: &Args, script: Option<&Value>) -> crate::desktop::di
     let size = args.desktop.as_ref().map(|path| match args.size {
         Some((w, h)) => (f64::from(w), f64::from(h)),
         None => {
-            let (w, h) = ::image::image_dimensions(path).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
-            (f64::from(w) / scale, f64::from(h) / scale)
+            #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+            {
+                let (w, h) = ::image::image_dimensions(path).unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
+                (f64::from(w) / scale, f64::from(h) / scale)
+            }
+            #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+            {
+                let _ = (path, scale);
+                die("desktop backdrop images require native or the `png` feature")
+            }
         }
     });
     crate::desktop::displays::VirtualDesktop::from_script_sized(script, scale, size).unwrap_or_else(|e| die(&e))

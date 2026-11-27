@@ -26,7 +26,9 @@ pub mod raster;
 mod regions;
 mod series;
 
-pub use evidence::{dump, sheet};
+pub use evidence::dump;
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+pub use evidence::sheet;
 pub use handovers::Handover;
 use paint::Paint;
 

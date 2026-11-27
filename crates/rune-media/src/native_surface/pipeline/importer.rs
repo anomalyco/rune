@@ -15,6 +15,7 @@ pub(crate) struct Imported {
     /// Whether `textures` come from a bounded pool or decoder ring that may be returned again,
     /// so caching their bind group in `Prepared::binds` avoids per-frame reallocation without
     /// retaining one-shot textures.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) reusable: bool,
     /// Keeps a pooled copy target reserved while this `Imported` is live (in `cache`,
     /// `Prepared`, `ImportedSurface`, or an in-flight submission callback).
@@ -307,6 +308,7 @@ impl SurfaceImporter {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn prepare_retain(&mut self, draws: &[SurfaceDraw]) {
         let current_gen = *self.frame_gen.get_mut();
         self.last_prune_gen = current_gen;
@@ -318,6 +320,7 @@ impl SurfaceImporter {
         });
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_for_draw(
         &mut self,
         queue: &wgpu::Queue,
@@ -347,6 +350,7 @@ impl SurfaceImporter {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn remove_for_draw(&mut self, key: usize) {
         self.cache.remove(&key);
     }

@@ -15,7 +15,12 @@ fn budget() -> Option<f64> {
 }
 
 #[inline(always)]
-pub(crate) fn on() -> bool { budget().is_some() }
+pub(crate) fn on() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return false;
+    #[cfg(not(target_arch = "wasm32"))]
+    budget().is_some()
+}
 
 thread_local! {
     static TIMES: Cell<[f64; PHASES]> = const { Cell::new([0.0; PHASES]) };
