@@ -426,7 +426,7 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
                     WebAcquireAction::Miss(m) => Acquire::Missed(m),
                     WebAcquireAction::ReconfigureAndRetry => Acquire::Missed(Missed::Outdated),
                 },
-                WebDrawKind::Cpu | WebDrawKind::HandingOver { .. } => Acquire::Ready(()),
+                WebDrawKind::Cpu | WebDrawKind::HandingOver => Acquire::Ready(()),
                 WebDrawKind::ContextLost | WebDrawKind::TerminalFailed | WebDrawKind::Moving => Acquire::Missed(Missed::Unconfigured),
             }
         }
@@ -442,7 +442,7 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
         }
 
         fn render(&mut self, _: &mut (), _: &StepInfo) -> bool {
-            if matches!(self.draw, WebDrawKind::Cpu | WebDrawKind::HandingOver { .. }) {
+            if matches!(self.draw, WebDrawKind::Cpu | WebDrawKind::HandingOver) {
                 self.drawn = !self.cpu_needs_gpu;
             }
             false
@@ -545,15 +545,20 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
     assert_eq!(host_step::run(&mut host), Outcome::Unchanged);
     assert_eq!(seen.borrow().len(), 2);
 
-    // 5. Skipped frames (suspended, ContextLost, HandingOver waiting for GPU) -> hook does not run.
+    // 5. Skipped frames (suspended, ContextLost, Moving) -> hook does not run; HandingOver keeps
+    // painting CPU frames (and fires the hook) instead of freezing.
     host.suspended = true;
     assert_eq!(host_step::run(&mut host), Outcome::Skipped);
     host.suspended = false;
     host.draw = WebDrawKind::ContextLost;
     assert_eq!(host_step::run(&mut host), Outcome::Skipped);
-    host.draw = WebDrawKind::HandingOver { waiting_for_gpu: true };
+    host.draw = WebDrawKind::Moving;
     assert_eq!(host_step::run(&mut host), Outcome::Skipped);
     assert_eq!(seen.borrow().len(), 2);
+    host.draw = WebDrawKind::HandingOver;
+    host.step_at += Duration::from_millis(16);
+    assert_eq!(host_step::run(&mut host), Outcome::Presented);
+    assert_eq!(seen.borrow().len(), 3);
 
     // 6. Missed acquire (Timeout / Occluded) and Aborted prepare -> hook does not run.
     host.draw = WebDrawKind::Gpu;
@@ -566,21 +571,21 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
     host.abort_prepare = true;
     assert_eq!(host_step::run(&mut host), Outcome::Aborted);
     host.abort_prepare = false;
-    assert_eq!(seen.borrow().len(), 2);
+    assert_eq!(seen.borrow().len(), 3);
 
     // 7. State change on GPU draws a new frame -> hook runs once with the updated state.
     host.rt.update(|s, _| *s = 42);
     host.step_at += Duration::from_millis(16);
     assert_eq!(host_step::run(&mut host), Outcome::Presented);
-    assert_eq!(seen.borrow().len(), 3);
-    assert_eq!(seen.borrow()[2].0, 42);
+    assert_eq!(seen.borrow().len(), 4);
+    assert_eq!(seen.borrow()[3].0, 42);
 
     // 8. Unset hook runs frames without error.
     host.on_frame_drawn = None;
     host.rt.update(|s, _| *s = 99);
     host.step_at += Duration::from_millis(16);
     assert_eq!(host_step::run(&mut host), Outcome::Presented);
-    assert_eq!(seen.borrow().len(), 3);
+    assert_eq!(seen.borrow().len(), 4);
 }
 
 #[test]

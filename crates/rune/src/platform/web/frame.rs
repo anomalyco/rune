@@ -170,7 +170,7 @@ enum WebDrawable {
 
 enum PreparedWeb {
     Cpu,
-    HandingOver { gpu: Option<gpu::PreparedGpu> },
+    HandingOver { gpu: Option<gpu::PreparedGpu>, flipping: bool },
     Gpu(gpu::PreparedGpu),
 }
 
@@ -186,6 +186,8 @@ struct WebFrameHost<'a> {
     tick: bool,
     reblend_tried: Option<bool>,
     drawn: bool,
+    handover_completed: bool,
+    retry_handover: bool,
     fatal_error: Option<String>,
     should_end: bool,
     try_gpu_came: bool,
@@ -371,17 +373,21 @@ impl FrameHost for WebFrameHost<'_> {
                 let rt = self.r.app.rt_mut();
                 gpu::reblend(side, rt);
                 let mut draw_gpu = false;
+                let mut flipping = false;
                 let prep_effects = state.step(seq, HandoverEvent::PrepareFrame {
                     checking_gpu: side.renderer.checking_gpu(),
                 });
                 for effect in prep_effects {
                     if effect == HandoverEffect::PrecheckFeatures {
                         side.renderer.precheck_layer_features(&side.gpu.device, &rt.instances);
-                        let checked = state.step(seq, HandoverEvent::Prechecked {
+                        for checked in state.step(seq, HandoverEvent::Prechecked {
                             checking_gpu: side.renderer.checking_gpu(),
-                        });
-                        if checked.into_iter().any(|e| e == HandoverEffect::DrawGpuFrame) {
-                            draw_gpu = true;
+                        }) {
+                            match checked {
+                                HandoverEffect::DrawGpuFrame => { draw_gpu = true; }
+                                HandoverEffect::DrawFlipFrame => { draw_gpu = true; flipping = true; }
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -389,18 +395,24 @@ impl FrameHost for WebFrameHost<'_> {
                 let rt = self.r.app.rt_mut();
                 let gpu = if draw_gpu {
                     match gpu::acquire_texture(side) {
-                        Ok(frame) => Some(gpu::prepare_gpu_frame(side, rt, frame, gpu::drift_wanted(), false, compositor_draws_own)),
+                        Ok(frame) => {
+                            let readback = !flipping && gpu::drift_wanted();
+                            Some(gpu::prepare_gpu_frame(side, rt, frame, readback, false, compositor_draws_own))
+                        }
                         Err(missed) => {
                             web_sys::console::warn_1(
                                 &format!("rune: the GPU's hand-over frame wasn't drawn ({missed:?})").into(),
                             );
+                            if web_math::web_miss_action(missed) == web_math::WebMissAction::RetryNextFrame {
+                                self.retry_handover = true;
+                            }
                             None
                         }
                     }
                 } else {
                     None
                 };
-                RenderPrep::Ready(PreparedWeb::HandingOver { gpu })
+                RenderPrep::Ready(PreparedWeb::HandingOver { gpu, flipping })
             }
             (Draw::Gpu(side), WebDrawable::Gpu(frame)) => {
                 let compositor_draws_own = self.r.app.compositor_draws_own();
@@ -420,16 +432,23 @@ impl FrameHost for WebFrameHost<'_> {
                 self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
                 false
             }
-            (Draw::HandingOver { cpu, side, .. }, PreparedWeb::HandingOver { gpu }) => {
-                self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
-                // Both renderers draw this frame once the browser has compiled the GPU's
-                // pipelines; the GPU's canvas stays see-through until its frame is done.
-                match gpu.as_mut() {
+            (Draw::HandingOver { cpu, side, .. }, PreparedWeb::HandingOver { gpu, flipping }) => {
+                // Keep painting the visible CPU canvas throughout Building, WaitingChecks, and
+                // WaitingDone so animations never freeze. On a clean ReadyToFlip frame, skip the
+                // redundant CPU paint unless GPU acquisition missed or encoding triggers a new check.
+                if !*flipping || gpu.is_none() {
+                    self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
+                }
+                let comp = match gpu.as_mut() {
                     Some(prepared_gpu) => {
                         gpu::encode_gpu_frame(side, &mut *self.r.app, prepared_gpu, info.dt, info.update_ms)
                     }
                     None => false,
+                };
+                if *flipping && gpu.is_some() && side.renderer.checking_gpu() {
+                    self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
                 }
+                comp
             }
             (Draw::Gpu(side), PreparedWeb::Gpu(prepared_gpu)) => {
                 gpu::encode_gpu_frame(side, &mut *self.r.app, prepared_gpu, info.dt, info.update_ms)
@@ -440,12 +459,18 @@ impl FrameHost for WebFrameHost<'_> {
 
     fn submit_and_present(&mut self, prepared: PreparedWeb, _info: &StepInfo) -> Instant {
         let _submit = StageGuard::enter(FrameStage::Submit);
+        let mut complete_handover = false;
         match (&mut self.r.draw, prepared) {
             (Draw::Cpu { .. }, PreparedWeb::Cpu) => {}
-            (Draw::HandingOver { cpu, side, seq, state, barrier }, PreparedWeb::HandingOver { gpu }) => {
+            (Draw::HandingOver { cpu, side, seq, state, barrier }, PreparedWeb::HandingOver { gpu, flipping }) => {
                 use super::web_math::handover_machine::{HandoverEffect, HandoverEvent};
                 if let Some(prepared_gpu) = gpu {
-                    let mut copy = gpu::submit_gpu_frame(side, prepared_gpu, || {});
+                    let window = self.window;
+                    let mut copy = if flipping {
+                        gpu::submit_gpu_frame(side, prepared_gpu, || window.pre_present_notify())
+                    } else {
+                        gpu::submit_gpu_frame(side, prepared_gpu, || {})
+                    };
                     let checking_gpu = side.renderer.checking_gpu();
                     let effects = state.step(seq, HandoverEvent::GpuSubmitted {
                         checking_gpu,
@@ -455,12 +480,16 @@ impl FrameHost for WebFrameHost<'_> {
                         crate::marks::mark("web.handover.warming");
                     }
                     for effect in effects {
-                        if let HandoverEffect::ArmFinishWait { attempt, delay } = effect {
-                            if let Some(copy) = copy.take() { copy.count(cpu.pixels().to_vec()); }
-                            *barrier = Some(gpu::when_done(side, self.proxy, Wake::HandoverDone(attempt)));
-                            let proxy = self.proxy.clone();
-                            after(delay, move || { proxy.send_event(Wake::HandoverTimeout(attempt)).ok(); });
-                            crate::marks::mark("web.handover.drawn");
+                        match effect {
+                            HandoverEffect::ArmFinishWait { attempt, delay } => {
+                                if let Some(copy) = copy.take() { copy.count(cpu.pixels().to_vec()); }
+                                *barrier = Some(gpu::when_done(side, self.proxy, Wake::HandoverDone(attempt)));
+                                let proxy = self.proxy.clone();
+                                after(delay, move || { proxy.send_event(Wake::HandoverTimeout(attempt)).ok(); });
+                                crate::marks::mark("web.handover.drawn");
+                            }
+                            HandoverEffect::Complete => { complete_handover = true; }
+                            _ => {}
                         }
                     }
                 }
@@ -471,6 +500,19 @@ impl FrameHost for WebFrameHost<'_> {
                 self.drawn = true;
             }
             _ => {}
+        }
+        if complete_handover
+            && let Draw::HandingOver { cpu, side, .. } = std::mem::replace(&mut self.r.draw, Draw::Moving)
+        {
+            // Flip canvas visibility atomically in the same rAF turn that presented the
+            // fresh GPU frame so active animations continue with zero freeze or jump.
+            if let Some(c) = self.window.canvas() { c.style().remove_property("opacity").ok(); }
+            cpu.remove();
+            self.r.draw = Draw::Gpu(side);
+            self.r.last_presented = None;
+            self.drawn = true;
+            self.handover_completed = true;
+            crate::marks::mark("web.handover.done");
         }
         Instant::now()
     }
@@ -538,7 +580,7 @@ impl FrameHost for WebFrameHost<'_> {
                 comp_animating,
             )
         };
-        if wants_frame {
+        if wants_frame || self.retry_handover {
             self.window.request_redraw();
         }
         self.try_gpu_came = self.r.presented && !handing;
@@ -554,7 +596,7 @@ impl Browser {
         if self.terminal_failed { return; }
         self.maybe_restore_webgl();
         self.poll_handover_timeout();
-        let (fatal_error, should_end, try_gpu_came, first_presented_at, non_ambient_drawn_at, embedded, document) = {
+        let (fatal_error, should_end, try_gpu_came, handover_completed, first_presented_at, non_ambient_drawn_at, embedded, document) = {
             let mut running = self.running.borrow_mut();
             let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
             if r.draw.gpu().is_some_and(|side| gpu::drain_configure_retry(side, r.suspended)) {
@@ -575,6 +617,8 @@ impl Browser {
                 tick: false,
                 reblend_tried: None,
                 drawn: false,
+                handover_completed: false,
+                retry_handover: false,
                 fatal_error: None,
                 should_end: false,
                 try_gpu_came: false,
@@ -587,6 +631,7 @@ impl Browser {
                 host.fatal_error,
                 host.should_end,
                 host.try_gpu_came,
+                host.handover_completed,
                 host.first_presented_at,
                 host.non_ambient_drawn_at,
                 host.r.embedded,
@@ -605,6 +650,9 @@ impl Browser {
         if should_end {
             self.end(event_loop);
             return;
+        }
+        if handover_completed {
+            self.arm_lose_gpu_harness();
         }
         if self.start == Start::CpuFirst {
             if let Some(at) = first_presented_at {

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use super::{
-    FINISH_LIMIT, HandoverEffect, HandoverEvent, HandoverState, TIMEOUT_PAD,
-    should_redraw_after_gpu_check, web_wants_frame,
+    FINISH_LIMIT, GlSyncPoll, GlSyncPollEffect, GlSyncPollEvent, HandoverEffect, HandoverEvent,
+    HandoverState, TIMEOUT_PAD, should_redraw_after_gpu_check, web_wants_frame,
 };
 use crate::machine::Seq;
 
@@ -86,13 +86,37 @@ fn webgpu_handover_submits_zero_gpu_frames_while_waiting_for_uber_and_breaker_ch
     };
     assert!(state.waiting_for_gpu());
 
-    // 9. onSubmittedWorkDone fires -> Complete.
+    // 9. Active CPU frames during WaitingDone submit zero extra GPU frames (no freeze).
+    for _ in 0..10 {
+        assert_eq!(
+            effects(state.step(&mut seq, HandoverEvent::PrepareFrame { checking_gpu: false })),
+            vec![],
+        );
+    }
+    assert!(state.waiting_for_gpu());
+
+    // 10. onSubmittedWorkDone fires -> ReadyToFlip + RequestRedraw (atomic flip on next rAF).
     assert_eq!(
         effects(state.step(&mut seq, HandoverEvent::GpuDone { attempt })),
+        vec![HandoverEffect::RequestRedraw],
+    );
+    assert_eq!(state, HandoverState::ReadyToFlip);
+    assert!(!state.waiting_for_gpu());
+
+    // 11. Next rAF draws the up-to-date GPU flip frame and completes atomically on submit.
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::PrepareFrame { checking_gpu: false })),
+        vec![HandoverEffect::PrecheckFeatures],
+    );
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::Prechecked { checking_gpu: false })),
+        vec![HandoverEffect::DrawFlipFrame],
+    );
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::GpuSubmitted { checking_gpu: false, now: t0 + Duration::from_millis(32) })),
         vec![HandoverEffect::Complete],
     );
     assert_eq!(state, HandoverState::Done);
-    assert!(!state.waiting_for_gpu());
 }
 
 #[test]
@@ -211,4 +235,138 @@ fn idle_frame_loop_does_not_spin_for_gpu_checks_and_wakes_once_when_settled() {
     assert!(should_redraw_after_gpu_check(false, false, false));
     // All checks cleared, no breaker settled, and already presented cleanly -> stay idle.
     assert!(!should_redraw_after_gpu_check(false, false, true));
+}
+
+#[test]
+fn ready_to_flip_ignores_late_timeout_and_defers_if_new_check_starts() {
+    let mut seq = Seq::default();
+    let mut state = HandoverState::Building { built: true };
+    let t0 = crate::time::now();
+
+    let eff = effects(state.step(&mut seq, HandoverEvent::GpuSubmitted { checking_gpu: false, now: t0 }));
+    let attempt = match eff.as_slice() {
+        [HandoverEffect::ArmFinishWait { attempt, .. }] => *attempt,
+        other => panic!("unexpected: {other:?}"),
+    };
+
+    // GpuDone transitions to ReadyToFlip and requests the flip rAF.
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::GpuDone { attempt })),
+        vec![HandoverEffect::RequestRedraw],
+    );
+    assert_eq!(state, HandoverState::ReadyToFlip);
+
+    // A stale timeout firing after GpuDone must NOT fail the completed handover.
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::Tick { now: t0 + FINISH_LIMIT + Duration::from_secs(1) })),
+        vec![],
+    );
+    assert_eq!(state, HandoverState::ReadyToFlip);
+
+    // If a newly animated scene introduces an untried breaker feature on the flip frame,
+    // ReadyToFlip defers back to WaitingChecks instead of flipping with an unverified pipeline.
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::PrepareFrame { checking_gpu: false })),
+        vec![HandoverEffect::PrecheckFeatures],
+    );
+    assert_eq!(
+        effects(state.step(&mut seq, HandoverEvent::Prechecked { checking_gpu: true })),
+        vec![],
+    );
+    assert_eq!(state, HandoverState::WaitingChecks);
+}
+
+#[test]
+fn gl_sync_poll_runs_on_animation_frames_and_stops_cleanly() {
+    let mut seq = Seq::default();
+    let mut poll = GlSyncPoll::default();
+    let t0 = crate::time::now();
+    let deadline = t0 + FINISH_LIMIT;
+
+    // Start always waits for the next rAF (never polls synchronously in the submit turn).
+    let start_eff: Vec<_> = poll.step(&mut seq, GlSyncPollEvent::Start { deadline }).into_iter().collect();
+    let a1 = match start_eff.as_slice() {
+        [GlSyncPollEffect::RequestAnimationFrame { attempt }] => *attempt,
+        other => panic!("expected RequestAnimationFrame, got {other:?}"),
+    };
+
+    // Stale rAF attempt is ignored.
+    let stale = seq.next();
+    assert!(poll.step(&mut seq, GlSyncPollEvent::AnimationFrame { attempt: stale, now: t0 }).is_empty());
+
+    // Frame 1 rAF -> PollDevice -> still pending -> schedules Frame 2 rAF with a new attempt.
+    let f1: Vec<_> = poll.step(&mut seq, GlSyncPollEvent::AnimationFrame {
+        attempt: a1,
+        now: t0 + Duration::from_millis(16),
+    }).into_iter().collect();
+    assert_eq!(f1, vec![GlSyncPollEffect::PollDevice { attempt: a1 }]);
+
+    let p1: Vec<_> = poll.step(&mut seq, GlSyncPollEvent::Polled {
+        attempt: a1,
+        completed: false,
+        device_error: false,
+        now: t0 + Duration::from_millis(16),
+    }).into_iter().collect();
+    let a2 = match p1.as_slice() {
+        [GlSyncPollEffect::RequestAnimationFrame { attempt }] => *attempt,
+        other => panic!("expected next RequestAnimationFrame, got {other:?}"),
+    };
+    assert_ne!(a1, a2);
+
+    // Frame 2 rAF -> PollDevice -> completed -> Done with zero further rAFs.
+    let f2: Vec<_> = poll.step(&mut seq, GlSyncPollEvent::AnimationFrame {
+        attempt: a2,
+        now: t0 + Duration::from_millis(33),
+    }).into_iter().collect();
+    assert_eq!(f2, vec![GlSyncPollEffect::PollDevice { attempt: a2 }]);
+
+    let p2: Vec<_> = poll.step(&mut seq, GlSyncPollEvent::Polled {
+        attempt: a2,
+        completed: true,
+        device_error: false,
+        now: t0 + Duration::from_millis(33),
+    }).into_iter().collect();
+    assert!(p2.is_empty());
+    assert_eq!(poll, GlSyncPoll::Done);
+}
+
+#[test]
+fn gl_sync_poll_stops_on_deadline_device_error_or_cancel() {
+    let t0 = crate::time::now();
+    let deadline = t0 + FINISH_LIMIT;
+
+    // 1. Reaching deadline at rAF stops without polling.
+    let mut seq = Seq::default();
+    let mut poll = GlSyncPoll::default();
+    let a1 = match poll.step(&mut seq, GlSyncPollEvent::Start { deadline }).into_iter().next() {
+        Some(GlSyncPollEffect::RequestAnimationFrame { attempt }) => attempt,
+        other => panic!("unexpected: {other:?}"),
+    };
+    assert!(poll.step(&mut seq, GlSyncPollEvent::AnimationFrame { attempt: a1, now: deadline }).is_empty());
+    assert_eq!(poll, GlSyncPoll::Done);
+
+    // 2. Device error on poll stops immediately without scheduling another rAF.
+    let mut poll = GlSyncPoll::default();
+    let a1 = match poll.step(&mut seq, GlSyncPollEvent::Start { deadline }).into_iter().next() {
+        Some(GlSyncPollEffect::RequestAnimationFrame { attempt }) => attempt,
+        other => panic!("unexpected: {other:?}"),
+    };
+    let _ = poll.step(&mut seq, GlSyncPollEvent::AnimationFrame { attempt: a1, now: t0 + Duration::from_millis(8) });
+    assert!(poll.step(&mut seq, GlSyncPollEvent::Polled {
+        attempt: a1,
+        completed: false,
+        device_error: true,
+        now: t0 + Duration::from_millis(8),
+    }).is_empty());
+    assert_eq!(poll, GlSyncPoll::Done);
+
+    // 3. Cancel stops pending wait immediately.
+    let mut poll = GlSyncPoll::default();
+    let a1 = match poll.step(&mut seq, GlSyncPollEvent::Start { deadline }).into_iter().next() {
+        Some(GlSyncPollEffect::RequestAnimationFrame { attempt }) => attempt,
+        other => panic!("unexpected: {other:?}"),
+    };
+    assert!(poll.step(&mut seq, GlSyncPollEvent::Cancel).is_empty());
+    assert_eq!(poll, GlSyncPoll::Done);
+    assert!(poll.step(&mut seq, GlSyncPollEvent::AnimationFrame { attempt: a1, now: t0 + Duration::from_millis(8) }).is_empty());
 }

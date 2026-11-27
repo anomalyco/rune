@@ -223,30 +223,21 @@ pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, docum
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WebDrawKind {
     Cpu,
-    HandingOver { waiting_for_gpu: bool },
+    HandingOver,
     Gpu,
     ContextLost,
     TerminalFailed,
     Moving,
 }
 
-/// Decides whether a web frame skips, steps before acquiring (`Gate::QuietTimer` when a
-/// previous GPU presentation is valid so an unchanged frame avoids acquiring a canvas texture),
-/// or draws unconditionally (`Gate::Draw`).
+/// Decides whether a web frame skips, steps before acquiring (`Gate::QuietTimer`), or draws
+/// (`Gate::Draw`). `HandingOver` always draws so CPU animations stay live during `WaitingDone`.
 pub(crate) fn web_frame_gate(
     suspended: bool,
     draw: WebDrawKind,
     quiet_candidate: bool,
 ) -> crate::frame::host_step::Gate {
-    if suspended
-        || matches!(
-            draw,
-            WebDrawKind::HandingOver { waiting_for_gpu: true }
-                | WebDrawKind::ContextLost
-                | WebDrawKind::TerminalFailed
-                | WebDrawKind::Moving
-        )
-    {
+    if suspended || matches!(draw, WebDrawKind::ContextLost | WebDrawKind::TerminalFailed | WebDrawKind::Moving) {
         crate::frame::host_step::Gate::Skip
     } else if draw == WebDrawKind::Gpu && quiet_candidate {
         crate::frame::host_step::Gate::QuietTimer
