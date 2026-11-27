@@ -528,6 +528,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
             [1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12],
             [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24],
         ],
+        increased: true,
         textScale: 1,
         focused: false,
         visible: false,
@@ -545,7 +546,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
     doc.dispatchEvent({ type: 'visibilitychange' });
     assert.deepEqual(events, [
         { kind: 'motion', reduced: false },
-        { kind: 'contrast', colors: null },
+        { kind: 'contrast', colors: null, increased: false },
         { kind: 'focus', focused: true },
         { kind: 'visibility', visible: true, focused: true },
     ]);
@@ -557,6 +558,89 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
     disposeEarly();
     await Promise.resolve();
     assert.deepEqual(canceled, []);
+});
+
+test('viewport tracks prefers-contrast: more alongside forced-colors and cleans up on dispose', async () => {
+    const { doc, body } = installDom({ width: 390, height: 844 });
+    const queries = new Map();
+    Object.defineProperty(globalThis, 'matchMedia', {
+        value: (query) => {
+            const target = Object.assign(new FakeEventTarget(), {
+                matches: query === '(prefers-contrast: more)',
+            });
+            queries.set(query, target);
+            return target;
+        },
+        configurable: true,
+    });
+    const palette = {
+        Canvas: 'rgb(10, 10, 10)',
+        CanvasText: 'rgb(250, 250, 250)',
+        Highlight: 'rgb(0, 120, 215)',
+        HighlightText: 'rgb(255, 255, 255)',
+        GrayText: 'rgb(128, 128, 128)',
+        ButtonFace: 'rgb(30, 30, 30)',
+        ButtonText: 'rgb(255, 255, 255)',
+        LinkText: 'rgb(80, 160, 255)',
+    };
+    Object.defineProperty(globalThis, 'getComputedStyle', {
+        value: (el) => ({
+            paddingTop: '0',
+            paddingRight: '0',
+            paddingBottom: '0',
+            paddingLeft: '0',
+            color: palette[el.style.color] ?? 'rgb(0, 0, 0)',
+        }),
+        configurable: true,
+    });
+
+    const canvas = doc.createElement('canvas');
+    body.append(canvas);
+    const events = [];
+    const dispose = platform.viewport(canvas, msg => events.push(JSON.parse(msg)), false);
+    await Promise.resolve();
+
+    // Startup snapshot with prefers-contrast: more alone (macOS/iOS/Linux browsers).
+    assert.equal(events.length, 1);
+    assert.equal(events[0].kind, 'init');
+    assert.equal(events[0].colors, null);
+    assert.equal(events[0].increased, true);
+
+    // Live toggle off -> on on prefers-contrast: more.
+    events.length = 0;
+    const more = queries.get('(prefers-contrast: more)');
+    const forced = queries.get('(forced-colors: active)');
+    more.matches = false;
+    more.dispatchEvent({ type: 'change' });
+    more.matches = true;
+    more.dispatchEvent({ type: 'change' });
+
+    // forced-colors: active alone still reports increased: true even when prefers-contrast: more is false.
+    more.matches = false;
+    forced.matches = true;
+    forced.dispatchEvent({ type: 'change' });
+
+    assert.deepEqual(events, [
+        { kind: 'contrast', colors: null, increased: false },
+        { kind: 'contrast', colors: null, increased: true },
+        {
+            kind: 'contrast',
+            colors: [
+                [10, 10, 10], [250, 250, 250], [0, 120, 215], [255, 255, 255],
+                [128, 128, 128], [30, 30, 30], [255, 255, 255], [80, 160, 255],
+            ],
+            increased: true,
+        },
+    ]);
+
+    // Dispose detaches both contrast media query listeners.
+    dispose();
+    events.length = 0;
+    more.matches = true;
+    more.dispatchEvent({ type: 'change' });
+    forced.matches = false;
+    forced.dispatchEvent({ type: 'change' });
+    assert.deepEqual(events, []);
 });
 
 function makeInlineCanvas({

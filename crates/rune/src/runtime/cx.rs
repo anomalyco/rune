@@ -598,9 +598,11 @@ impl<S> Cx<S> {
     /// (CSS `forced-colors: active`). None otherwise. A change re-runs the view.
     #[inline(always)]
     pub fn system_contrast(&self) -> Option<crate::SystemContrast> { self.core.system_contrast() }
-    /// Whether the system asks for more contrast: macOS's Increase Contrast, or a Windows contrast
-    /// theme (when [`Self::system_contrast`] is also there). A view can draw its stronger edges for
-    /// it while keeping its own colours. A change re-runs the view.
+    /// Whether the system asks for more contrast: macOS's Increase Contrast, a Windows contrast
+    /// theme (when [`Self::system_contrast`] is also there), Linux's XDG desktop portal
+    /// `org.freedesktop.appearance` `contrast` setting (such as GNOME's High Contrast), or a
+    /// browser's `(prefers-contrast: more)` or `(forced-colors: active)` media query. A view can
+    /// draw its stronger edges for it while keeping its own colours. A change re-runs the view.
     #[inline(always)]
     pub fn system_increased_contrast(&self) -> bool { self.core.system_increased_contrast() }
     /// The host's OS accessibility preference, independent of this commit's override.

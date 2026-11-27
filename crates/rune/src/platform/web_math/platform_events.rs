@@ -68,7 +68,11 @@ pub(crate) fn apply_motion(rt: &mut RuntimeCore, event: &serde_json::Value) -> b
 }
 
 pub(crate) fn apply_contrast(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
-    rt.set_system_contrast(parse_contrast(&event["colors"]))
+    let colors = parse_contrast(&event["colors"]);
+    let increased = event["increased"].as_bool().unwrap_or(false) || colors.is_some();
+    let colors_changed = rt.set_system_contrast(colors);
+    let increased_changed = rt.set_system_increased_contrast(increased);
+    colors_changed || increased_changed
 }
 
 pub(crate) fn parse_text_scale(value: &serde_json::Value) -> f32 {

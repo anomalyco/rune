@@ -1,15 +1,15 @@
-//! The desktop's light/dark, reduced-motion and double-click preferences on Linux, from the XDG
-//! desktop portal (`org.freedesktop.portal.Settings`: `org.freedesktop.appearance` `color-scheme`
-//! and `reduced-motion`, `org.gnome.desktop.interface` `enable-animations` for portals such as
-//! `xdg-desktop-portal-gtk` and older GNOME that expose animations there, and
-//! `org.gnome.desktop.peripherals.mouse` `double-click` in milliseconds). winit reports no theme
-//! on Wayland unless the app set one, so hosts ask here before falling back to dark. One worker
-//! thread, started when the event loop is made (`begin`), so that a portal that is up has
-//! answered before the first window asks, reads the settings once and follows `SettingChanged`,
-//! falling back once on that worker to `kdeglobals` or GSettings when the portal does not answer
-//! motion or double-click keys; any change asks every window to redraw, which rereads the cached
-//! atomics without touching disk or D-Bus on the UI thread. The same worker reads and follows the
-//! keys an app asked for (`desktop_settings`).
+//! The desktop's light/dark, contrast, reduced-motion and double-click preferences on Linux, from
+//! the XDG desktop portal (`org.freedesktop.portal.Settings`: `org.freedesktop.appearance`
+//! `color-scheme`, `contrast` and `reduced-motion`, `org.gnome.desktop.interface`
+//! `enable-animations` for portals such as `xdg-desktop-portal-gtk` and older GNOME that expose
+//! animations there, and `org.gnome.desktop.peripherals.mouse` `double-click` in milliseconds).
+//! winit reports no theme on Wayland unless the app set one, so hosts ask here before falling back
+//! to dark. One worker thread, started when the event loop is made (`begin`), so that a portal
+//! that is up has answered before the first window asks, reads the settings once and follows
+//! `SettingChanged`, falling back once on that worker to `kdeglobals` or GSettings when the
+//! portal does not answer motion, contrast or double-click keys; any change asks every window to
+//! redraw, which rereads the cached atomics without touching disk or D-Bus on the UI thread. The
+//! same worker reads and follows the keys an app asked for (`desktop_settings`).
 
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
@@ -125,6 +125,59 @@ fn record_fallback_reduced_motion(slot: &AtomicU8, reduced: bool) -> bool {
     })
 }
 
+/// Contrast bitfield in an `AtomicU8`:
+/// - `PORTAL_CONTRAST_KNOWN` / `PORTAL_CONTRAST_MORE`: `org.freedesktop.appearance` `contrast` (`1` = higher contrast)
+/// - `FALLBACK_CONTRAST_MORE`: one-shot fallback read on the worker thread when the portal did not answer `contrast`
+const PORTAL_CONTRAST_KNOWN: u8 = 1 << 0;
+const PORTAL_CONTRAST_MORE: u8 = 1 << 1;
+const FALLBACK_CONTRAST_MORE: u8 = 1 << 2;
+
+/// Whether the Settings portal has answered `org.freedesktop.appearance` `contrast`.
+fn has_portal_contrast(bits: u8) -> bool {
+    bits & PORTAL_CONTRAST_KNOWN != 0
+}
+
+/// Resolves the stored contrast bits to the effective increased-contrast preference.
+/// Once the portal key answers, it is authoritative (`contrast == 1` requests higher contrast);
+/// otherwise the one-shot fallback value applies.
+fn resolved_contrast(bits: u8) -> bool {
+    if has_portal_contrast(bits) {
+        bits & PORTAL_CONTRAST_MORE != 0
+    } else {
+        bits & FALLBACK_CONTRAST_MORE != 0
+    }
+}
+
+fn update_contrast(slot: &AtomicU8, update: impl Fn(u8) -> u8) -> bool {
+    let mut prev = slot.load(Ordering::Relaxed);
+    loop {
+        let next = update(prev);
+        match slot.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return resolved_contrast(prev) != resolved_contrast(next),
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
+/// Records `org.freedesktop.appearance` `contrast` (`1` = higher contrast, `0` and unknown
+/// values = no preference per the XDG Settings portal spec). Returns whether the effective
+/// increased-contrast state changed.
+fn record_contrast(slot: &AtomicU8, value: u32) -> bool {
+    update_contrast(slot, |bits| {
+        let bits = (bits | PORTAL_CONTRAST_KNOWN) & !PORTAL_CONTRAST_MORE;
+        if value == 1 { bits | PORTAL_CONTRAST_MORE } else { bits }
+    })
+}
+
+/// Records the one-shot fallback result (read off the UI thread when the portal did not answer
+/// `contrast`). Returns whether the effective increased-contrast state changed.
+fn record_fallback_contrast(slot: &AtomicU8, more: bool) -> bool {
+    update_contrast(slot, |bits| {
+        let bits = bits & !FALLBACK_CONTRAST_MORE;
+        if more { bits | FALLBACK_CONTRAST_MORE } else { bits }
+    })
+}
+
 /// Stored double-click interval in an `AtomicU32`:
 /// - `0` (`DOUBLE_CLICK_UNKNOWN`) when neither the portal nor fallback has answered
 /// - lower 31 bits: clamped interval in milliseconds (`50..=5000`)
@@ -229,11 +282,12 @@ mod dbus {
 
     use super::{
         DOUBLE_CLICK_UNKNOWN, TEXT_SCALE_UNKNOWN, UNKNOWN, effective_text_scale,
-        has_portal_double_click, has_portal_motion, has_portal_text_scale,
-        record_double_click, record_enable_animations, record_fallback_double_click,
-        record_fallback_reduced_motion, record_fallback_text_scale, record_reduced_motion,
-        record_scheme, record_text_scale, resolved_reduced_motion, seed_reduced_motion,
-        seed_scheme, stored_dark, stored_double_click_secs,
+        has_portal_contrast, has_portal_double_click, has_portal_motion, has_portal_text_scale,
+        record_contrast, record_double_click, record_enable_animations, record_fallback_contrast,
+        record_fallback_double_click, record_fallback_reduced_motion, record_fallback_text_scale,
+        record_reduced_motion, record_scheme, record_text_scale, resolved_contrast,
+        resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
+        stored_double_click_secs,
     };
     use crate::platform::preferences::Appearance;
     use crate::platform::portal::{self, DEST, PATH};
@@ -241,6 +295,7 @@ mod dbus {
     const INTERFACE: &str = "org.freedesktop.portal.Settings";
     const APPEARANCE_NAMESPACE: &str = "org.freedesktop.appearance";
     const COLOR_SCHEME_KEY: &str = "color-scheme";
+    const CONTRAST_KEY: &str = "contrast";
     const REDUCED_MOTION_KEY: &str = "reduced-motion";
     const GNOME_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
     const ENABLE_ANIMATIONS_KEY: &str = "enable-animations";
@@ -257,6 +312,7 @@ mod dbus {
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
     static SCHEME: AtomicU8 = AtomicU8::new(UNKNOWN);
+    static CONTRAST: AtomicU8 = AtomicU8::new(0);
     static MOTION: AtomicU8 = AtomicU8::new(0);
     static DOUBLE_CLICK: AtomicU32 = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
     static TEXT_SCALE: AtomicU64 = AtomicU64::new(TEXT_SCALE_UNKNOWN);
@@ -324,6 +380,14 @@ mod dbus {
         resolved_reduced_motion(MOTION.load(Ordering::Relaxed))
     }
 
+    /// Whether the desktop asks for higher contrast, cached from the Settings portal
+    /// (`org.freedesktop.appearance` `contrast`) or a one-shot off-UI-thread fallback when the
+    /// portal does not answer that key.
+    pub(crate) fn increased_contrast() -> bool {
+        first_answer();
+        resolved_contrast(CONTRAST.load(Ordering::Relaxed))
+    }
+
     /// The desktop's configured double-click interval in seconds, cached from the Settings portal
     /// (`org.gnome.desktop.peripherals.mouse` `double-click`) or a one-shot off-UI-thread
     /// fallback when the portal does not answer that key, or `None` when neither answered.
@@ -341,15 +405,15 @@ mod dbus {
     }
 
     /// Redraws `window` whenever a watched portal preference changes; its redraw rereads
-    /// [`dark`], [`reduced_motion`] and [`double_click_interval`].
+    /// [`dark`], [`increased_contrast`], [`reduced_motion`] and [`double_click_interval`].
     pub(crate) fn follow(window: &Arc<Window>) {
         let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
         windows.retain(|w| w.strong_count() > 0);
         windows.push(Arc::downgrade(window));
     }
 
-    /// Unwraps a `u32` portal value (`color-scheme`, `reduced-motion`). Portals answer `v`, and
-    /// `Read` (before `ReadOne`) wraps it twice.
+    /// Unwraps a `u32` portal value (`color-scheme`, `contrast`, `reduced-motion`). Portals
+    /// answer `v`, and `Read` (before `ReadOne`) wraps it twice.
     pub(super) fn scheme(value: &Value<'_>) -> Option<u32> {
         match value {
             Value::U32(x) => Some(*x),
@@ -388,6 +452,15 @@ mod dbus {
     fn store_scheme(value: &Value<'_>) {
         let Some(scheme) = scheme(value) else { return };
         if record_scheme(&SCHEME, scheme) { redraw_windows(); }
+    }
+
+    fn store_contrast(value: &Value<'_>) {
+        let Some(contrast) = scheme(value) else { return };
+        if record_contrast(&CONTRAST, contrast) { redraw_windows(); }
+    }
+
+    fn store_fallback_contrast(more: bool) {
+        if record_fallback_contrast(&CONTRAST, more) { redraw_windows(); }
     }
 
     fn store_reduced_motion(value: &Value<'_>) {
@@ -478,6 +551,8 @@ mod dbus {
             let (read_ok, unavailable) = if matches!(scheme_res, Err(true)) {
                 (false, true)
             } else {
+                let contrast_res = read_setting(&portal, APPEARANCE_NAMESPACE, CONTRAST_KEY).await;
+                if let Ok(v) = &contrast_res { store_contrast(v); }
                 let reduced_res = read_setting(&portal, APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY).await;
                 if let Ok(v) = &reduced_res { store_reduced_motion(v); }
                 let anim_res = read_setting(&portal, GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY).await;
@@ -493,8 +568,9 @@ mod dbus {
                 {
                     store_button_layout(&v);
                 }
-                let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok() || text_scale_res.is_ok();
+                let read_ok = scheme_res.is_ok() || contrast_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok() || text_scale_res.is_ok();
                 let unavailable = matches!(scheme_res, Err(true))
+                    && matches!(contrast_res, Err(true))
                     && matches!(reduced_res, Err(true))
                     && matches!(anim_res, Err(true))
                     && matches!(dbl_res, Err(true))
@@ -507,6 +583,9 @@ mod dbus {
             }
             Some((conn, portal, changes))
         }).await.flatten();
+        if !has_portal_contrast(CONTRAST.load(Ordering::Relaxed)) {
+            store_fallback_contrast(crate::platform::preferences::read_increased_contrast_fallback());
+        }
         if !has_portal_motion(MOTION.load(Ordering::Relaxed)) {
             store_fallback_reduced_motion(crate::platform::preferences::read_reduced_motion_fallback());
         }
@@ -550,6 +629,7 @@ mod dbus {
             };
             match (namespace.as_str(), key.as_str()) {
                 (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => { store_scheme(&value); keep_now(); }
+                (APPEARANCE_NAMESPACE, CONTRAST_KEY) => store_contrast(&value),
                 (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => { store_reduced_motion(&value); keep_now(); }
                 (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => { store_enable_animations(&value); keep_now(); }
                 (GNOME_INTERFACE_NAMESPACE, TEXT_SCALING_FACTOR_KEY) => store_text_scale(&value),
@@ -570,7 +650,7 @@ mod dbus {
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{begin, dark, double_click_interval, follow, last, reduced_motion, text_scale};
+pub(crate) use dbus::{begin, dark, double_click_interval, follow, increased_contrast, last, reduced_motion, text_scale};
 
 #[cfg(test)]
 #[path = "portal_appearance_tests.rs"]

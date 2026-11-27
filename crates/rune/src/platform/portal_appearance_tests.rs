@@ -97,6 +97,52 @@ fn fallback_reduced_motion_applies_only_until_a_portal_key_answers() {
     assert!(!resolved_reduced_motion(slot.load(Ordering::Relaxed)));
 }
 
+#[test]
+fn portal_contrast_follows_spec_and_tracks_live_changes() {
+    let slot = AtomicU8::new(0);
+    assert!(!has_portal_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!resolved_contrast(slot.load(Ordering::Relaxed)));
+
+    // 0 (no preference) marks the portal as authoritative without enabling increased contrast.
+    assert!(!record_contrast(&slot, 0));
+    assert!(has_portal_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!resolved_contrast(slot.load(Ordering::Relaxed)));
+
+    // 1 enables increased contrast and requests a redraw; repeating 1 requests none.
+    assert!(record_contrast(&slot, 1));
+    assert!(resolved_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!record_contrast(&slot, 1));
+
+    // Unknown values are treated as 0 (no preference) per org.freedesktop.portal.Settings.
+    assert!(record_contrast(&slot, 7));
+    assert!(!resolved_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!record_contrast(&slot, 0));
+}
+
+#[test]
+fn fallback_contrast_applies_only_until_portal_answers() {
+    let slot = AtomicU8::new(0);
+
+    // Before the portal answers, the one-shot off-thread fallback sets the state.
+    assert!(record_fallback_contrast(&slot, true));
+    assert!(!has_portal_contrast(slot.load(Ordering::Relaxed)));
+    assert!(resolved_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!record_fallback_contrast(&slot, true));
+
+    // A later portal SettingChanged supersedes the fallback and triggers a redraw if changed.
+    assert!(record_contrast(&slot, 0));
+    assert!(has_portal_contrast(slot.load(Ordering::Relaxed)));
+    assert!(!resolved_contrast(slot.load(Ordering::Relaxed)));
+
+    // Subsequent fallback writes do not override the portal.
+    assert!(!record_fallback_contrast(&slot, true));
+    assert!(!resolved_contrast(slot.load(Ordering::Relaxed)));
+
+    // Live SettingChanged toggling contrast on updates and requests a redraw.
+    assert!(record_contrast(&slot, 1));
+    assert!(resolved_contrast(slot.load(Ordering::Relaxed)));
+}
+
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 #[test]
 fn reads_the_scheme_however_deeply_the_portal_wraps_it() {

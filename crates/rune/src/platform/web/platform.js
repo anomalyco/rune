@@ -523,9 +523,11 @@ export function viewport(canvas, callback, embedded) {
     const hoverNone = matchMedia('(hover: none)');
     const coarse = matchMedia('(pointer: coarse)');
     const pointer = () => callback(JSON.stringify({ kind: 'primary_pointer', hover: !hoverNone.matches, coarse: coarse.matches }));
-    // A contrast theme (Windows' Contrast themes): `forced-colors`, and its system colours read
-    // off a probe, as sRGB bytes, for `Cx::system_contrast`.
+    // A contrast theme (Windows' Contrast themes: `forced-colors`, with its system colours read
+    // off a probe as sRGB bytes for `Cx::system_contrast`) and increased-contrast preference
+    // (`prefers-contrast: more` or `forced-colors: active`, for `Cx::system_increased_contrast`).
     const forced = matchMedia('(forced-colors: active)');
+    const moreContrast = matchMedia('(prefers-contrast: more)');
     const readContrast = () => {
         if (!forced.matches) return null;
         const swatch = document.createElement('span');
@@ -538,7 +540,11 @@ export function viewport(canvas, callback, embedded) {
         swatch.remove();
         return colors;
     };
-    const contrast = () => callback(JSON.stringify({ kind: 'contrast', colors: readContrast() }));
+    const contrast = () => callback(JSON.stringify({
+        kind: 'contrast',
+        colors: readContrast(),
+        increased: moreContrast.matches || forced.matches,
+    }));
     // The browser's default font size (root `font-size` / 16px), for `Cx::system_text_scale`.
     // A hidden `10rem` probe observed by ResizeObserver fires whenever the user changes the
     // browser's font-size setting without needing a window resize.
@@ -585,6 +591,7 @@ export function viewport(canvas, callback, embedded) {
     hoverNone.addEventListener('change', pointer);
     coarse.addEventListener('change', pointer);
     forced.addEventListener('change', contrast);
+    moreContrast.addEventListener('change', contrast);
     window.addEventListener('focus', focus);
     window.addEventListener('blur', focus);
     window.addEventListener('languagechange', languageChange);
@@ -602,6 +609,7 @@ export function viewport(canvas, callback, embedded) {
             hover: !hoverNone.matches,
             coarse: coarse.matches,
             colors: readContrast(),
+            increased: moreContrast.matches || forced.matches,
             textScale: lastTextScale,
             focused: document.hasFocus(),
             visible: !document.hidden,
@@ -619,6 +627,7 @@ export function viewport(canvas, callback, embedded) {
         hoverNone.removeEventListener('change', pointer);
         coarse.removeEventListener('change', pointer);
         forced.removeEventListener('change', contrast);
+        moreContrast.removeEventListener('change', contrast);
         window.removeEventListener('focus', focus);
         window.removeEventListener('blur', focus);
         window.removeEventListener('languagechange', languageChange);

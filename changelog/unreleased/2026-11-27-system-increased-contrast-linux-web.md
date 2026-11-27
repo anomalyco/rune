@@ -1,0 +1,1 @@
+- `Cx::system_increased_contrast` now reflects Linux's XDG desktop portal `org.freedesktop.appearance` `contrast` setting (with live `SettingChanged` updates and GNOME GSettings fallback) and browser `(prefers-contrast: more)` / `(forced-colors: active)` media queries.
