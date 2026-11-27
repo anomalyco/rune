@@ -1,0 +1,1 @@
+- macOS: scrolling panes reach NSAccessibility as `AXScrollArea` (`NSAccessibilityScrollAreaRole`) instead of `AXUnknown`. AccessKit's macOS adapter mapped `Role::ScrollView` to `NSAccessibilityUnknownRole`; Rune's vendored `accesskit_macos` now maps it to `NSAccessibilityScrollAreaRole`, matching AppKit, WebKit and Chromium (`scripts/vendor-accesskit-macos.sh`).

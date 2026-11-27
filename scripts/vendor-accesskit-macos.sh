@@ -2,7 +2,8 @@
 # Re-makes vendor/accesskit_macos: the accesskit_macos crate exactly as published on crates.io at
 # <version>, without its integration tests, plus vendor/accesskit_macos.patch (headings as AppKit's
 # AXHeading with their level as the value, which the published adapter reports as a "Heading" role
-# VoiceOver doesn't know, so VoiceOver's rotor and VO-Command-H found no heading; and accessibility
+# VoiceOver doesn't know, so VoiceOver's rotor and VO-Command-H found no heading; ScrollView as
+# AppKit's AXScrollArea (NSAccessibilityScrollAreaRole) instead of AXUnknown; and accessibility
 # children, focus and hit test reading the adapter's state only on the main thread, since AppKit
 # calls them from a background thread while the process queries itself and the main thread may hold
 # that borrow, which raced or aborted). Run it when

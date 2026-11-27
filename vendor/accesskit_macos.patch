@@ -836,7 +836,7 @@ index 0000000..ae053e0
 +    }
 +}
 diff --git a/src/node.rs b/src/node.rs
-index 7be2e59..7322204 100644
+index 7be2e59..5910daf 100644
 --- a/src/node.rs
 +++ b/src/node.rs
 @@ -29,7 +29,32 @@ use objc2_foundation::{
@@ -885,7 +885,19 @@ index 7be2e59..7322204 100644
              Role::Iframe => NSAccessibilityGroupRole,
              Role::IframePresentational => NSAccessibilityGroupRole,
              Role::ImeCandidate => NSAccessibilityUnknownRole,
-@@ -355,6 +383,12 @@ impl NodeWrapper<'_> {
+@@ -150,7 +178,10 @@ fn ns_role(node: &NodeRef) -> &'static NSAccessibilityRole {
+             Role::Ruby => NSAccessibilityGroupRole,
+             Role::RubyAnnotation => NSAccessibilityUnknownRole,
+             Role::ScrollBar => NSAccessibilityScrollBarRole,
+-            Role::ScrollView => NSAccessibilityUnknownRole,
++            // Rune (vendor/accesskit_macos.patch): AppKit's scroll area role (`AXScrollArea`),
++            // as WebKit and Chromium expose scrolling containers so VoiceOver announces
++            // "scroll area" instead of "unknown".
++            Role::ScrollView => NSAccessibilityScrollAreaRole,
+             Role::Search => NSAccessibilityGroupRole,
+             Role::Section => NSAccessibilityGroupRole,
+             Role::SectionFooter => NSAccessibilityGroupRole,
+@@ -355,6 +386,12 @@ impl NodeWrapper<'_> {
                  return Some(Value::String(label));
              }
          }
@@ -898,7 +910,7 @@ index 7be2e59..7322204 100644
          if let Some(value) = self.0.value() {
              return Some(Value::String(value));
          }
-@@ -755,6 +789,10 @@ declare_class!(
+@@ -755,6 +792,10 @@ declare_class!(
          #[method(accessibilityNumberOfCharacters)]
          fn number_of_characters(&self) -> NSInteger {
              self.resolve(|node| {
@@ -909,7 +921,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      node.document_range().end().to_global_utf16_index() as _
                  } else {
-@@ -767,6 +805,9 @@ declare_class!(
+@@ -767,6 +808,9 @@ declare_class!(
          #[method_id(accessibilitySelectedText)]
          fn selected_text(&self) -> Option<Id<NSString>> {
              self.resolve(|node| {
@@ -919,7 +931,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = node.text_selection() {
                          let text = range.text();
-@@ -781,6 +822,10 @@ declare_class!(
+@@ -781,6 +825,10 @@ declare_class!(
          #[method(accessibilitySelectedTextRange)]
          fn selected_text_range(&self) -> NSRange {
              self.resolve(|node| {
@@ -930,7 +942,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = node.text_selection() {
                          return to_ns_range(&range);
-@@ -794,6 +839,10 @@ declare_class!(
+@@ -794,6 +842,10 @@ declare_class!(
          #[method(accessibilityInsertionPointLineNumber)]
          fn insertion_point_line_number(&self) -> NSInteger {
              self.resolve(|node| {
@@ -941,7 +953,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(pos) = node.text_selection_focus() {
                          return pos.to_line_index() as _;
-@@ -807,6 +856,11 @@ declare_class!(
+@@ -807,6 +859,11 @@ declare_class!(
          #[method(accessibilityRangeForLine:)]
          fn range_for_line(&self, line_index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -953,7 +965,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() && line_index >= 0 {
                      if let Some(range) = node.line_range_from_index(line_index as _) {
                          return to_ns_range(&range);
-@@ -827,6 +881,12 @@ declare_class!(
+@@ -827,6 +884,12 @@ declare_class!(
                      }
                  };
  
@@ -966,7 +978,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      let point = from_ns_point(&view, node, point);
                      let pos = node.text_position_at_point(point);
-@@ -840,6 +900,11 @@ declare_class!(
+@@ -840,6 +903,11 @@ declare_class!(
          #[method_id(accessibilityStringForRange:)]
          fn string_for_range(&self, range: NSRange) -> Option<Id<NSString>> {
              self.resolve(|node| {
@@ -978,7 +990,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let text = range.text();
-@@ -854,6 +919,12 @@ declare_class!(
+@@ -854,6 +922,12 @@ declare_class!(
          #[method_id(accessibilityAttributedStringForRange:)]
          fn attributed_string_for_range(&self, range: NSRange) -> Option<Id<NSAttributedString>> {
              self.resolve(|node| {
@@ -991,7 +1003,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let mut result = NSMutableAttributedString::new();
-@@ -967,6 +1038,15 @@ declare_class!(
+@@ -967,6 +1041,15 @@ declare_class!(
                      }
                  };
  
@@ -1007,7 +1019,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          let rects = range.bounding_boxes();
-@@ -985,6 +1065,10 @@ declare_class!(
+@@ -985,6 +1068,10 @@ declare_class!(
          #[method(accessibilityLineForIndex:)]
          fn line_for_index(&self, index: NSInteger) -> NSInteger {
              self.resolve(|node| {
@@ -1018,7 +1030,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          return pos.to_line_index() as _;
-@@ -998,6 +1082,10 @@ declare_class!(
+@@ -998,6 +1085,10 @@ declare_class!(
          #[method(accessibilityRangeForIndex:)]
          fn range_for_index(&self, index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -1029,7 +1041,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          return to_ns_range_for_character(&pos);
-@@ -1011,6 +1099,11 @@ declare_class!(
+@@ -1011,6 +1102,11 @@ declare_class!(
          #[method(accessibilityStyleRangeForIndex:)]
          fn style_range_for_index(&self, index: NSInteger) -> NSRange {
              self.resolve(|node| {
@@ -1041,7 +1053,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() && index >= 0 {
                      if let Some(pos) = node.text_position_from_global_utf16_index(index as _) {
                          let start = if pos.is_format_start() {
-@@ -1031,6 +1124,19 @@ declare_class!(
+@@ -1031,6 +1127,19 @@ declare_class!(
          #[method(setAccessibilitySelectedTextRange:)]
          fn set_selected_text_range(&self, range: NSRange) {
              self.resolve_with_context(|node, tree, context| {
@@ -1061,7 +1073,7 @@ index 7be2e59..7322204 100644
                  if node.supports_text_ranges() {
                      if let Some(range) = from_ns_range(node, range) {
                          if let Some((target_node, target_tree)) = tree.state().locate_node(node.id()) {
-@@ -1260,7 +1366,7 @@ declare_class!(
+@@ -1260,7 +1369,7 @@ declare_class!(
                      || selector == sel!(accessibilityStyleRangeForIndex:)
                      || selector == sel!(setAccessibilitySelectedTextRange:)
                  {
@@ -1070,7 +1082,7 @@ index 7be2e59..7322204 100644
                  }
                  if selector == sel!(setAccessibilityValue:) {
                      return (node.supports_text_ranges() && !node.is_read_only()) || node.supports_action(Action::SetValue, &filter);
-@@ -1341,11 +1447,15 @@ impl PlatformNode {
+@@ -1341,11 +1450,15 @@ impl PlatformNode {
      where
          F: FnOnce(&NodeRef, &Tree, &Rc<Context>) -> T,
      {
