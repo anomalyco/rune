@@ -15,12 +15,16 @@ use objc2::{
     msg_send, msg_send_id,
     mutability::InteriorMutable,
     rc::Id,
-    runtime::{AnyClass, AnyObject, Sel},
+    runtime::{AnyClass, AnyObject, Bool, Sel},
     sel,
 };
 use objc2_app_kit::{NSView, NSWindow};
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSPoint};
-use std::{cell::RefCell, ffi::c_void, sync::Mutex};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::c_void,
+    sync::Mutex,
+};
 
 use crate::{Adapter, event::QueuedEvents};
 
@@ -128,22 +132,119 @@ unsafe extern "C" fn superclass(this: &NSView, _cmd: Sel) -> Option<&AnyClass> {
     prev_class.superclass()
 }
 
+// Rune (vendor/accesskit_macos.patch): AppKit's default `-[NSView accessibilityHitTest:]`
+// returns `NSAccessibilityUnignoredAncestor(self)` when no subview handles the point; for an
+// ignored content view that is its `NSWindow` (or another ancestor), not `self`. Rejecting
+// `self` and its ancestors lets unhit points fall through to AccessKit while keeping real hits
+// on embedded native subviews (such as `WKWebView`).
+unsafe fn is_self_or_ancestor(view: &NSView, candidate: *const AnyObject) -> bool {
+    if std::ptr::eq(candidate, (view as *const NSView).cast::<AnyObject>()) {
+        return true;
+    }
+    if let Some(window) = view.window() {
+        if std::ptr::eq(candidate, Id::as_ptr(&window).cast::<AnyObject>()) {
+            return true;
+        }
+    }
+    let mut cur = unsafe { view.superview() };
+    while let Some(sv) = cur {
+        if std::ptr::eq(candidate, Id::as_ptr(&sv).cast::<AnyObject>()) {
+            return true;
+        }
+        cur = unsafe { sv.superview() };
+    }
+    let parent: *const AnyObject = unsafe { msg_send![view, accessibilityParent] };
+    !parent.is_null() && std::ptr::eq(candidate, parent)
+}
+
+thread_local! {
+    static IN_NATIVE_FOCUS: Cell<bool> = const { Cell::new(false) };
+}
+
+struct NativeFocusGuard;
+
+impl Drop for NativeFocusGuard {
+    fn drop(&mut self) {
+        IN_NATIVE_FOCUS.with(|flag| flag.set(false));
+    }
+}
+
+// Rune (vendor/accesskit_macos.patch): when the window's first responder is a native subview
+// strictly beneath `view` (for example an embedded `WKWebView` or a text view inside one),
+// delegate `accessibilityFocusedUIElement` to that responder so VoiceOver tracks focus there.
+unsafe fn focused_native_subview(view: &NSView) -> Option<*mut NSObject> {
+    if IN_NATIVE_FOCUS.with(|flag| flag.replace(true)) {
+        return None;
+    }
+    let _guard = NativeFocusGuard;
+    let window = view.window()?;
+    let responder = window.firstResponder()?;
+    if std::ptr::eq(
+        Id::as_ptr(&responder).cast::<AnyObject>(),
+        (view as *const NSView).cast::<AnyObject>(),
+    ) {
+        return None;
+    }
+    let is_view: Bool = unsafe { msg_send![&*responder, isKindOfClass: NSView::class()] };
+    if !is_view.as_bool() {
+        return None;
+    }
+    let responder_view: &NSView = unsafe { &*(Id::as_ptr(&responder).cast::<NSView>()) };
+    if !unsafe { responder_view.isDescendantOf(view) } {
+        return None;
+    }
+    let focused: *mut NSObject =
+        unsafe { msg_send![responder_view, accessibilityFocusedUIElement] };
+    if focused.is_null() || unsafe { is_self_or_ancestor(view, focused.cast::<AnyObject>()) } {
+        return None;
+    }
+    Some(focused)
+}
+
 unsafe extern "C" fn children(this: &NSView, _cmd: Sel) -> *mut NSArray<NSObject> {
     let Some(associated) = associated_object_on_main_thread(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityChildren] };
     };
-    let mut state = associated.ivars().state.borrow_mut();
-    let state_mut = &mut *state;
-    state_mut
-        .adapter
-        .view_children(&mut *state_mut.activation_handler)
+    let prev = associated.ivars().prev_class;
+    let ak_children = {
+        let Ok(mut state) = associated.ivars().state.try_borrow_mut() else {
+            return unsafe { msg_send![super(this, prev), accessibilityChildren] };
+        };
+        let state_mut = &mut *state;
+        state_mut
+            .adapter
+            .view_children(&mut *state_mut.activation_handler)
+    };
+    // Rune (vendor/accesskit_macos.patch): append AppKit's unignored native subview children
+    // (for example an embedded `WKWebView`) after AccessKit's own nodes so VoiceOver and AX
+    // tree walks can reach native child views. The adapter borrow above is released before
+    // messaging `super` so re-entrant accessibility calls cannot conflict with it.
+    let native_children: *mut NSArray<NSObject> =
+        unsafe { msg_send![super(this, prev), accessibilityChildren] };
+    if native_children.is_null() {
+        return ak_children;
+    }
+    let native_count: usize = unsafe { msg_send![native_children, count] };
+    if native_count == 0 {
+        return ak_children;
+    }
+    if ak_children.is_null() {
+        return native_children;
+    }
+    unsafe { msg_send![ak_children, arrayByAddingObjectsFromArray: native_children] }
 }
 
 unsafe extern "C" fn focus(this: &NSView, _cmd: Sel) -> *mut NSObject {
     let Some(associated) = associated_object_on_main_thread(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityFocusedUIElement] };
     };
-    let mut state = associated.ivars().state.borrow_mut();
+    let prev = associated.ivars().prev_class;
+    if let Some(native_focus) = unsafe { focused_native_subview(this) } {
+        return native_focus;
+    }
+    let Ok(mut state) = associated.ivars().state.try_borrow_mut() else {
+        return unsafe { msg_send![super(this, prev), accessibilityFocusedUIElement] };
+    };
     let state_mut = &mut *state;
     state_mut.adapter.focus(&mut *state_mut.activation_handler)
 }
@@ -152,7 +253,19 @@ unsafe extern "C" fn hit_test(this: &NSView, _cmd: Sel, point: NSPoint) -> *mut 
     let Some(associated) = associated_object_on_main_thread(this) else {
         return unsafe { msg_send![super(this, prev_class(this)), accessibilityHitTest: point] };
     };
-    let mut state = associated.ivars().state.borrow_mut();
+    let prev = associated.ivars().prev_class;
+    // Rune (vendor/accesskit_macos.patch): let AppKit hit-test visible native subviews first
+    // so points inside a native child view (e.g. `WKWebView`) resolve inside that view rather
+    // than falling into AccessKit's tree beneath it.
+    let native_hit: *mut NSObject =
+        unsafe { msg_send![super(this, prev), accessibilityHitTest: point] };
+    if !native_hit.is_null() && !unsafe { is_self_or_ancestor(this, native_hit.cast::<AnyObject>()) }
+    {
+        return native_hit;
+    }
+    let Ok(mut state) = associated.ivars().state.try_borrow_mut() else {
+        return native_hit;
+    };
     let state_mut = &mut *state;
     state_mut
         .adapter

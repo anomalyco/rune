@@ -435,6 +435,37 @@ fn macos_make_view_configures_sidebar_and_popover_effect_views() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_material_host_is_hidden_from_accessibility_and_hit_tests() {
+    use objc2::{msg_send, rc::Retained, runtime::{AnyObject, Bool}};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    let class = macos::host_class().expect("RuneMaterialHost class");
+    // SAFETY: creates an off-window RuneMaterialHost in memory without any NSWindow.
+    let host: Retained<AnyObject> = unsafe {
+        let alloc: *mut AnyObject = msg_send![class, alloc];
+        let view: *mut AnyObject = msg_send![alloc, initWithFrame: CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 200.0, height: 120.0 } }];
+        Retained::from_raw(view).expect("RuneMaterialHost init")
+    };
+    let slot = macos::make_view(SystemMaterial::Sidebar, &host).expect("sidebar slot");
+    // SAFETY: queries standard NSAccessibility getters on a live NSView owned by this test.
+    unsafe {
+        let is_el: Bool = msg_send![&*host, isAccessibilityElement];
+        let is_ignored: Bool = msg_send![&*host, accessibilityIsIgnored];
+        let children: *mut AnyObject = msg_send![&*host, accessibilityChildren];
+        let nav_children: *mut AnyObject = msg_send![&*host, accessibilityChildrenInNavigationOrder];
+        let hit: *mut AnyObject = msg_send![&*host, accessibilityHitTest: CGPoint { x: 10.0, y: 10.0 }];
+        assert!(!is_el.as_bool(), "RuneMaterialHost must not be an accessibility element");
+        assert!(is_ignored.as_bool(), "RuneMaterialHost must be ignored by accessibility");
+        let count: usize = msg_send![children.as_ref().expect("accessibilityChildren must return an empty NSArray"), count];
+        assert_eq!(count, 0, "RuneMaterialHost must hide backdrop effect subviews from accessibilityChildren");
+        let nav_count: usize = msg_send![nav_children.as_ref().expect("accessibilityChildrenInNavigationOrder must return an empty NSArray"), count];
+        assert_eq!(nav_count, 0, "RuneMaterialHost must hide backdrop effect subviews from navigation order");
+        assert!(hit.is_null(), "RuneMaterialHost must never capture accessibilityHitTest:");
+        let _: () = msg_send![&*slot.view, removeFromSuperview];
+    }
+}
+
 #[test]
 fn default_cap_reports_fallback_on_fifth_visible_material_and_warns_only_when_native() {
     fn five(_: &u8, _: &mut Cx<u8>) -> El {
