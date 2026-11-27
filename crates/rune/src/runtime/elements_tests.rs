@@ -533,6 +533,7 @@ fn element_info_reports_laid_out_text_truncation_inset_clips_scroll_axes_and_rai
     assert!(!stub.wrap && !stub.truncate && !stub.text_cut && !stub.clips && !stub.raised);
     assert_eq!(stub.scroll_axes, [false, false]);
     assert_eq!(stub.layer_opacity, 1.0);
+    assert_eq!(stub.backdrop_blur, 0.0);
 }
 
 #[test]
@@ -598,4 +599,138 @@ fn element_info_reports_composed_layer_opacity_separately_from_opacity() {
     approx(info(&els, "label").layer_opacity, 1.0, "un-dimmed label returns to 1.0");
     approx(info(&els, "nested").layer_opacity, 0.5, "nested keeps its own 0.5");
     assert_eq!(ElementInfo::stub("stub").layer_opacity, 1.0);
+}
+
+#[test]
+fn element_info_reports_backdrop_blur_without_inheriting_and_respects_reduced_transparency() {
+    let view = |frosted: &bool, _: &mut Cx<bool>| {
+        let mut bar = col().key("bar").size(160.0, 40.0);
+        if *frosted {
+            bar = bar.backdrop_blur(24.0);
+        }
+        col().key("root").size(300.0, 240.0)
+            .child(el().key("plain").size(40.0, 20.0))
+            .child(
+                bar
+                    .child(el().key("child").size(40.0, 20.0))
+                    .child(
+                        text("Go docs mark")
+                            .key("para")
+                            .backdrop_blur(10.0)
+                            .link(Link::new(3..7, "docs"))
+                            .text_highlight(TextHighlight::new(8..12, HL_YELLOW).key("mk")),
+                    ),
+            )
+            .child(el().key("both").size(40.0, 20.0).blur(6.0).backdrop_blur(12.0))
+    };
+    let mut rt = Runtime::new(true, view, (300.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let els = rt.elements();
+
+    assert_eq!(info(&els, "plain").backdrop_blur, 0.0);
+    assert_eq!(info(&els, "plain").blur, 0.0);
+    assert_eq!(info(&els, "bar").backdrop_blur, 24.0);
+    assert_eq!(info(&els, "bar").blur, 0.0, "backdrop_blur does not affect El::blur margin");
+    assert_eq!(info(&els, "child").backdrop_blur, 0.0, "backdrop_blur does not inherit to children");
+    assert_eq!(info(&els, "para").backdrop_blur, 10.0);
+    assert_eq!(info(&els, "docs").backdrop_blur, 0.0, "inline link does not inherit backdrop_blur");
+    assert_eq!(info(&els, "mk").backdrop_blur, 0.0, "inline highlight does not inherit backdrop_blur");
+    assert_eq!(info(&els, "both").blur, 6.0);
+    assert_eq!(info(&els, "both").backdrop_blur, 12.0);
+
+    // Reduce Transparency disables backdrop blur on paint and inspection.
+    rt.set_system_reduced_transparency(true);
+    rt.frame(0.0);
+    let els = rt.elements();
+    assert_eq!(info(&els, "bar").backdrop_blur, 0.0);
+    assert_eq!(info(&els, "both").backdrop_blur, 0.0);
+    assert_eq!(info(&els, "both").blur, 6.0, "El::blur stays unaffected by Reduce Transparency");
+
+    // Turning Reduce Transparency back off restores backdrop_blur.
+    rt.set_system_reduced_transparency(false);
+    rt.frame(0.0);
+    let els = rt.elements();
+    assert_eq!(info(&els, "bar").backdrop_blur, 24.0);
+    assert_eq!(info(&els, "both").backdrop_blur, 12.0);
+
+    // Clearing backdrop_blur returns to 0.0 immediately.
+    rt.update(|frosted, _| *frosted = false);
+    rt.frame(0.0);
+    let els = rt.elements();
+    assert_eq!(info(&els, "bar").backdrop_blur, 0.0);
+    assert_eq!(ElementInfo::stub("stub").backdrop_blur, 0.0);
+}
+
+#[test]
+fn presented_pose_includes_active_stuck_shadows_at_current_fade() {
+    use crate::Shadow;
+    const BASE: Shadow = Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.2 }, inset: false };
+    const DROP: Shadow = Shadow { x: 0.0, y: 4.0, blur: 12.0, spread: 0.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.4 }, inset: false };
+    const HAIRLINE: Shadow = Shadow { x: 0.0, y: 1.0, blur: 0.0, spread: 0.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.2 }, inset: true };
+    const FOOTER_SH: Shadow = Shadow { x: 0.0, y: -3.0, blur: 8.0, spread: 0.0, color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.5 }, inset: false };
+    let view = |_: &(), _: &mut Cx<()>| {
+        let bar = row().key("bar").w_full().h(54.0).fill(Color::WHITE)
+            .backdrop_blur(24.0)
+            .sticky_top(0.0)
+            .stuck_shadow(DROP);
+        let combo = row().key("combo").w_full().h(30.0).fill(Color::WHITE)
+            .box_shadow(BASE)
+            .sticky_top(0.0)
+            .stuck_shadow(DROP)
+            .stuck_shadow(HAIRLINE);
+        let footer = row().key("footer").w_full().h(24.0).fill(Color::WHITE)
+            .sticky_bottom(0.0)
+            .stuck_shadow(FOOTER_SH);
+        col().key("scroll").size(300.0, 200.0).scroll(ScrollSpec::default())
+            .child(
+                col().w_full()
+                    .child(col().w_full().child(bar).child(el().key("body").w_full().h(400.0).fill(BLUE)))
+                    .child(col().w_full().child(combo).child(el().w_full().h(400.0)))
+                    .child(footer),
+            )
+    };
+    let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+
+    // At scroll 0, bar is not stuck: backdrop_blur is reported, stuck_shadow is absent.
+    let els = rt.elements();
+    assert_eq!(info(&els, "bar").stuck, 0.0);
+    assert_eq!(info(&els, "bar").backdrop_blur, 24.0);
+    assert_eq!(info(&els, "bar").blur, 0.0);
+    assert!(rt.presented_pose("bar").unwrap().shadows().is_empty());
+    assert!(rt.presented_pose("body").unwrap().shadows().is_empty());
+    assert_eq!(rt.presented_pose("combo").unwrap().shadows(), &[BASE]);
+
+    // Footer at the bottom is already stuck upward (negative stuck shift > 8pt): full fade.
+    let f_info = info(&els, "footer");
+    assert!(f_info.stuck <= -8.0, "footer stuck shift: {}", f_info.stuck);
+    let f_shadows = rt.presented_pose("footer").unwrap();
+    assert_eq!(f_shadows.shadows(), &[FOOTER_SH]);
+
+    // Halfway through the 8pt fade ramp (stuck == 4pt): stuck shadow alpha is halved.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 4.0));
+    rt.frame(1.0 / 120.0);
+    let els = rt.elements();
+    assert!((info(&els, "bar").stuck - 4.0).abs() < 1e-3);
+    let half_pose = rt.presented_pose("bar").unwrap();
+    assert_eq!(half_pose.shadows().len(), 1);
+    assert_eq!(half_pose.shadows()[0].y, DROP.y);
+    assert_eq!(half_pose.shadows()[0].blur, DROP.blur);
+    assert!((half_pose.shadows()[0].color.a - DROP.color.a * 0.5).abs() < 1e-4, "half fade: {:?}", half_pose.shadows()[0]);
+
+    // Past the ramp (stuck == 60pt): stuck shadow is at full alpha.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 60.0));
+    for _ in 0..4 { rt.frame(1.0 / 120.0); }
+    let els = rt.elements();
+    assert!((info(&els, "bar").stuck - 60.0).abs() < 1e-3);
+    assert_eq!(info(&els, "bar").backdrop_blur, 24.0);
+    assert_eq!(info(&els, "bar").blur, 0.0);
+    let full_pose = rt.presented_pose("bar").unwrap();
+    assert_eq!(full_pose.shadows(), &[DROP]);
+
+    // Scroll into the second section so `combo` sticks past 8pt: box_shadow precedes stuck_shadows.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 480.0));
+    rt.frame(1.0 / 120.0);
+    let combo_pose = rt.presented_pose("combo").unwrap();
+    assert_eq!(combo_pose.shadows(), &[BASE, DROP, HAIRLINE]);
 }

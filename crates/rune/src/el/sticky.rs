@@ -85,6 +85,9 @@ impl El {
     /// [`El::sticky_left`] element is stuck, fading in over its first 8 points of shift, so it
     /// follows the scroll exactly: an elevation under a stuck header, or a hairline divider with
     /// `Shadow { y: 0.5, color, ..Default::default() }` under an opaque one. Several stack.
+    /// Active stuck shadows appear at their current fade in
+    /// [`Runtime::presented_pose`](crate::Runtime::presented_pose) (`Pose::shadows`) and in
+    /// `--tree` JSON under `shadows`.
     pub fn stuck_shadow(mut self, shadow: Shadow) -> Self {
         self.cold_mut().sticky.get_or_insert_with(Default::default).shadows.push(shadow);
         self

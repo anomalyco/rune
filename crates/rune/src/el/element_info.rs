@@ -25,6 +25,7 @@ impl Default for ElementInfo {
             layer_opacity: 1.0,
             scale: 1.0,
             blur: 0.0,
+            backdrop_blur: 0.0,
             radius: 0.0,
             fill: Color::TRANSPARENT,
             border_color: None,

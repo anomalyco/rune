@@ -1,0 +1,1 @@
+- Element inspection: added `ElementInfo::backdrop_blur` (reporting presented `El::backdrop_blur` sigma in points, `0.0` under Reduce Transparency), included active `El::stuck_shadow`s at their current sticky fade in `Runtime::presented_pose` (`Pose::shadows`), and emitted `backdropBlur`, non-zero `stuck`, and presented `shadows` in `--tree` JSON.

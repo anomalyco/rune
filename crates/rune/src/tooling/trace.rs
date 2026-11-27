@@ -441,8 +441,20 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     tree_json_core(rt.core(), real_t)
 }
 
+fn shadow_json(s: &crate::el::Shadow) -> Value {
+    json!({
+        "x": r2(s.x),
+        "y": r2(s.y),
+        "blur": r2(s.blur),
+        "spread": r2(s.spread),
+        "color": s.color.hex(),
+        "inset": s.inset,
+    })
+}
+
 pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     let videos = rt.tree.videos();
+    let shadows = rt.presented_shadows_by_path();
     // The pointer's shape (`Runtime::cursor`) and the element it is read from.
     let cursor = rt.cursor().css_name();
     let cursor_path = rt.cursor_path();
@@ -458,6 +470,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
                 "layerOpacity": r3(e.layer_opacity),
                 "scale": (e.scale * 10000.0).round() / 10000.0,
                 "blur": r2(e.blur),
+                "backdropBlur": r2(e.backdrop_blur),
                 "radius": r2(e.radius),
                 "focusable": e.focusable, "focused": e.focused,
                 "focusVisible": e.focus_visible, "inert": e.inert,
@@ -532,8 +545,14 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if e.drag_out {
                 v["dragOut"] = true.into();
             }
+            if e.stuck.abs() > 0.001 {
+                v["stuck"] = r2(e.stuck).into();
+            }
             if e.material_fallback {
                 v["materialFallback"] = true.into();
+            }
+            if let Some(sh) = shadows.get(&e.path) {
+                v["shadows"] = sh.iter().map(shadow_json).collect::<Vec<_>>().into();
             }
             if let Some(c) = e.caret && !secure {
                 v["caret"] = c.map(r2).to_vec().into();

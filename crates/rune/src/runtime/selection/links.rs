@@ -652,7 +652,7 @@ impl RuntimeCore {
                 let (x1, y1) = (r[2].min(v[0] + v[2]), r[3].min(v[1] + v[3]));
                 let words = (!spec.redacted).then(|| spec.source_slice(l.start, l.end).map(str::to_owned)).flatten();
                 elements.push(ElementInfo {
-                    stuck: 0.0,
+                    backdrop_blur: 0.0, stuck: 0.0,
                     material_fallback: false,
                     border_color: None,
                     description: None,
@@ -821,7 +821,7 @@ impl RuntimeCore {
                 let (x1, y1) = (r[2].min(v[0] + v[2]), r[3].min(v[1] + v[3]));
                 let words = spec.source_slice(h.start, h.end).map(str::to_owned);
                 elements.push(ElementInfo {
-                    stuck: 0.0,
+                    backdrop_blur: 0.0, stuck: 0.0,
                     material_fallback: false,
                     border_color: None,
                     description: None,
