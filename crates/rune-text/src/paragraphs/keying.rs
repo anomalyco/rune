@@ -166,6 +166,34 @@ pub(crate) struct LineScan {
     flags: Vec<u8>,
 }
 
+/// A text's content, layout spans, and key inputs that aren't per paragraph, so an edit keys only
+/// the paragraphs it touched and takes the others' keys as they were.
+#[derive(Clone)]
+pub(crate) struct Keyed {
+    pub(super) content: Rc<str>,
+    pub(super) spans: Option<Rc<[Span]>>,
+    pub(super) disjoint_spans: bool,
+    pub(super) style_key: u64,
+    pub(super) start_flow: Flow,
+}
+
+impl Keyed {
+    /// Builds [`Keyed`] for a layout pass, sharing `content` and `spans` with `last` when equal so
+    /// measuring at two widths allocates neither twice.
+    pub(super) fn new(last: Option<&ParagraphLayout>, content: &str, layout_spans: &[Span], disjoint_spans: bool, style_key: u64, start_flow: Flow) -> Self {
+        let last_keyed = last.and_then(|l| l.keyed.as_ref());
+        let content = last_keyed.map(|k| k.content.clone()).filter(|c| **c == *content).unwrap_or_else(|| Rc::from(content));
+        let spans = (!layout_spans.is_empty()).then(|| {
+            last_keyed
+                .and_then(|k| k.spans.as_ref())
+                .filter(|s| s.as_ref() == layout_spans)
+                .cloned()
+                .unwrap_or_else(|| Rc::from(layout_spans))
+        });
+        Self { content, spans, disjoint_spans, style_key, start_flow }
+    }
+}
+
 /// The paragraphs an edit left whole, with their keys: those before it (`head`) and after it
 /// (`tail`, moved to their new bytes), and the direction the paragraph before the tail had.
 pub(super) struct Reuse {
@@ -174,23 +202,35 @@ pub(super) struct Reuse {
     pub(super) entering: Flow,
 }
 
-/// `prev`'s paragraphs that `content` keeps byte for byte, newline included, when `prev` was a
-/// plain text in the same style and starting direction. The edit is what lies between the
-/// texts' common start and common end.
-pub(super) fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, start_flow: Flow, last: &mut Option<([usize; 4], usize, usize)>) -> Option<Reuse> {
+/// `prev`'s paragraphs that `content` keeps byte for byte (newline and layout spans included),
+/// when `prev` had no pills, boxes, indent or non-paragraph blocks in the same style and starting
+/// direction. The edit is what lies between the texts' common start and common end, narrowed to
+/// cover any changed layout spans.
+pub(super) fn reuse_keys(
+    prev: &ParagraphLayout,
+    content: &str,
+    layout_spans: &[Span],
+    layout_disjoint: bool,
+    style_key: u64,
+    start_flow: Flow,
+    last: &mut Option<([usize; 4], usize, usize)>,
+) -> Option<Reuse> {
     let keyed = prev.keyed.as_ref().filter(|k| k.style_key == style_key && k.start_flow == start_flow)?;
     let (old, new) = (keyed.content.as_bytes(), content.as_bytes());
     // The same two texts as the last comparison this commit (both are alive till it ends).
     let texts = [old.as_ptr() as usize, old.len(), new.as_ptr() as usize, new.len()];
-    let (prefix, suffix) = match *last {
+    let (raw_prefix, raw_suffix) = match *last {
         Some((t, p, s)) if t == texts => (p, s),
         _ => {
             let prefix = common_start(old, new);
-            let suffix = common_end(old, new).min(old.len().min(new.len()) - prefix);
+            let suffix = common_end(old, new);
             *last = Some((texts, prefix, suffix));
             (prefix, suffix)
         }
     };
+    let old_spans = keyed.spans.as_deref().unwrap_or(&[]);
+    let (prefix, suffix) = bound_by_spans(old_spans, keyed.disjoint_spans, old.len(), layout_spans, layout_disjoint, new.len(), raw_prefix, raw_suffix);
+    let suffix = suffix.min(old.len().min(new.len()) - prefix);
     let ps = &prev.paragraphs;
     // Before the edit: its newline too. After it: the newline before it too.
     let h = ps.partition_point(|p| next_line_start(old, p.end) <= prefix);
@@ -201,6 +241,75 @@ pub(super) fn reuse_keys(prev: &ParagraphLayout, content: &str, style_key: u64, 
         tail: ps[t..].iter().map(|p| (moved(p.start), moved(p.end), p.flow, p.key, Box::default(), p.run.then_some((p.height, p.widths[0], p.lines)))).collect(),
         entering: t.checked_sub(1).map_or(start_flow, |i| ps[i].flow),
     })
+}
+
+/// Narrows `prefix` and `suffix` so every paragraph strictly inside `..prefix` or
+/// `len - suffix..` sees the exact same sequence of layout spans in `old_spans` and `new_spans`.
+#[allow(clippy::too_many_arguments)]
+fn bound_by_spans(
+    old_spans: &[Span],
+    old_disjoint: bool,
+    old_len: usize,
+    new_spans: &[Span],
+    new_disjoint: bool,
+    new_len: usize,
+    mut prefix: usize,
+    mut suffix: usize,
+) -> (usize, usize) {
+    if old_spans.is_empty() && new_spans.is_empty() {
+        return (prefix, suffix);
+    }
+    let lo = old_spans.iter().zip(new_spans).take_while(|(a, b)| {
+        a.start == b.start && a.end == b.end && a.layout_attr_key() == b.layout_attr_key()
+    }).count();
+    let hi = old_spans[lo..].iter().rev().zip(new_spans[lo..].iter().rev()).take_while(|(a, b)| {
+        old_len.checked_sub(a.start as usize).zip(new_len.checked_sub(b.start as usize)).is_some_and(|(os, ns)| os == ns)
+            && old_len.checked_sub(a.end as usize).zip(new_len.checked_sub(b.end as usize)).is_some_and(|(oe, ne)| oe == ne)
+            && a.layout_attr_key() == b.layout_attr_key()
+    }).count();
+    let old_rem = old_spans.len() - hi;
+    let new_rem = new_spans.len() - hi;
+    let shifted = old_len != new_len;
+    let min_start = |spans: &[Span], disjoint: bool| -> Option<usize> {
+        if disjoint {
+            spans.first().map(|s| s.start as usize)
+        } else {
+            spans.iter().map(|s| s.start as usize).min()
+        }
+    };
+    let max_end = |spans: &[Span], disjoint: bool| -> Option<usize> {
+        if disjoint {
+            spans.last().map(|s| s.end as usize)
+        } else {
+            spans.iter().map(|s| s.end as usize).max()
+        }
+    };
+    // When the length changed, suffix-aligned spans shifted relative to the start (invalidating
+    // prefix reuse where they reach) and prefix-aligned spans did not shift (invalidating suffix
+    // reuse where they reach); when the length is unchanged, only the unmatched middle differs.
+    let (old_pref, new_pref) = if shifted {
+        (&old_spans[lo..], &new_spans[lo..])
+    } else {
+        (&old_spans[lo..old_rem], &new_spans[lo..new_rem])
+    };
+    if let Some(s) = min_start(old_pref, old_disjoint) {
+        prefix = prefix.min(s);
+    }
+    if let Some(s) = min_start(new_pref, new_disjoint) {
+        prefix = prefix.min(s);
+    }
+    let (old_suf, new_suf) = if shifted {
+        (&old_spans[..old_rem], &new_spans[..new_rem])
+    } else {
+        (&old_spans[lo..old_rem], &new_spans[lo..new_rem])
+    };
+    if let Some(e) = max_end(old_suf, old_disjoint) {
+        suffix = suffix.min(old_len.saturating_sub(e));
+    }
+    if let Some(e) = max_end(new_suf, new_disjoint) {
+        suffix = suffix.min(new_len.saturating_sub(e));
+    }
+    (prefix, suffix)
 }
 
 /// How many bytes two texts share from their start: compared 4 KB at a time (one memcmp each;

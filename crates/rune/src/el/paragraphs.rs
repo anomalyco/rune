@@ -5,8 +5,9 @@ use rune_text::paragraph_ranges as paragraphs;
 
 impl El {
     /// Lays out each newline-ended line as its own `Layout`, reusing
-    /// unchanged lines across commits (shaping only changed lines; per-commit keying still hashes
-    /// each line when spans are present, and long plain/colour-only ASCII interiors in a
+    /// unchanged lines across commits (shaping only changed lines; per-commit keying reuses
+    /// unchanged prefix and suffix keys even when layout spans are present, and long
+    /// plain/colour-only ASCII interiors in a
     /// start-aligned, LTR, fixed-pitch monospace face wait as runs even when other lines carry
     /// layout spans; if the monospace slot resolves to a proportional fallback—such as on a host
     /// with no monospace font installed and none bundled—lines shape eagerly instead) while staying

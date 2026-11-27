@@ -409,3 +409,200 @@ fn layout_text_and_fill_paragraphs_ignore_prev_from_older_shaped_epoch() {
         "fill_paragraphs must ignore a ParagraphLayout from an older shaped_epoch",
     );
 }
+
+fn build_markdown_like_doc(lines: &[String]) -> (String, Vec<Span>) {
+    let mut content = String::new();
+    let mut spans = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let start = content.len();
+        content.push_str(line);
+        let end = content.len();
+        if line.starts_with("# ") {
+            spans.push(Span::new(start, end).size(20.0).bold());
+            // Overlapping inline italic span inside heading (tests layout_disjoint == false).
+            if end - start > 6 {
+                spans.push(Span::new(start + 2, start + 6).italic());
+            }
+        } else if line.starts_with("**") && end - start > 8 {
+            spans.push(Span::new(start, start + 4).bold());
+            spans.push(Span::new(start + 5, end).italic());
+        } else if line.starts_with("__") && end > start {
+            spans.push(Span::new(start, end).underline(Color::BLACK));
+        }
+        if i + 1 < lines.len() {
+            content.push('\n');
+        }
+    }
+    (content, spans)
+}
+
+#[test]
+fn spanned_multiline_edits_reuse_unchanged_paragraphs() {
+    let style = TextStyle::new(14.0, 400.0);
+    let scale = 2.0;
+    let max_w = Some(600.0 * scale);
+    let mut lines: Vec<String> = (0..220)
+        .map(|i| {
+            if i % 25 == 0 {
+                format!("# Heading {i:03} section title")
+            } else if i % 7 == 0 {
+                format!("**Bold** and italic line {i:03} in a markdown document")
+            } else if i % 11 == 0 {
+                format!("__Underlined__ line {i:03} in a markdown document")
+            } else {
+                format!("Paragraph {i:03} with plain ASCII text in a markdown document")
+            }
+        })
+        .collect();
+
+    let (content, spans) = build_markdown_like_doc(&lines);
+    let mut ts = mono_text_system();
+
+    // Initial load still defers plain ASCII interior paragraphs (#1900).
+    let tl0 = ts.layout_text(&rich_input(&content, &spans, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, None);
+    let pl0 = as_paragraphs(&tl0);
+    assert!(pl0.waiting(), "initial spanned load should keep plain interior lines deferred");
+    assert_waiting_runs_span_free(pl0, &spans);
+
+    // Editing at the end while waiting runs still exist keeps those waiting runs and shapes only the edited line.
+    let mut lines_while_waiting = lines.clone();
+    lines_while_waiting[219].push('!');
+    let (cw, sw) = build_markdown_like_doc(&lines_while_waiting);
+    let shaped_before = ts.shaped;
+    let tlw = ts.layout_text(&rich_input(&cw, &sw, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&tl0));
+    let plw = as_paragraphs(&tlw);
+    assert!(plw.waiting(), "edit at end while waiting runs exist must keep interior runs waiting");
+    assert!(ts.shaped - shaped_before <= 2, "edit while waiting should shape only edited line, got {}", ts.shaped - shaped_before);
+
+    // Fill all waiting paragraphs, matching a settled editor after initial load.
+    let (filled, moved) = ts
+        .fill_paragraphs(pl0, std::time::Duration::MAX, (0.0, f32::INFINITY), f32::INFINITY)
+        .expect("fill all");
+    assert!(!moved);
+    assert!(!filled.waiting());
+    let mut cur_tl = TextLayout::Paragraphs(filled);
+
+    // Edit at start, middle (plain + spanned), end, same-length replacement, newline insert/delete.
+    let edits: Vec<(&str, Box<dyn Fn(&mut Vec<String>)>)> = vec![
+        ("start", Box::new(|l| l[0].push('x'))),
+        ("middle_plain", Box::new(|l| l[111].push('y'))),
+        ("middle_spanned", Box::new(|l| l[100].push('z'))),
+        ("end", Box::new(|l| l[219].push('w'))),
+        ("same_len_replace", Box::new(|l| {
+            let last = if l[111].ends_with('A') { 'B' } else { 'A' };
+            l[111].pop();
+            l[111].push(last);
+        })),
+        ("insert_newline", Box::new(|l| l.insert(112, "inserted plain line".to_string()))),
+        ("delete_newline", Box::new(|l| { l.remove(112); })),
+    ];
+
+    for (label, apply) in edits {
+        apply(&mut lines);
+        let (c, s) = build_markdown_like_doc(&lines);
+        let shaped_before = ts.shaped;
+        let next_tl = ts.layout_text(&rich_input(&c, &s, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&cur_tl));
+        let next_pl = as_paragraphs(&next_tl);
+        let shaped_delta = ts.shaped - shaped_before;
+        assert!(
+            shaped_delta <= 2,
+            "{label}: expected at most 2 reshaped paragraphs, got {shaped_delta}",
+        );
+        assert!(
+            !next_pl.waiting(),
+            "{label}: editing an already-shaped spanned document must not re-defer paragraphs",
+        );
+        assert_eq!(next_pl.paragraphs.len(), lines.len(), "{label}: paragraph count");
+
+        // Fresh layout from scratch must agree on total height and paragraph boundaries.
+        let mut fresh_ts = mono_text_system();
+        let fresh_tl = fresh_ts.layout_text(&rich_input(&c, &s, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, None);
+        let fresh_pl = as_paragraphs(&fresh_tl);
+        assert!(
+            (next_pl.height - fresh_pl.height).abs() < 0.01,
+            "{label}: height mismatch: incremental {} vs fresh {}",
+            next_pl.height,
+            fresh_pl.height,
+        );
+        cur_tl = next_tl;
+    }
+
+    // Span-only edit on one line (text unchanged): shapes only that paragraph.
+    let (c, mut s) = build_markdown_like_doc(&lines);
+    let line55_start = c.find("Paragraph 057").unwrap();
+    let line55_end = line55_start + "Paragraph 057".len();
+    s.push(Span::new(line55_start, line55_end).size(24.0).bold());
+    let prev_pl = as_paragraphs(&cur_tl).clone();
+    let shaped_before = ts.shaped;
+    let span_tl = ts.layout_text(&rich_input(&c, &s, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&cur_tl));
+    let span_pl = as_paragraphs(&span_tl);
+    assert_eq!(ts.shaped - shaped_before, 1, "adding a span on one line must shape only that paragraph");
+    assert!(!span_pl.waiting());
+    assert!(span_pl.paragraphs[57].height > prev_pl.paragraphs[57].height, "24pt span must take effect on line 57");
+    assert!(Rc::ptr_eq(&span_pl.paragraphs[0].layout, &prev_pl.paragraphs[0].layout), "line 0 layout reused");
+    assert!(Rc::ptr_eq(&span_pl.paragraphs[219].layout, &prev_pl.paragraphs[219].layout), "line 219 layout reused");
+
+    // Multi-line span edit: editing outside keeps all other paragraphs; editing inside updates only covered lines.
+    let mut multi_spans = s.clone();
+    let m_start = c.find("Paragraph 080").unwrap();
+    let m_end = c.find("Paragraph 082").unwrap() + "Paragraph 082".len();
+    multi_spans.push(Span::new(m_start, m_end).italic());
+    let multi_tl = ts.layout_text(&rich_input(&c, &multi_spans, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&span_tl));
+    let multi_pl = as_paragraphs(&multi_tl);
+    assert!(!multi_pl.waiting());
+    // Changing only underline color (no layout-attribute change) shapes nothing.
+    let mut recolored = multi_spans.clone();
+    for sp in &mut recolored {
+        if sp.underline.is_some() {
+            sp.underline = Some(Color::WHITE);
+        }
+    }
+    let shaped_before = ts.shaped;
+    let recolored_tl = ts.layout_text(&rich_input(&c, &recolored, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&multi_tl));
+    assert_eq!(ts.shaped - shaped_before, 0, "recolouring underline span must not reshape any paragraph");
+    assert!(Rc::ptr_eq(&as_paragraphs(&recolored_tl).paragraphs[57].layout, &multi_pl.paragraphs[57].layout));
+
+    // Pasting > LAZY_MIN lines into the middle of a settled spanned document keeps surrounding
+    // paragraphs and defers the newly pasted plain interior.
+    let mut pasted_lines = lines.clone();
+    let paste_block: Vec<String> = (0..120).map(|i| format!("pasted line {i:03} plain ascii")).collect();
+    pasted_lines.splice(112..112, paste_block);
+    let (pc, ps) = build_markdown_like_doc(&pasted_lines);
+    let pasted_tl = ts.layout_text(&rich_input(&pc, &ps, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, Some(&cur_tl));
+    let pasted_pl = as_paragraphs(&pasted_tl);
+    assert!(pasted_pl.waiting(), "large paste into spanned doc should defer its plain ASCII interior");
+    assert_waiting_runs_span_free(pasted_pl, &ps);
+    assert!(Rc::ptr_eq(&pasted_pl.paragraphs[0].layout, &prev_pl.paragraphs[0].layout), "head preserved across large paste");
+    assert!(Rc::ptr_eq(&pasted_pl.paragraphs.last().unwrap().layout, &prev_pl.paragraphs.last().unwrap().layout), "tail preserved across large paste");
+}
+
+#[test]
+fn by_line_spanned_streaming_append_reuses_shaped_and_waiting_paragraphs() {
+    let head = "A".repeat(1500);
+    let tail: String = (0..300).map(|i| format!("line {i:03} plain ascii\n")).collect();
+    let mut content = format!("{head}\n{tail}");
+    let spans = [Span::new(0, head.len()).underline(Color::BLACK)];
+    let style = TextStyle::new(13.0, 400.0).mono();
+    let scale = 2.0;
+    let max_w = Some(320.0 * scale);
+
+    let mut ts = mono_text_system();
+    let tl0 = ts.layout_text(&rich_input(&content, &spans, style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
+    let pl0 = as_paragraphs(&tl0);
+    assert!(pl0.waiting());
+
+    // Fill all waiting paragraphs, then append a line (simulating a scrolled/settled streaming log).
+    let (filled, moved) = ts
+        .fill_paragraphs(pl0, std::time::Duration::MAX, (0.0, f32::INFINITY), f32::INFINITY)
+        .expect("fill");
+    assert!(!moved);
+    let filled_tl = TextLayout::Paragraphs(filled.clone());
+
+    content.push_str("line 300 appended\n");
+    let shaped_before = ts.shaped;
+    let tl1 = ts.layout_text(&rich_input(&content, &spans, style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, Some(&filled_tl));
+    let pl1 = as_paragraphs(&tl1);
+    assert!(!pl1.waiting(), "appending one line must not re-defer already-shaped lines");
+    assert!(ts.shaped - shaped_before <= 2, "streaming append must shape only the new line, got {}", ts.shaped - shaped_before);
+    assert!(Rc::ptr_eq(&pl1.paragraphs[100].layout, &filled.paragraphs[100].layout), "interior line 100 reused");
+}

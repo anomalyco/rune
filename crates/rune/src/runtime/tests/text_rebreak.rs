@@ -232,3 +232,101 @@ fn by_line_rich_log_with_underline_defers_offscreen_plain_lines() {
     assert_eq!(underlined.stats.shaped, 0, "idle frame shapes nothing");
     assert!(log_layout(&underlined).waiting(), "far off-screen lines remain deferred while idle");
 }
+
+#[test]
+fn spanned_multiline_text_input_keystrokes_shape_only_edited_paragraph() {
+    fn markdown_spans(content: &str) -> Vec<crate::Span> {
+        let mut spans = Vec::new();
+        let mut at = 0;
+        for line in content.split('\n') {
+            let end = at + line.len();
+            if line.starts_with("# ") {
+                spans.push(crate::Span::new(at, end).size(20.0).bold());
+            } else if line.starts_with("**") && line.len() > 8 {
+                spans.push(crate::Span::new(at, at + 4).bold());
+                spans.push(crate::Span::new(at + 5, end).italic());
+            }
+            at = end + 1;
+        }
+        spans
+    }
+
+    fn editor_view(edit: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
+        let spans = markdown_spans(&edit.text);
+        col()
+            .key("viewport")
+            .size(600.0, 500.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(
+                crate::text_input(edit, crate::TextStyle::new(14.0, 400.0))
+                    .spans(spans)
+                    .key("editor")
+                    .label("editor")
+                    .w(580.0)
+                    .on_edit(|e: &mut crate::TextEdit| e),
+            )
+    }
+
+    let doc: String = (0..220)
+        .map(|i| {
+            if i % 20 == 0 {
+                format!("# Heading {i:03} section")
+            } else if i % 5 == 0 {
+                format!("**Bold** and italic body line {i:03}")
+            } else {
+                format!("Plain ASCII paragraph line {i:03} in a long markdown post")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut edit = crate::TextEdit::new(doc);
+    edit.focused = true;
+
+    const INTER: &[u8] = include_bytes!("../../../assets/Inter-Regular.ttf");
+    const PLEX: &[u8] = include_bytes!("../../../assets/IBMPlexMono-Regular.ttf");
+    let _fonts = crate::text::with_fonts(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+
+    let mut rt = Runtime::with_text(
+        edit,
+        editor_view,
+        (600.0, 500.0),
+        Env::new(true, 2.0),
+        crate::text::TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono")),
+    );
+    rt.frame(0.0);
+    let editor_waiting = |rt: &Runtime<crate::TextEdit>| {
+        let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("editor")).unwrap();
+        matches!(n.text_layout.as_ref(), Some(crate::text::TextLayout::Paragraphs(p)) if p.waiting())
+    };
+    assert!(editor_waiting(&rt), "initial load of >64-line spanned text_input should defer plain interior");
+    // Let lazy fills settle completely (debug builds take a few dozen 1.5 ms frames).
+    for f in 1..400 {
+        if !rt.frame(f as f64 / 60.0) && !editor_waiting(&rt) {
+            break;
+        }
+    }
+    assert!(!editor_waiting(&rt), "editor should finish background fill before keystroke checks");
+
+    // Type at start, middle, and end: each single-character edit must shape only its paragraph.
+    let start_pos = 2;
+    let mid_pos = rt.state.text.find("Plain ASCII paragraph line 111").unwrap() + 5;
+    let end_pos = rt.state.text.len();
+    for (step, (label, pos)) in [("start", start_pos), ("middle", mid_pos), ("end", end_pos)].into_iter().enumerate() {
+        rt.update(|e, _| {
+            e.anchor = pos;
+            e.focus = pos;
+            e.insert("x");
+        });
+        rt.frame(10.0 + step as f64 / 60.0);
+        assert!(
+            !editor_waiting(&rt),
+            "{label}: editing an already-shaped spanned text_input must not re-defer paragraphs",
+        );
+        assert!(
+            rt.stats.shaped <= 2,
+            "{label}: single-character edit reshaped {} paragraphs (expected <= 2)",
+            rt.stats.shaped,
+        );
+    }
+}
