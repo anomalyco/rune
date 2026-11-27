@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{KeyboardDispatch, step_immediate_core};
+use super::{KeyboardDispatch, should_redraw_after_polled_keys, step_immediate_core};
 use crate::frame::clock::{FrameClock, RESUME_STEP};
 use crate::input::host_events::{KeyInput, ime_core, keyboard_core};
 use crate::runtime::Runtime;
@@ -444,4 +444,59 @@ fn immediate_dispatch_noop_when_nothing_queued() {
 
     assert!(!step_rt(KeyboardDispatch::Immediate, &mut rt, &mut clock, t0 + Duration::from_millis(5), false));
     assert_eq!(rt.stats.commits, commits_before);
+}
+
+#[test]
+fn polled_keys_gate_skips_immediate_dispatch_when_nothing_queued_and_handles_missing_loop() {
+    // 1. Empty per-turn poll (redraw == false) must never invoke immediate dispatch, even when
+    //    an event loop is present and unrelated pointer input is waiting in the runtime.
+    let mut rt = Runtime::new(
+        0usize,
+        |_, _| el().size(100.0, 100.0).on_press(|clicks: &mut usize| *clicks += 1),
+        (100.0, 100.0),
+        Env::default(),
+    );
+    let t0 = crate::time::now();
+    let mut clock = FrameClock::new(t0);
+    clock.advance(&mut rt, t0, false);
+    rt.pointer_move(24.0, 24.0);
+    rt.pointer_down(24.0, 24.0);
+    rt.pointer_up(24.0, 24.0);
+    assert!(rt.has_input_waiting());
+
+    let mut calls = 0usize;
+    let redraw = should_redraw_after_polled_keys(false, Some(()), |()| {
+        calls += 1;
+        step_rt(KeyboardDispatch::Immediate, &mut rt, &mut clock, t0 + Duration::from_millis(2), false)
+    });
+    assert!(!redraw);
+    assert_eq!(calls, 0, "empty fn_key/media_keys poll must not call dispatch_immediate_keyboard");
+    assert_eq!(rt.state, 0, "queued pointer click must not be drained by an empty key poll");
+    assert!(rt.has_input_waiting(), "queued pointer input must remain untouched for normal pacing");
+
+    // 2. Host::stop_showing passes event_loop = None: queued keys skip immediate dispatch and
+    //    still request a redraw.
+    let mut stop_calls = 0usize;
+    assert!(should_redraw_after_polled_keys(true, Option::<()>::None, |()| {
+        stop_calls += 1;
+        true
+    }));
+    assert_eq!(stop_calls, 0);
+
+    // 3. Queued keys with Some(event_loop): dispatched suppresses duplicate redraw; batched keeps it.
+    let mut imm_calls = 0usize;
+    assert!(!should_redraw_after_polled_keys(true, Some(()), |()| {
+        imm_calls += 1;
+        step_rt(KeyboardDispatch::Immediate, &mut rt, &mut clock, t0 + Duration::from_millis(3), false)
+    }));
+    assert_eq!(imm_calls, 1);
+    assert_eq!(rt.state, 1);
+    assert!(!rt.has_input_waiting());
+
+    let mut batched_calls = 0usize;
+    assert!(should_redraw_after_polled_keys(true, Some(()), |()| {
+        batched_calls += 1;
+        step_rt(KeyboardDispatch::Batched, &mut rt, &mut clock, t0 + Duration::from_millis(4), false)
+    }));
+    assert_eq!(batched_calls, 1);
 }

@@ -147,6 +147,22 @@ pub(crate) fn step_immediate_core(
     true
 }
 
+/// Decides whether a polled keyboard batch (`Host::fn_key`, `Host::media_keys`) still needs
+/// `request_redraw`, attempting immediate keyboard dispatch only when `queued` is true and an
+/// event loop is available.
+///
+/// Short-circuiting on `queued` keeps empty per-turn polls from calling
+/// `dispatch_immediate_keyboard` (which would otherwise read `RUNE_KEYBOARD_DISPATCH` on every
+/// turn and drain unrelated queued pointer input under `KeyboardDispatch::Immediate`).
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) fn should_redraw_after_polled_keys<E>(
+    queued: bool,
+    event_loop: Option<E>,
+    dispatch_immediate: impl FnOnce(E) -> bool,
+) -> bool {
+    queued && !event_loop.is_some_and(dispatch_immediate)
+}
+
 impl<S: 'static> crate::App<S> {
     /// Controls when this native window drains queued keyboard input ([`KeyboardDispatch`]).
     ///

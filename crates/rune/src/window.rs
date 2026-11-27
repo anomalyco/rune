@@ -92,6 +92,8 @@ pub use cpu_first::CpuFirst;
 pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
 pub use keyboard_dispatch::KeyboardDispatch;
+#[cfg(target_os = "macos")]
+pub(crate) use keyboard_dispatch::should_redraw_after_polled_keys;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use keyboard_dispatch::step_immediate_core;
 pub use resize_sync::ResizeSync;
