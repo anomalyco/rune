@@ -125,11 +125,14 @@ fn a_covered_window_takes_a_drop_on_the_tree_it_has_now() {
     assert_eq!(dropped(&rt), [("outer", vec!["a.png"])], "not the inner zone, which has gone");
     assert_eq!(rt.state.hover, [("outer", true), ("outer", false)]);
 
-    // Nor the zone behind a modal opened while covered (which, still fading in, takes none).
+    // Nor the zone behind a modal opened while covered; a drop inside the entering modal lands on it.
     rt.update(|s, _| s.modal = true);
+    rt.drop_files(files(&["blocked.png"]), Some((50.0, 50.0)));
+    rt.hidden_wake();
+    assert_eq!(dropped(&rt).len(), 1, "the zone behind the modal takes nothing");
     rt.drop_files(files(&["b.png"]), Some((150.0, 150.0)));
     rt.hidden_wake();
-    assert_eq!(dropped(&rt).len(), 1);
+    assert_eq!(dropped(&rt), [("outer", vec!["a.png"]), ("modal", vec!["b.png"])]);
 }
 
 #[test]
