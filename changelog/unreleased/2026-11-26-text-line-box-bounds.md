@@ -1,0 +1,1 @@
+- Text fields: `Runtime::text_line` and `Tx::text_line` now measure each visual line from Parley's line-box bounds (`block_min_coord..block_max_coord`) rather than `TextFlow::caret`'s glyph-expanded bounds, so fields using fonts with negative half-leading (or tight explicit line heights) report stacked, non-overlapping line boxes that stay inside the field's top edge.

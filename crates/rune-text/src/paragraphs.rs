@@ -489,6 +489,24 @@ impl<'a> TextFlow<'a> {
         bb
     }
 
+    /// Vertical line-box extent `(top, bottom)` in device px of the visual line holding content
+    /// byte `at` on `side`: `[block_min_coord, block_max_coord]` (or `[p.y, p.y + p.height]` on a
+    /// blank or unlined paragraph), matching [`Self::line_span`] and [`Self::block_lines`] so
+    /// stacked lines never overlap or protrude above the field when a font has negative
+    /// half-leading.
+    #[doc(hidden)]
+    pub fn line_bounds(self, at: usize, side: parley::layout::Affinity) -> (f32, f32) {
+        let p = self.piece_at(at);
+        if p.is_blank() {
+            return (p.y, p.y + p.height);
+        }
+        let c = parley::editing::Cursor::from_byte_index(p.layout, p.shaped(at), side);
+        match cursor::line_block_bounds(&c, p.layout) {
+            Some((y0, y1)) => (p.y + y0, p.y + y1),
+            None => (p.y, p.y + p.height),
+        }
+    }
+
     /// The caret a press at `(x, y)` puts down.
     #[doc(hidden)] pub fn hit(self, x: f32, y: f32) -> Hit {
         let p = self.piece_at_y(y);

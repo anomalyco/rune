@@ -193,3 +193,35 @@ fn a_wrapping_composition_reads_as_one_line_and_walks_end() {
     assert_eq!(walk_both_ways(&rt), [0, 4]);
     assert_eq!(rt.text_line("f", 4).unwrap().start, 4);
 }
+
+#[test]
+fn tight_line_height_stacks_lines_without_overlap_or_negative_top() {
+    fn tight(e: &TextEdit, _: &mut Cx<TextEdit>) -> El {
+        col().size(120.0, 200.0).child(
+            text_input(e, TextStyle::new(14.0, 400.0).lh(14.0)).key("f").w_full().on_edit(|e: &mut TextEdit| e),
+        )
+    }
+    let rt = run("one\ntwo\n\nfour", tight);
+    let ls = lines(&rt);
+    assert_eq!(ls.iter().map(|l| l.start).collect::<Vec<_>>(), [0, 4, 8, 9]);
+    let field_el = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("f")).unwrap();
+    assert!(
+        ls[0].rect[1] >= field_el.rect[1],
+        "first line must not protrude above field top: line={:?}, field={:?}",
+        ls[0].rect,
+        field_el.rect,
+    );
+    for w in ls.windows(2) {
+        assert!(
+            w[1].rect[1] >= w[0].rect[1] + w[0].rect[3] - 0.5,
+            "adjacent lines must not overlap under negative half-leading: {w:?}",
+        );
+    }
+    for l in &ls {
+        assert!((l.rect[3] - 14.0).abs() <= 0.5, "line height should match 14 pt line box: {l:?}");
+    }
+    // Empty field keeps its line_px fallback height.
+    let empty = run("", tight);
+    let first = empty.text_line("f", 0).unwrap();
+    assert!((first.rect[3] - 14.0).abs() <= 0.5, "empty line height: {first:?}");
+}
