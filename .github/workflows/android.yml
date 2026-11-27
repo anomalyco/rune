@@ -1,0 +1,60 @@
+name: android
+
+# Cross-check core crates (rune and rune-kit) for Android targets on pull requests and pushes to dev.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-linux-android
+          - x86_64-linux-android
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-${{ matrix.target }}
+          cache-on-failure: true
+      - name: Configure Android NDK toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_bin="${ANDROID_NDK_LATEST_HOME:?ANDROID_NDK_LATEST_HOME is not set}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cc_path=$(ls -1 "${ndk_bin}/${{ matrix.target }}"*-clang | sort -V | tail -n 1)
+          if [ -z "${cc_path}" ] || [ ! -x "${cc_path}" ]; then
+            echo "Android NDK clang not found for ${{ matrix.target }} in ${ndk_bin}" >&2
+            exit 1
+          fi
+          ar_path="${ndk_bin}/llvm-ar"
+          target_env="${{ matrix.target }}"
+          target_env="${target_env//-/_}"
+          echo "CC_${target_env}=${cc_path}" >> "$GITHUB_ENV"
+          echo "AR_${target_env}=${ar_path}" >> "$GITHUB_ENV"
+      - name: Check rune and rune-kit
+        run: >-
+          cargo check --target ${{ matrix.target }}
+          -p rune -p rune-kit
+          --features rune/embedded-fonts,rune/accessibility,rune/tooling,rune/segmenter-dictionaries,rune/svg,rune/avif,rune-kit/markdown,rune-kit/mermaid

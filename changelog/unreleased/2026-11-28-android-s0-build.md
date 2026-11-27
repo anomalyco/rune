@@ -1,0 +1,1 @@
+- Enabled `rune` and `rune-kit` to type-check for Android targets (`aarch64-linux-android` and `x86_64-linux-android`) by selecting `winit/android-native-activity` on `target_os = "android"`, returning `false` from the `perf_warn::runq` load-average probe on Android where bionic lacks `getloadavg`, and adding an Android cross-check GitHub Actions workflow.
