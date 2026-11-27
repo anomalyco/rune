@@ -1,0 +1,1 @@
+- macOS (Metal): `ComputePass::dispatch_workgroups_indirect` is now supported on Rune's native Metal backend via `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`, with validation for `BufferUsages::INDIRECT`, 4-byte offset alignment, and buffer bounds.

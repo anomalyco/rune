@@ -101,6 +101,7 @@ pub(crate) struct BufferRaw {
 pub(crate) struct MetalBuffer {
     pub(super) store: Arc<Store>,
     pub(super) shared: Arc<Shared>,
+    pub(super) usage: wgpu::BufferUsages,
 }
 
 #[derive(Debug)]
@@ -244,8 +245,8 @@ impl BufferRaw {
 }
 
 impl MetalBuffer {
-    pub(crate) fn new(shared: &Arc<Shared>, size: u64, label: Option<&str>) -> Self {
-        MetalBuffer { store: Arc::new(Store::new(BufferRaw::new(shared, size, label))), shared: shared.clone() }
+    pub(crate) fn new(shared: &Arc<Shared>, size: u64, usage: wgpu::BufferUsages, label: Option<&str>) -> Self {
+        MetalBuffer { store: Arc::new(Store::new(BufferRaw::new(shared, size, label))), shared: shared.clone(), usage }
     }
 
     /// The storage commands recorded now read.
