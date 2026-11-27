@@ -184,6 +184,7 @@ pub(super) fn run_drag_frame<S: DragSeam>(
         pre_present();
         seam.present_shared(drag, target, size, ready_value)?
     };
+    let present_returned = consumers.frame_reports.stamp();
     sync.note_slot_release(slot_idx, release_value);
     if detach_dcomp {
         seam.detach_dcomp()?;
@@ -205,7 +206,7 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     crate::haptics::flush_live(consumers.app.rt_mut(), true);
     consumers.meter.presented();
     redraw_stage.end();
-    let _ = consumers.frame_reports.drawn(encoded, None, now, update_ms);
+    let _ = consumers.frame_reports.drawn_with_present(encoded, present_returned, None, now, update_ms, false);
     consumers.app.inspect_frame();
 
     let mut trace_finished = false;

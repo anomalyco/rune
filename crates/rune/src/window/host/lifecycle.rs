@@ -612,6 +612,7 @@ impl Host {
         let answered = quiet && ((!stale_before && self.app.rt().needs_commit()) || self.app.rt().has_pending_input());
         if quiet { self.clipboard.flush_core(self.app.rt_mut()); }
         let (changed, quiet) = (changed || answered, quiet && !answered);
+        let urgent = requests.urgent || self.app.rt_mut().take_urgent_frame();
         // A launcher's cached reveal draws nothing; a hidden one renders its changes hidden,
         // paced (`refresh_hidden`). A covered or minimised one runs them without asking for a
         // frame it wouldn't draw.
@@ -636,7 +637,10 @@ impl Host {
                 true
             }
             WakeWork::Paint => {
-                if let Some(w) = &self.win { w.request_redraw(); }
+                if let Some(w) = &mut self.win {
+                    if urgent && !w.backing_off(crate::time::now()) { w.admit_urgent_frame(); }
+                    w.request_redraw();
+                }
                 true
             }
         };

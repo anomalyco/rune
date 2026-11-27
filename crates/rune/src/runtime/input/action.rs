@@ -272,6 +272,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.evict_memos.extend(one.evict_memos);
     tx.wakes.extend(one.wakes);
     tx.request_poll |= one.request_poll;
+    tx.urgent_frame |= one.urgent_frame;
     tx.text_flights.extend(one.text_flights);
     tx.launches.extend(one.launches);
     tx.unclipped_flights |= one.unclipped_flights;

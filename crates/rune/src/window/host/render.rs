@@ -394,6 +394,7 @@ pub(super) fn submit_and_present_window(
     profile: &mut FrameProfile,
     encoded: &mut Option<Instant>,
     drawable: &mut Option<u64>,
+    present_returned: &mut Option<Instant>,
     info: &StepInfo,
 ) -> Instant {
     // macOS: the first frame of a window already on screen is taken as finished when it is
@@ -509,6 +510,7 @@ pub(super) fn submit_and_present_window(
     present_stage.end();
     // `frame` has been consumed by `queue.present`: mark released before any post-present polls.
     host.note_frame_texture_released();
+    *present_returned = host.frame_reports.stamp();
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
         return crate::time::now();
     };

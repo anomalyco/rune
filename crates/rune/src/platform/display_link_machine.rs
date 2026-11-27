@@ -248,6 +248,51 @@ pub(crate) fn step(state: &mut LinkState, event: LinkEvent) -> Effects<LinkEffec
     }
 }
 
+/// Whether a one-shot urgent frame admission is armed to bypass `Opportunity::Wait` once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum UrgentAdmission {
+    /// Normal display-link pacing applies.
+    #[default]
+    Idle,
+    /// One urgent frame has been requested; duplicate requests coalesce here and the next frame
+    /// claim or hard stop consumes it.
+    Armed,
+}
+
+/// What happens to [`UrgentAdmission`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UrgentEvent {
+    /// An urgent wake or update asked for the next frame not to wait for a display tick.
+    Request,
+    /// A frame claim or hard stop consumed any pending one-shot admission.
+    Consume,
+}
+
+/// What [`step_urgent`] authorizes on a transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UrgentEffect {
+    /// Bypass `Opportunity::Wait` once for this claim by advancing `last_target` to `now`.
+    AdmitOnce,
+}
+
+/// Pure transition for [`UrgentAdmission`].
+pub(crate) fn step_urgent(
+    state: &mut UrgentAdmission,
+    event: UrgentEvent,
+) -> Effects<UrgentEffect> {
+    match (*state, event) {
+        (UrgentAdmission::Idle | UrgentAdmission::Armed, UrgentEvent::Request) => {
+            *state = UrgentAdmission::Armed;
+            Effects::none()
+        }
+        (UrgentAdmission::Armed, UrgentEvent::Consume) => {
+            *state = UrgentAdmission::Idle;
+            Effects::one(UrgentEffect::AdmitOnce)
+        }
+        (UrgentAdmission::Idle, UrgentEvent::Consume) => Effects::none(),
+    }
+}
+
 /// When a surface's next frame draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Opportunity {
@@ -255,6 +300,9 @@ pub(crate) enum Opportunity {
     Tick(Instant),
     /// At once, aimed at no tick (`rested`).
     Now,
+    /// At once via one-shot urgent admission, bypassing `Wait` once by advancing `last_target`
+    /// to `now`.
+    UrgentNow,
     /// On a later tick.
     Wait,
 }
@@ -265,9 +313,15 @@ impl Opportunity {
     pub(crate) fn target(self) -> Option<Option<Instant>> {
         match self {
             Self::Tick(target) => Some(Some(target)),
-            Self::Now => Some(None),
+            Self::Now | Self::UrgentNow => Some(None),
             Self::Wait => None,
         }
+    }
+
+    /// Whether this opportunity bypassed display-link `Wait` via one-shot urgent admission.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn urgent_admitted(self) -> bool {
+        matches!(self, Self::UrgentNow)
     }
 }
 
@@ -380,6 +434,7 @@ pub(crate) struct DisplayLinkCore {
     capped: bool,
     ambient_period: Option<Duration>,
     steering: Steering,
+    urgent: UrgentAdmission,
 }
 
 impl DisplayLinkCore {
@@ -392,6 +447,7 @@ impl DisplayLinkCore {
             capped: false,
             ambient_period: None,
             steering: Steering::Ambient,
+            urgent: UrgentAdmission::Idle,
         }
     }
 
@@ -458,23 +514,45 @@ impl DisplayLinkCore {
         step(&mut self.state, LinkEvent::StopIfExpired)
     }
 
+    /// Arms one-shot urgent admission so the next `claim` may bypass `Opportunity::Wait`
+    /// once by advancing `last_target` to `now`. Duplicate calls coalesce into one admission.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn admit_once(&mut self) {
+        let _ = step_urgent(&mut self.urgent, UrgentEvent::Request);
+    }
+
+    /// Consumes any pending one-shot urgent admission, returning whether one was armed.
+    pub(crate) fn take_urgent(&mut self) -> bool {
+        !step_urgent(&mut self.urgent, UrgentEvent::Consume).is_empty()
+    }
+
+    /// Whether a one-shot urgent admission is currently armed.
+    pub(crate) fn is_urgent(&self) -> bool {
+        self.urgent == UrgentAdmission::Armed
+    }
+
     pub(crate) fn stop(&mut self) -> Effects<LinkEffect> {
+        let _ = self.take_urgent();
         step(&mut self.state, LinkEvent::Stop)
     }
 
     pub(crate) fn claim(&mut self, tick: Option<Instant>, now: Instant) -> Opportunity {
         let period = self.frame_period_at(now);
-        let next = opportunity_paced(tick, self.last_present, self.last_target, now, period, self.period);
+        let urgent = self.take_urgent();
+        let next = match opportunity_paced(tick, self.last_present, self.last_target, now, period, self.period) {
+            Opportunity::Wait if urgent => Opportunity::UrgentNow,
+            other => other,
+        };
         match next {
             Opportunity::Tick(target) => self.last_target = Some(target),
-            Opportunity::Now => self.last_target = Some(now),
+            Opportunity::Now | Opportunity::UrgentNow => self.last_target = Some(now),
             Opportunity::Wait => {}
         }
         next
     }
 
     pub(crate) fn defers_start(&self, now: Instant) -> bool {
-        defers_start(self.state, self.last_present, self.last_target, now, self.frame_period_at(now))
+        !self.is_urgent() && defers_start(self.state, self.last_present, self.last_target, now, self.frame_period_at(now))
     }
 
     pub(crate) fn tick_after(&self, now: Instant) -> Instant { now + self.frame_period_at(now) }
@@ -488,3 +566,7 @@ impl DisplayLinkCore {
 #[cfg(test)]
 #[path = "display_link_machine_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "display_link_urgent_tests.rs"]
+mod urgent_tests;

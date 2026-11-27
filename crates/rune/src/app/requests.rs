@@ -49,6 +49,9 @@ pub(crate) struct WindowRequests {
     pub quit: Option<crate::quit::After>,
     /// `AppHandle::wake` asked for `poll`.
     pub woken: bool,
+    /// `AppHandle::wake_urgent` asked for one-shot urgent frame admission on macOS.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub urgent: bool,
 }
 
 impl WindowRequests {
@@ -72,7 +75,7 @@ impl WindowRequests {
     /// Nothing but updates: no wake for `poll`, no window, focus or geometry request.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn only_updates(&self) -> bool {
-        !self.woken && !self.asks_window()
+        !self.woken && !self.urgent && !self.asks_window()
     }
 }
 
@@ -135,6 +138,10 @@ impl SharedCore {
 
     pub(crate) fn wake_app(&self) {
         self.request(|q| q.woken = true);
+    }
+
+    pub(crate) fn wake_urgent(&self) {
+        self.request(|q| { q.woken = true; q.urgent = true; });
     }
 
     pub(crate) fn open(&self) {
@@ -325,6 +332,33 @@ impl<S> Shared<S> {
     /// Whether any typed updates wait for `take_updates`.
     pub(crate) fn has_updates(&self) -> bool {
         !self.updates.lock().unwrap().is_empty()
+    }
+}
+
+impl<S: 'static> AppHandle<S> {
+    /// Wake the event loop so `AppSpec::poll` runs, also while the window is hidden, and arm
+    /// one-shot urgent frame admission on macOS so the next drawn frame may bypass display-link
+    /// `Wait` once by advancing its target to now.
+    ///
+    /// Duplicate urgent wakes before that frame claims pacing coalesce into one admission. Normal
+    /// display-link pacing resumes immediately after (even if drawable acquisition or presentation
+    /// fails), leaving drawable backpressure and recovery behavior unchanged. On platforms without
+    /// a display link this behaves like [`wake`](Self::wake).
+    #[inline]
+    pub fn wake_urgent(&self) { self.shared.core.wake_urgent(); }
+
+    /// Like [`update`](Self::update), and arms one-shot urgent frame admission on macOS for the
+    /// resulting frame (see [`wake_urgent`](Self::wake_urgent)).
+    ///
+    /// For conditional updates that may leave state unchanged, call
+    /// [`Tx::request_urgent_frame`](crate::Tx::request_urgent_frame) inside
+    /// [`update_if`](Self::update_if) when returning `true`.
+    pub fn update_urgent(&self, f: impl FnOnce(&mut S, &mut Tx) + Send + 'static) {
+        self.update_if(move |s, tx| {
+            f(s, tx);
+            tx.request_urgent_frame();
+            true
+        });
     }
 }
 

@@ -83,3 +83,46 @@ fn a_pick_callback_that_puts_back_its_tx_discards_the_minimize() {
     shared.drain_window(&mut rt, |_| {});
     assert!(!rt.host.minimize.field(), "the callback discarded the update's minimize, as on dev");
 }
+
+#[test]
+fn wake_urgent_and_update_urgent_coalesce_and_consume_once() {
+    let shared = Arc::new(Shared::<u32>::default());
+    let handle = AppHandle { shared: shared.clone() };
+    let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
+
+    // Ordinary wake/update keep urgent false by default.
+    handle.wake();
+    let batch = shared.drain_window(&mut rt, |_| {});
+    assert!(batch.woken);
+    assert!(!batch.urgent);
+    assert!(!rt.core_mut().take_urgent_frame());
+
+    // Multiple wake_urgent calls coalesce into one urgent wake and are not treated as only_updates.
+    handle.wake_urgent();
+    handle.wake_urgent();
+    let batch = shared.drain_window(&mut rt, |_| {});
+    assert!(batch.woken);
+    assert!(batch.urgent);
+    assert!(!batch.only_updates());
+    let next = shared.drain_window(&mut rt, |_| {});
+    assert!(!next.urgent, "draining consumes urgent wake");
+
+    // update_urgent runs the closure and latches Tx::request_urgent_frame once.
+    handle.update_urgent(|s, _| *s += 1);
+    handle.update_urgent(|s, _| *s += 1);
+    let batch = shared.drain_window(&mut rt, |_| {});
+    assert_eq!(rt.state, 2);
+    assert!(!batch.urgent);
+    assert!(rt.core_mut().take_urgent_frame(), "update_urgent latches urgent_frame");
+    assert!(!rt.core_mut().take_urgent_frame(), "take_urgent_frame consumes once");
+
+    // update_if can opt in conditionally via Tx::request_urgent_frame.
+    handle.update_if(|s, tx| {
+        *s += 10;
+        tx.request_urgent_frame();
+        true
+    });
+    let _ = shared.drain_window(&mut rt, |_| {});
+    assert_eq!(rt.state, 12);
+    assert!(rt.core_mut().take_urgent_frame());
+}

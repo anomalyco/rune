@@ -113,3 +113,32 @@ fn a_drawn_frame_s_inspector_reads_the_runtime_it_presented() {
     assert_eq!(*seen.borrow(), vec![(7, true)]);
     assert!(WindowSpec::new("plain", spec()).app.on_frame_drawn.is_none(), "without one, inspecting is an Option check");
 }
+
+#[test]
+fn drawn_with_present_reports_present_return_and_urgent_admission() {
+    let (log, hook) = logging();
+    let mut reports = FrameReports::new(Some(hook), Some("main"));
+    let started = crate::time::now();
+    let encoded = started + Duration::from_millis(2);
+    let present_returned = encoded + Duration::from_micros(400);
+
+    reports.drawn_with_present(Some(encoded), Some(present_returned), None, started, 1.0, true);
+    reports.drawn_with_present(Some(encoded), Some(present_returned), Some(started + Duration::from_millis(8)), started, 1.0, false);
+    reports.unchanged(None);
+    reports.skipped();
+
+    let log = log.borrow();
+    assert_eq!(log[0].started(), Some(started));
+    assert_eq!(log[0].at(), encoded);
+    assert_eq!(log[0].present_returned(), Some(present_returned));
+    assert!(log[0].urgent_admitted());
+    assert_eq!(log[0].presents_at(), None);
+
+    assert_eq!(log[1].present_returned(), Some(present_returned));
+    assert!(!log[1].urgent_admitted());
+
+    for f in &log[2..] {
+        assert_eq!(f.present_returned(), None);
+        assert!(!f.urgent_admitted());
+    }
+}

@@ -553,6 +553,14 @@ impl<T: 'static> OverlayHandle<T> {
         self.update_if(move |s, tx| { f(s, tx); true });
     }
 
+    /// Like [`update`](Self::update), and arms one-shot urgent frame admission on macOS so
+    /// the next drawn frame may bypass display-link `Wait` once by advancing its target
+    /// to now. Duplicate requests before that frame claims pacing coalesce into one admission,
+    /// and normal pacing resumes immediately after. No-op for pacing off macOS.
+    pub fn update_urgent(&self, f: impl FnOnce(&mut T, &mut Tx) + Send + 'static) {
+        self.update_if(move |s, tx| { f(s, tx); tx.request_urgent_frame(); true });
+    }
+
     /// `update` for a timer or feed that often finds nothing new: `f` returns whether it changed
     /// state the view reads, as `OverlayOptions::poll` does. On false the view doesn't re-run
     /// and the overlay neither draws nor refreshes while hidden, while what `f` asked of its

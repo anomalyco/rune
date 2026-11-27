@@ -385,6 +385,17 @@ impl Win {
         false
     }
 
+    /// Arms one-shot urgent frame admission on macOS display-link pacing.
+    pub(in crate::window) fn admit_urgent_frame(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(pacing) = &mut self.native.pacing { pacing.admit_once(); }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn has_urgent_admission(&self) -> bool {
+        self.native.pacing.as_ref().is_some_and(|p| p.is_urgent())
+    }
+
     /// Consumes a macOS `RedrawRequested` on entry to `paint`, returning `true` when a prior
     /// `DisplayTick` or synchronous draw already satisfied it.
     #[cfg(target_os = "macos")]
