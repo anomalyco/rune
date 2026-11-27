@@ -39,13 +39,15 @@ pub(crate) struct GpuCallbacks {
 
 /// Host GPU handles and callback state attached to a [`Renderer`] for [`crate::compose::Frame`].
 ///
-/// Intentionally holds only `wgpu::Instance`, `wgpu::Adapter`, and [`GpuCallbacks`] — never a
-/// `wgpu::Device` or `Arc<Gpu>` — so dropping `Gpu` and `Renderer` on Windows D3D12 never pins
+/// Intentionally holds only `wgpu::Instance`, `wgpu::Adapter`, [`GpuCallbacks`] and a `Weak` lease
+/// — never a `wgpu::Device` or `Arc<Gpu>` — so dropping `Gpu` and `Renderer` on Windows D3D12 never pins
 /// a removed `ID3D12Device`.
 pub(crate) struct GpuHost {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     callbacks: GpuCallbacks,
+    /// The `Gpu`'s device and queue, weakly: `Frame::gpu_handle` lends them to workers.
+    lease: std::sync::Weak<crate::compose::Lease>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -175,7 +177,6 @@ impl GpuCallbacks {
         self.lost.load(Ordering::Acquire)
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn lost_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.lost)
     }
@@ -276,6 +277,7 @@ impl Gpu {
         let backend = adapter.get_info().backend;
         let callbacks = GpuCallbacks::new(&device, draws_surfaces);
         let removal = rune_gpu::health::Removal::watch(&device);
+        let lease = crate::compose::Lease::new(&device, &queue);
         Gpu {
             instance,
             adapter,
@@ -285,6 +287,7 @@ impl Gpu {
             backend,
             callbacks,
             removal,
+            lease,
         }
     }
 
@@ -369,6 +372,7 @@ impl Gpu {
             instance: self.instance.clone(),
             adapter: self.adapter.clone(),
             callbacks: self.callbacks.clone(),
+            lease: Arc::downgrade(&self.lease),
         }
     }
 
@@ -396,6 +400,11 @@ impl Renderer {
 
     pub(crate) fn gpu_adapter(&self) -> Option<&wgpu::Adapter> {
         self.gpu_host.as_ref().map(|host| &host.adapter)
+    }
+
+    pub(crate) fn gpu_handle(&self) -> Option<crate::compose::GpuHandle> {
+        let host = self.gpu_host.as_ref()?;
+        Some(crate::compose::GpuHandle::new(host.lease.clone(), host.callbacks.lost_flag(), self.device_key()))
     }
 
     pub(crate) fn restore_device_callbacks(&self, device: &wgpu::Device) {

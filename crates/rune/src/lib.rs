@@ -84,6 +84,7 @@ pub use color::oklch;
 pub use color::oklcha;
 pub use compose::Compositor;
 pub use compose::Frame;
+pub use compose::GpuHandle;
 pub use drag_out::DragImage;
 pub use drag_out::DragItem;
 pub use drag_out::DragOperation;

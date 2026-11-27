@@ -18,6 +18,8 @@ pub struct Gpu {
     pub(super) callbacks: super::gpu_loss::GpuCallbacks,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
     pub(super) removal: rune_gpu::health::Removal,
+    /// The device and queue `Frame::gpu_handle` lends; this holds the only strong reference.
+    pub(super) lease: std::sync::Arc<crate::compose::Lease>,
 }
 
 /// Latched process-wide once a Linux direct-driver Vulkan instance fails to serve a device or

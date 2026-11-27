@@ -15,6 +15,7 @@ struct ProbeResult {
     adapter_info: Option<wgpu::AdapterInfo>,
     device_adapter_info: Option<wgpu::AdapterInfo>,
     device_key: Option<DeviceKey>,
+    handle_key: Option<DeviceKey>,
     cloned_ok: bool,
 }
 
@@ -28,6 +29,7 @@ impl Compositor<()> for HostProbe {
         out.adapter_info = f.adapter().map(wgpu::Adapter::get_info);
         out.device_adapter_info = Some(f.device.adapter_info());
         out.device_key = Some(f.device_key());
+        out.handle_key = f.gpu_handle().map(|gpu| gpu.key());
         if let (Some(inst), Some(adap)) = (f.instance(), f.adapter()) {
             let inst_clone = inst.clone();
             let adap_clone = adap.clone();
@@ -63,6 +65,7 @@ fn headless_compositor_receives_instance_and_adapter_matching_device() {
         "headless Frame::adapter info must match Frame::device.adapter_info()",
     );
     assert!(out.cloned_ok, "cloned instance and adapter must stay valid and match the device");
+    assert_eq!(out.handle_key, out.device_key, "Frame::gpu_handle lends the frame's device");
 }
 
 #[test]
@@ -193,4 +196,97 @@ fn attached_renderer_frame_restores_device_lost_callback() {
         0,
         "overwritten foreign device-lost callback must no longer fire after restore_device_callbacks",
     );
+}
+const DOUBLE: &str = r#"
+@group(0) @binding(0) var<storage, read_write> v: array<u32>;
+@compute @workgroup_size(4)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) { v[id.x] = v[id.x] * 2u + 1u; }
+"#;
+
+/// A worker uploads, compiles a compute pipeline and submits on `gpu` through its handle while
+/// this thread submits on the same queue; returns what the worker's dispatch wrote.
+fn worker_builds_on(gpu: Gpu) -> Vec<u32> {
+    use wgpu::BufferUsages as B;
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.attach_gpu(&gpu);
+    let handle = renderer.gpu_handle().expect("an attached renderer lends its device");
+    assert_eq!(handle.key(), renderer.device_key());
+    let finished = Arc::new(AtomicBool::new(false));
+    let worker = std::thread::spawn({
+        let finished = Arc::clone(&finished);
+        move || handle.with(|device, queue| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("double"), source: wgpu::ShaderSource::Wgsl(DOUBLE.into()) });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("double"), layout: None, module: &module, entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            });
+            let values = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: B::STORAGE | B::COPY_DST | B::COPY_SRC, mapped_at_creation: false });
+            queue.write_buffer(&values, 0, bytemuck::cast_slice(&[1u32, 2, 3, 4]));
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.get_bind_group_layout(0),
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: values.as_entire_binding() }] });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            queue.submit([encoder.finish()]);
+            let done = Arc::new(AtomicBool::new(false));
+            queue.on_submitted_work_done({ let done = Arc::clone(&done); move || done.store(true, Ordering::Release) });
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            assert!(done.load(Ordering::Acquire), "the worker waits for its own work off the frame");
+            finished.store(true, Ordering::Release);
+            values
+        })
+    });
+    let busy = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 256, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+    while !finished.load(Ordering::Acquire) && !worker.is_finished() {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.clear_buffer(&busy, 0, None);
+        gpu.queue.submit([encoder.finish()]);
+        gpu.device.poll(wgpu::PollType::Poll).ok();
+    }
+    let values = worker.join().unwrap().expect("the device is live");
+    let out = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: B::COPY_DST | B::MAP_READ, mapped_at_creation: false });
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_buffer_to_buffer(&values, 0, &out, 0, 16);
+    gpu.queue.submit([encoder.finish()]);
+    out.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    bytemuck::cast_slice(&out.slice(..).get_mapped_range().unwrap()).to_vec()
+}
+
+#[test]
+fn gpu_handle_builds_and_uploads_from_a_worker_thread() {
+    for gpu in [Gpu::test_headless(), Gpu::test_headless_wgpu()].into_iter().flatten() {
+        let backend = gpu.device.adapter_info().driver;
+        assert_eq!(worker_builds_on(gpu), [3, 5, 7, 9], "on {backend:?}");
+    }
+}
+
+#[test]
+fn gpu_handle_lets_go_with_its_gpu() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.attach_gpu(&gpu);
+    let handle = renderer.gpu_handle().unwrap();
+    assert!(!handle.is_lost());
+    assert!(handle.with(|_, _| ()).is_some());
+    drop(gpu);
+    assert!(handle.is_lost(), "Rune dropped its GPU");
+    assert!(handle.with(|_, _| ()).is_none(), "a handle never brings the device back");
+    assert!(renderer.gpu_handle().unwrap().is_lost(), "and neither does the renderer's");
+}
+
+#[test]
+fn gpu_handle_reports_a_lost_device() {
+    for gpu in [Gpu::test_headless(), Gpu::test_headless_wgpu()].into_iter().flatten() {
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.attach_gpu(&gpu);
+        let handle = renderer.gpu_handle().unwrap();
+        gpu.device.destroy();
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        assert!(handle.is_lost(), "lost while Rune still holds the GPU");
+        assert!(handle.with(|_, _| ()).is_none());
+    }
 }

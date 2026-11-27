@@ -3,6 +3,9 @@
 //! builds one, so the default path is unchanged; `rune::run_with` or `App::compositor` attaches
 //! one.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+
 use crate::render::{Instance, Kind, Renderer};
 use crate::runtime::Runtime;
 
@@ -122,10 +125,112 @@ impl DeviceKey {
     }
 }
 
+/// What a [`GpuHandle`] lends: a Rune GPU's device and queue. The GPU holds the only strong
+/// reference, so no handle keeps a device alive after Rune lets it go.
+pub(crate) struct Lease {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl Lease {
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Arc<Lease> {
+        Arc::new(Lease { device: device.clone(), queue: queue.clone() })
+    }
+}
+
+/// Rune's device and queue for work off the frame: worker threads upload buffers and atlases and
+/// build pipelines ahead of the compositor that draws with them. `Clone`, and `Send + Sync` off
+/// the web; take one from [`Frame::gpu_handle`] whenever [`Frame::device_key`] changes.
+///
+/// - **Borrow, don't keep.** [`GpuHandle::with`] lends the device and queue for one closure. Keep
+///   what it makes (buffers, textures, pipelines), not clones of the device or queue.
+/// - **Loss.** [`GpuHandle::is_lost`] turns true, and `with` returns `None`, once the device is
+///   lost (a driver reset, a failed Metal command buffer, `Device::destroy`) or Rune has let it go
+///   (replaced after a loss, its window closed, `GpuLossPolicy::Terminal`). Drop what you made on
+///   it then, as [`Compositor::release_gpu`] drops the compositor's: everything made on a device
+///   keeps it alive, and on D3D12 a removed device blocks its replacement until it's gone. The
+///   compositor's next frame has a new key and a new handle to build on.
+/// - **Matching frames.** What a handle made draws in frames whose `device_key` is its
+///   [`GpuHandle::key`].
+/// - **Ordering.** `Queue::write_buffer` and `write_texture` calls land ahead of the queue's next
+///   submission, so a resource handed to the compositor after `with` returns has its bytes in the
+///   frame that draws it. Command buffers a worker submits run in submission order with Rune's
+///   frames; wait for them off the frame with `Queue::on_submitted_work_done` and `Device::poll`.
+///
+/// ```no_run
+/// # use rune::compose::{Compositor, DeviceKey, Frame, GpuHandle};
+/// # use std::sync::mpsc::Sender;
+/// struct Pages { key: Option<DeviceKey>, worker: Sender<GpuHandle> }
+///
+/// impl Compositor<()> for Pages {
+///     fn render(&mut self, f: &mut Frame<'_, ()>) {
+///         if self.key != Some(f.device_key()) && let Some(gpu) = f.gpu_handle() {
+///             self.key = Some(gpu.key());
+///             self.worker.send(gpu).ok(); // the worker builds on this device from now on
+///         }
+///         f.draw_ui();
+///     }
+/// }
+///
+/// // On the worker thread:
+/// fn upload(gpu: &GpuHandle, bytes: &[u8]) -> Option<wgpu::Buffer> {
+///     gpu.with(|device, queue| {
+///         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+///             label: Some("scene"), size: bytes.len() as u64,
+///             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+///         });
+///         queue.write_buffer(&buffer, 0, bytes);
+///         buffer
+///     })
+/// }
+/// ```
+#[derive(Clone)]
+pub struct GpuHandle {
+    lease: Weak<Lease>,
+    lost: Arc<AtomicBool>,
+    key: DeviceKey,
+}
+
+impl GpuHandle {
+    pub(crate) fn new(lease: Weak<Lease>, lost: Arc<AtomicBool>, key: DeviceKey) -> GpuHandle {
+        GpuHandle { lease, lost, key }
+    }
+
+    /// The [`Frame::device_key`] of the frames this device draws.
+    pub fn key(&self) -> DeviceKey {
+        self.key
+    }
+
+    /// Whether the device was lost or Rune let it go: drop what was made on it.
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire) || self.lease.strong_count() == 0
+    }
+
+    /// Runs `f` with the device and queue, or returns `None` once [`GpuHandle::is_lost`]. The
+    /// device stays alive while `f` runs, even if Rune lets it go meanwhile, so keep `f` short.
+    pub fn with<R>(&self, f: impl FnOnce(&wgpu::Device, &wgpu::Queue) -> R) -> Option<R> {
+        if self.lost.load(Ordering::Acquire) { return None }
+        let lease = self.lease.upgrade()?;
+        Some(f(&lease.device, &lease.queue))
+    }
+}
+
+impl std::fmt::Debug for GpuHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuHandle").field("key", &self.key).field("lost", &self.is_lost()).finish()
+    }
+}
+
 impl<S: 'static> Frame<'_, S> {
     /// The device `device` is, as a key that changes whenever the frame moves to another one.
     pub fn device_key(&self) -> DeviceKey {
         self.ui.device_key()
+    }
+
+    /// A handle to this frame's device and queue for worker threads ([`GpuHandle`]), when the
+    /// renderer belongs to a Rune host; `None` for a standalone [`Renderer::new`].
+    pub fn gpu_handle(&self) -> Option<GpuHandle> {
+        self.ui.gpu_handle()
     }
 
     /// The `wgpu::Instance` that created this frame's device, when the renderer belongs to a Rune

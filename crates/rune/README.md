@@ -3529,6 +3529,13 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   need depth/stencil, MSAA, render bundles, indirect draws, or other wgpu features beyond Rune's
   native Metal subset should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
   `prewarm_gpu_on(GpuBackend::Wgpu)`.
+- **Uploading and building from worker threads.** `Frame::gpu_handle()` returns a `GpuHandle`
+  (`Clone`, `Send + Sync`) that lends the frame's device and queue to any thread:
+  `handle.with(|device, queue| ..)` uploads buffers and atlases and builds pipelines ahead of the
+  frame, and returns `None` once `handle.is_lost()`: the device was lost or Rune let it go. A
+  handle holds the device weakly, so it never keeps a lost device alive; drop what was made on it
+  when it's lost, and take a new handle when `Frame::device_key()` changes (`handle.key()` is the
+  key of the frames it draws in).
 - **Terminal GPU loss policy (`GpuLossPolicy::Terminal`).** Apps embedding a renderer with
   device-bound resources that cannot silently migrate to a replacement device can opt in via
   `App::gpu_loss_policy(GpuLossPolicy::Terminal)` or `WindowSpec::gpu_loss_policy`. The first GPU
