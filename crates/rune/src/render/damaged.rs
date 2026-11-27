@@ -1,8 +1,10 @@
 //! Redrawing part of a frame: the renderer keeps the window's last frame in a texture of its own
 //! (`Retained`), redraws only the rectangles that changed into it, and copies it to the
-//! drawable. wgpu treats a drawable as holding nothing when it's acquired (a `LoadOp::Load` into
-//! it loads zeros), so the frame can't be drawn over the drawable itself; the copy costs the GPU
-//! a few hundred microseconds where the whole frame's raster costs milliseconds.
+//! drawable (or blits it with a fullscreen triangle without filtering or blending when the
+//! drawable lacks `COPY_DST`, such as WebGL2). wgpu treats a drawable as holding nothing when
+//! it's acquired (a `LoadOp::Load` into it loads zeros), so the frame can't be drawn over the
+//! drawable itself; the copy or blit costs the GPU a few hundred microseconds where the whole
+//! frame's raster costs milliseconds.
 //!
 //! The window arms the rectangles before the frame draws (`arm_damage`); `draw` (and so a
 //! compositor's `Frame::draw_ui`) redraws only them when nothing but the instances draws there,
@@ -16,12 +18,26 @@ use super::*;
 /// Rectangles a frame redraws at most.
 pub(crate) const MAX_RECTS: usize = 4;
 
+/// Fullscreen exact-texel blit shader used when the presentation drawable lacks `COPY_DST`
+/// (for example WebGL2 canvas targets): copies every texel via `textureLoad` with no filtering
+/// and no blending.
+pub(super) const BLIT_WGSL: &str = r#"
+@group(0) @binding(0) var source: texture_2d<f32>;
+@vertex fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let points = array(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    return vec4(points[index], 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) point: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(source, vec2<i32>(point.xy), 0);
+}
+"#;
+
 /// How `draw_armed` updated the kept frame.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum KeptDraw {
     /// The kept frame was already current, so only the armed rectangles were redrawn and the
-    /// swap chain may present only those rectangles (`Present1` dirty rects).
+    /// swap chain may present only those rectangles (`Present1` dirty rects on Windows).
     Partial,
     /// The kept frame was behind (first frame, or the previous frame drew whole — e.g. with a
     /// native surface, blur, effect or turned layer): the whole frame was drawn into the kept
@@ -32,10 +48,83 @@ pub(crate) enum KeptDraw {
 /// What the armed rectangles came to.
 pub(crate) type Drawn = Result<KeptDraw, &'static str>;
 
+/// Cached fullscreen blit pipeline for targets without `COPY_DST`.
+struct Blit {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
+}
+
+impl Blit {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("damage blit source"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("damage blit"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("damage blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("damage blit"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self { layout, pipeline, format }
+    }
+
+    fn bind(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("damage blit source"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            }],
+        })
+    }
+}
+
 /// The window's last frame, and whether it's current.
 pub(super) struct Retained {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    view_format: wgpu::TextureFormat,
+    blit_bind: Option<wgpu::BindGroup>,
     current: bool,
 }
 
@@ -43,6 +132,7 @@ pub(super) struct Retained {
 #[derive(Default)]
 pub(super) struct DamageState {
     retained: Option<Retained>,
+    blit: Option<Blit>,
     armed: Vec<[u32; 4]>,
     /// For each armed rectangle, the instances whose quads reach it (`arm_cycle`), when only
     /// those are drawn there; empty: every instance is.
@@ -65,9 +155,23 @@ pub(super) struct DamageState {
 }
 
 impl Renderer {
+    /// Drops the retained frame and blit pipeline after the renderer's target format changed
+    /// (`Renderer::try_set_format`) so the next armed frame rebuilds them for the new format.
+    pub(super) fn invalidate_damage(&mut self) {
+        let d = self.damage.get_mut().unwrap_or_else(|e| e.into_inner());
+        d.retained = None;
+        d.blit = None;
+        d.armed.clear();
+        d.runs.clear();
+        d.drawn = None;
+    }
+
     /// The next `draw` may redraw only `rects` (`[x, y, width, height]` each, target pixels, at
-    /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`.
-    pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) {
+    /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`. `copy_dst` is
+    /// whether the presentation target supports `COPY_DST`; when false, a fullscreen exact-texel
+    /// blit pipeline is prepared instead.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat, copy_dst: bool) {
         let mut d = self.damage.lock().unwrap();
         // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
         if clear[3] != 1.0 {
@@ -75,7 +179,27 @@ impl Renderer {
             d.drawn = Some(Err("clear"));
             return;
         }
-        if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
+        if size.0 == 0 || size.1 == 0 {
+            d.armed.clear();
+            d.drawn = Some(Err("size"));
+            return;
+        }
+        let needs_blit = !copy_dst;
+        if needs_blit && d.blit.as_ref().is_none_or(|b| b.format != self.format) {
+            d.blit = Some(Blit::new(device, self.format));
+            d.retained = None;
+        }
+        let reuse = d.retained.as_ref().is_some_and(|r| {
+            (r.texture.width(), r.texture.height()) == size
+                && r.texture.format() == format
+                && r.view_format == self.format
+                && (!needs_blit || r.blit_bind.is_some())
+        });
+        if !reuse {
+            let view_formats = if self.format != format { &[self.format][..] } else { &[] };
+            let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | if needs_blit { wgpu::TextureUsages::TEXTURE_BINDING } else { wgpu::TextureUsages::empty() };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("last frame"),
                 size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
@@ -83,11 +207,15 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[self.format],
+                usage,
+                view_formats,
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(self.format), ..Default::default() });
-            d.retained = Some(Retained { texture, view, current: false });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                format: (self.format != format).then_some(self.format),
+                ..Default::default()
+            });
+            let blit_bind = needs_blit.then(|| d.blit.as_ref().expect("blit prepared").bind(device, &view));
+            d.retained = Some(Retained { texture, view, view_format: self.format, blit_bind, current: false });
         }
         let fills: Vec<Instance> = rects.iter().take(MAX_RECTS).map(|&[x, y, w, h]| Instance {
             rect: [x as f32, y as f32, w as f32, h as f32],
@@ -118,7 +246,8 @@ impl Renderer {
     /// each with only the instances whose quads reach it (what the rest drew there stays as
     /// drawn). `Err` says why this frame draws whole.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn arm_cycle(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], slots: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) -> Result<(), &'static str> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn arm_cycle(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], slots: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat, copy_dst: bool) -> Result<(), &'static str> {
         // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
         if clear[3] != 1.0 { return Err("clear"); }
         if slots.is_empty() { return Err("no slots"); }
@@ -133,7 +262,7 @@ impl Renderer {
                 c?
             }
         };
-        self.arm_damage(device, queue, &rects, clear, size, format);
+        self.arm_damage(device, queue, &rects, clear, size, format, copy_dst);
         let mut d = self.damage.lock().unwrap();
         d.runs = runs;
         d.layers_reached = layers;
@@ -147,7 +276,7 @@ impl Renderer {
     /// x1, y1) to present, or why this frame draws whole.
     #[cfg(target_os = "windows")]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn arm_loop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], patched: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) -> Result<Vec<[i32; 4]>, &'static str> {
+    pub(crate) fn arm_loop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, paint: u64, instances: &[Instance], patched: &[u32], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat, copy_dst: bool) -> Result<Vec<[i32; 4]>, &'static str> {
         // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
         if clear[3] != 1.0 { return Err("clear"); }
         self.redraws_in_place()?;
@@ -172,7 +301,7 @@ impl Renderer {
             }
         };
         let (draw, runs, layers) = cull_runs(instances, &units, &rects, patched);
-        self.arm_damage(device, queue, &draw, clear, size, format);
+        self.arm_damage(device, queue, &draw, clear, size, format, copy_dst);
         if super::pixel_check::on() { self.pixel_check_arm(device, size, format); }
         let mut d = self.damage.lock().unwrap();
         d.runs = runs;
@@ -220,8 +349,9 @@ impl Renderer {
     }
 
     /// `draw`'s part, when armed: redraws the armed rectangles into the kept frame (all of it
-    /// when it's behind) and copies it to `dst`. False when `draw` should draw whole.
-    pub(crate) fn draw_armed(&self, encoder: &mut wgpu::CommandEncoder, dst: &wgpu::Texture) -> bool {
+    /// when it's behind) and copies or blits it to `dst_view`. False when `draw` should draw whole.
+    pub(crate) fn draw_armed(&self, encoder: &mut wgpu::CommandEncoder, dst_view: &wgpu::TextureView) -> bool {
+        let dst = dst_view.texture();
         let mut guard = self.damage.lock().unwrap();
         let d = &mut *guard;
         #[cfg(target_os = "windows")]
@@ -240,6 +370,16 @@ impl Renderer {
         let runs = std::mem::take(&mut d.runs);
         let layers_reached = d.layers_reached;
         let clear = d.clear;
+        let can_copy = dst.usage().contains(wgpu::TextureUsages::COPY_DST)
+            && d.retained.as_ref().is_some_and(|k| k.texture.usage().contains(wgpu::TextureUsages::COPY_SRC));
+        let can_blit = !can_copy
+            && d.blit.as_ref().is_some_and(|b| b.format == self.format)
+            && d.retained.as_ref().is_some_and(|k| k.blit_bind.is_some());
+        if !can_copy && !can_blit {
+            d.drawn = Some(Err("no copy or blit"));
+            return false;
+        }
+        let blit_pipeline = can_blit.then(|| d.blit.as_ref().expect("checked").pipeline.clone());
         let (Some(quads), Some(kept)) = (self.clear_quad.get(), d.retained.as_mut()) else { return false };
         if (dst.width(), dst.height()) != (kept.texture.width(), kept.texture.height()) {
             d.drawn = Some(Err("size"));
@@ -296,8 +436,32 @@ impl Renderer {
         // `RUNE_LOOP_CHECK=2`: this loop-only frame's picture, and the whole frame's beside it.
         #[cfg(target_os = "windows")]
         if looped && partial && let Some(c) = d.pixel.as_mut() { self.pixel_check_encode(encoder, c, &kept.texture, clear, &rects); }
-        let whole = wgpu::Extent3d { width: dst.width(), height: dst.height(), depth_or_array_layers: 1 };
-        encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), whole);
+        if can_copy {
+            let whole = wgpu::Extent3d { width: dst.width(), height: dst.height(), depth_or_array_layers: 1 };
+            encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), whole);
+        } else {
+            let pipeline = blit_pipeline.as_ref().expect("checked");
+            let bind = kept.blit_bind.as_ref().expect("checked");
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("damage blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
         d.drawn = Some(Ok(if partial { KeptDraw::Partial } else { KeptDraw::Whole }));
         true
     }

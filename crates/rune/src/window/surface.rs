@@ -10,6 +10,7 @@ pub(in crate::window) mod backoff;
 pub(in crate::window) mod configure;
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::window) mod corners;
+pub(crate) mod damage;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod launch_drawables;
 #[cfg(not(target_arch = "wasm32"))]

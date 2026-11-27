@@ -351,3 +351,75 @@ fn damage_plan_redraws_whole_for_translucent_clear_and_keeps_partial_for_opaque(
         "opaque clear must keep partial damage",
     );
 }
+
+#[test]
+fn damage_invalidates_on_first_frame_resize_swap_generation_reset_in_place_and_empty_size() {
+    use crate::window::surface::configure::{configured_key, generation_for_key};
+
+    let size = (400u32, 240u32);
+    let clear = [0.1, 0.1, 0.1, 1.0];
+    let atlas = GlyphAtlas::default();
+    let rect = |x: f32, y: f32| Instance {
+        rect: [x, y, 24.0, 24.0],
+        fill: [1.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    };
+    let frame_a = [rect(10.0, 10.0), rect(80.0, 20.0)];
+    let frame_b = [rect(10.0, 10.0), rect(100.0, 20.0)];
+
+    // Unique synthetic surface key for testing monotonic configure generation tracking.
+    let key = 0xDEAD_BEEF_2488usize;
+    let gen0 = generation_for_key(key);
+    let gen1 = configured_key(key);
+    assert!(gen1 > gen0 && generation_for_key(key) == gen1);
+
+    let mut damage = Damage::default();
+    // 1. First frame always draws whole.
+    assert!(matches!(damage.plan(&frame_a, size, clear, gen1, atlas, true), Plan::All(_)));
+
+    // 2. Small change on same swap generation plans a tight partial rect.
+    match damage.plan(&frame_b, size, clear, gen1, atlas, true) {
+        Plan::Part { draw, .. } => {
+            assert_eq!(draw.len(), 1);
+            assert!(draw[0][0] >= 70 && draw[0][0] + draw[0][2] <= 130, "unexpected partial rect: {draw:?}");
+        }
+        other => panic!("expected partial plan, got {other:?}"),
+    }
+
+    // 3. Surface reconfiguration bumps generation -> forces whole redraw even at identical size.
+    let gen2 = configured_key(key);
+    assert!(gen2 > gen1 && generation_for_key(key) == gen2);
+    assert!(
+        matches!(damage.plan(&frame_a, size, clear, gen2, atlas, true), Plan::All(_)),
+        "surface generation bump must force whole redraw",
+    );
+    // Partial resumes once synchronized with gen2.
+    assert!(matches!(damage.plan(&frame_b, size, clear, gen2, atlas, true), Plan::Part { .. }));
+
+    // 4. Resize forces whole redraw.
+    assert!(
+        matches!(damage.plan(&frame_a, (420, 240), clear, gen2, atlas, true), Plan::All(_)),
+        "resize must force whole redraw",
+    );
+    assert!(matches!(damage.plan(&frame_b, (420, 240), clear, gen2, atlas, true), Plan::Part { .. }));
+
+    // 5. Explicit reset (DPI scale change, device loss, occlusion uncover) forces whole redraw.
+    damage.reset();
+    assert!(
+        matches!(damage.plan(&frame_a, (420, 240), clear, gen2, atlas, true), Plan::All(_)),
+        "reset must force whole redraw",
+    );
+    assert!(matches!(damage.plan(&frame_b, (420, 240), clear, gen2, atlas, true), Plan::Part { .. }));
+
+    // 6. in_place == false (alpha pass, dirty images, compositor_draws_own) forces whole redraw.
+    assert!(
+        matches!(damage.plan(&frame_a, (420, 240), clear, gen2, atlas, false), Plan::All("not in place")),
+        "in_place=false must force whole redraw",
+    );
+
+    // 7. Zero-dimension target safely forces whole redraw and resets shape.
+    assert_eq!(damage.plan(&frame_a, (0, 240), clear, gen2, atlas, true), Plan::All("empty"));
+    assert!(matches!(damage.plan(&frame_a, (420, 240), clear, gen2, atlas, true), Plan::All(_)));
+}

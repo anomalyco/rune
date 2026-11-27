@@ -217,6 +217,7 @@ impl Host {
             corners: None,
             timer_frame: TimerFrame::default(),
             loop_frame: LoopFrame::default(),
+            damage: Default::default(),
             presented: None,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });

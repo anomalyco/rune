@@ -1,6 +1,7 @@
-//! Windows: what part of a window a frame redraws and presents. The renderer redraws only what
-//! changed into the frame it keeps (`render::damaged`), and the window presents only that
-//! (`Present1` dirty rectangles), which is all DWM composes again.
+//! What part of a window or canvas a frame redraws (and on Windows, presents). The renderer
+//! redraws only what changed into the frame it keeps (`render::damaged`) and copies or blits it
+//! into the drawable; on Windows, the swap chain also presents only those dirty rectangles
+//! (`Present1`), which is all DWM composes again.
 //!
 //! What changed is the instances that differ from the last frame's. The lists' common start and
 //! end are skipped; in what's left, an instance whose bytes are in both lists didn't change (its
@@ -31,15 +32,15 @@ pub(super) const RECTS: usize = crate::render::MAX_RECTS;
 /// The glyph atlas state `Damage` needs to tell whether an unchanged instance may sample
 /// different texels than in the last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::window) struct GlyphAtlas {
-    pub(in crate::window) resets: u64,
-    pub(in crate::window) rasterized: u64,
-    pub(in crate::window) dirty_rows: bool,
-    pub(in crate::window) pending_fills: bool,
+pub(crate) struct GlyphAtlas {
+    pub(crate) resets: u64,
+    pub(crate) rasterized: u64,
+    pub(crate) dirty_rows: bool,
+    pub(crate) pending_fills: bool,
 }
 
 impl GlyphAtlas {
-    pub(in crate::window) fn of(atlas: &crate::text::Atlas) -> Self {
+    pub(crate) fn of(atlas: &crate::text::Atlas) -> Self {
         Self {
             resets: atlas.resets(),
             rasterized: atlas.rasterized(),
@@ -59,7 +60,7 @@ struct Shape {
 
 /// The last frames' changes.
 #[derive(Default)]
-pub(in crate::window) struct Damage {
+pub(crate) struct Damage {
     /// The last frame's instances, and its size, clear colour, swap chain (the surface's
     /// configuration, `configure::generation`), and glyph atlas reset count.
     last: Vec<Instance>,
@@ -69,7 +70,7 @@ pub(in crate::window) struct Damage {
     scratch: Scratch,
     /// The last change seen, however much was drawn (frame-profile).
     #[cfg_attr(not(feature = "frame-profile"), allow(dead_code))]
-    pub(in crate::window) seen: Option<[u32; 4]>,
+    pub(crate) seen: Option<[u32; 4]>,
 }
 
 /// Rectangles `[x0, y0, x1, y1]` in the window's pixels.
@@ -85,20 +86,22 @@ pub(super) enum Area {
 
 /// What a frame draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::window) enum Plan {
+pub(crate) enum Plan {
     /// Everything, and why.
     All(&'static str),
     /// Redraw `draw` (`[x, y, width, height]` each), present `present` (`[x0, y0, x1, y1]` each).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Part { draw: Vec<[u32; 4]>, present: Vec<[i32; 4]> },
 }
 
 impl Damage {
-    /// Whether a loop-only frame (`Renderer::arm_loop`) may patch only `patched` instead of going
-    /// through `plan`: the swap chain, size and clear colour still match, the glyph atlas has had
-    /// no eviction, new rasterization or pending GPU fill since the last frame, and if CPU glyph
-    /// rows are dirty (an animated icon's in-place slot write), at least one patched instance's
-    /// bytes differ from the last frame's.
-    pub(in crate::window) fn can_patch_loop(
+    /// Whether a loop-only frame (`Renderer::arm_loop` / `Renderer::arm_cycle`) may patch only
+    /// `patched` instead of going through `plan`: the swap chain, size and clear colour still
+    /// match, the glyph atlas has had no eviction, new rasterization or pending GPU fill since
+    /// the last frame, and if CPU glyph rows are dirty (an animated icon's in-place slot write),
+    /// at least one patched instance's bytes differ from the last frame's.
+    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn can_patch_loop(
         &self,
         instances: &[Instance],
         patched: &[u32],
@@ -122,6 +125,7 @@ impl Damage {
         Ok(())
     }
 
+    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32", test)), allow(dead_code))]
     fn any_patched_differs(&self, instances: &[Instance], patched: &[u32]) -> bool {
         self.last.len() == instances.len()
             && patched.iter().any(|&i| {
@@ -133,7 +137,7 @@ impl Damage {
 
     /// The frame about to draw `instances` into a `size` target cleared to `clear`, on swap chain
     /// `swap`, with glyph atlas state `atlas`; `in_place` when nothing but its instances draws there.
-    pub(in crate::window) fn plan(
+    pub(crate) fn plan(
         &mut self,
         instances: &[Instance],
         size: (u32, u32),
@@ -142,6 +146,10 @@ impl Damage {
         atlas: GlyphAtlas,
         in_place: bool,
     ) -> Plan {
+        if size.0 == 0 || size.1 == 0 {
+            self.shape = None;
+            return Plan::All("empty");
+        }
         let shape = Shape { size, clear, swap, atlas_resets: atlas.resets };
         let prev_shape = self.shape;
         let prev_rasterized = self.atlas_rasterized;
@@ -192,18 +200,20 @@ impl Damage {
     }
 
     /// A new swap chain: the next frame draws whole.
-    pub(in crate::window) fn reset(&mut self) { self.shape = None; }
+    pub(crate) fn reset(&mut self) { self.shape = None; }
 
     /// The last frame drew into swap chain `swap` at this size and clear colour: a frame may draw
     /// and present only part of it. False after `reset` or a configure (a new swap chain), so its
     /// first frame, loop-only or not, goes through `plan` and draws whole.
-    pub(in crate::window) fn current(&self, size: (u32, u32), clear: [f32; 4], swap: u64) -> bool {
+    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn current(&self, size: (u32, u32), clear: [f32; 4], swap: u64) -> bool {
         self.shape.is_some_and(|s| s.size == size && s.clear == clear && s.swap == swap)
     }
 
     /// A loop-only frame changed only `patched` (ascending) and drew them where they were and
-    /// are (`Renderer::arm_loop`): the next frame compares with them.
-    pub(in crate::window) fn patched(&mut self, instances: &[Instance], patched: &[u32]) {
+    /// are (`Renderer::arm_loop` / `Renderer::arm_cycle`): the next frame compares with them.
+    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn patched(&mut self, instances: &[Instance], patched: &[u32]) {
         if self.last.len() != instances.len() { self.shape = None; return; }
         for &i in patched { self.last[i as usize] = instances[i as usize]; }
     }

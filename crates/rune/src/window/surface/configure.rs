@@ -105,14 +105,10 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
 /// new swap chain (new back buffers), so a frame that drew partly into the last one must draw
 /// whole into this one (`Damage`). Wherever the configure came from: a resize, a blend switch,
 /// a frame-latency change, or `acquire` retrying an outdated surface inside a frame.
-#[cfg(not(target_arch = "wasm32"))]
 static CONFIGURED: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
-#[cfg(not(target_arch = "wasm32"))]
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-#[cfg(not(target_arch = "wasm32"))]
-fn configured(surface: &wgpu::Surface) {
-    let key = std::ptr::from_ref(surface) as usize;
+pub(crate) fn configured_key(key: usize) -> u64 {
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut all = CONFIGURED.lock().unwrap();
     match all.iter_mut().find(|(k, _)| *k == key) {
@@ -121,12 +117,21 @@ fn configured(surface: &wgpu::Surface) {
     }
     // Surfaces long gone: their numbers are never read again.
     if all.len() > 64 { all.remove(0); }
+    n
+}
+
+fn configured(surface: &wgpu::Surface) {
+    configured_key(std::ptr::from_ref(surface) as usize);
+}
+
+#[cfg(test)]
+pub(crate) fn generation_for_key(key: usize) -> u64 {
+    CONFIGURED.lock().unwrap().iter().find(|(k, _)| *k == key).map_or(0, |e| e.1)
 }
 
 /// The number of `surface`'s last successful configuration (0 before any). A surface dropped and
 /// another made at its address configures before it draws, so it never reads the old number.
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn generation(surface: &wgpu::Surface) -> u64 {
     let key = std::ptr::from_ref(surface) as usize;
     CONFIGURED.lock().unwrap().iter().find(|(k, _)| *k == key).map_or(0, |e| e.1)
@@ -151,7 +156,9 @@ pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgp
     let ((), errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
         surface.configure(&gpu.device, config);
     });
-    finish_configure(errors, config)
+    finish_configure(errors, config)?;
+    configured(surface);
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -161,7 +168,7 @@ pub(crate) fn configure(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surfa
 
 /// Configures `surface` on the web and delivers the outcome to `on_result`: asynchronously via
 /// the JS `GPUDevice`'s error scopes on WebGPU, or synchronously through `wgpu-core`'s scopes on
-/// WebGL2.
+/// WebGL2. Surface configuration generation is recorded only once the outcome is known.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn configure_then(
     surface: &wgpu::Surface,
@@ -171,10 +178,14 @@ pub(crate) fn configure_then(
 ) {
     if let Some(scopes) = crate::platform::web::health::Scopes::push(&gpu.device) {
         let (w, h, fmt, alpha, present) = (config.width, config.height, config.format, config.alpha_mode, config.present_mode);
+        let key = std::ptr::from_ref(surface) as usize;
         surface.configure(&gpu.device, config);
         scopes.pop(move |error| {
             let res = match error {
-                None => Ok(()),
+                None => {
+                    configured_key(key);
+                    Ok(())
+                }
                 Some(err) => Err(format_error(&err, w, h, fmt, alpha, present)),
             };
             on_result(res);

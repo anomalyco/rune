@@ -658,6 +658,7 @@ impl ApplicationHandler<Wake> for Browser {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 r.full_redraw = true;
+                if let Some(side) = r.draw.gpu_mut() { side.damage.reset(); }
                 r.resize_surface(window, window.inner_size(), scale_factor as f32);
                 self.resize_redraw.resized();
             }

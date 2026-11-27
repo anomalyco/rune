@@ -111,8 +111,6 @@ pub(in crate::window) struct Native {
     pub(in crate::window) dxgi_present: crate::window::win32::present_time::DxgiPresentTracker,
     /// Paces sub-frame `poll` wakes onto the display's vblank grid (`poll_pace`).
     pub(in crate::window) poll_pace: crate::window::win32::poll_pace::PollPace,
-    /// What its last frames changed, so the next redraws only that (`damage`).
-    pub(in crate::window) damage: crate::window::win32::damage::Damage,
     /// Opt-in Windows 11 `El::system_material` visuals behind the swap chain. Declared before
     /// `mode` so `DesktopWindowTarget` closes before `Handover` drops.
     #[cfg(feature = "windows-system-material")]

@@ -120,7 +120,7 @@ pub(crate) use surface::{
 };
 pub(crate) use surface::{Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
 #[cfg(target_arch = "wasm32")]
-pub(crate) use surface::configure_then;
+pub(crate) use surface::{configure_then, damage};
 #[cfg(target_os = "macos")]
 pub(crate) use surface::native::Prime;
 #[cfg(test)]

@@ -1,0 +1,3 @@
+- **Render: enable retained damage redraw across macOS, Linux, and web (WebGPU and WebGL2).**
+  - Moved damage planning out of `window/win32` into `window/surface/damage`, tracked surface configuration generations across native and web (including asynchronous WebGPU configure completion), and wired partial damage planning and retained redraw on macOS, Linux, and web while keeping Windows `Present1` dirty rectangles platform-specific.
+  - Added a fullscreen exact-texel blit fallback (`textureLoad`, no filtering or blending) in `Renderer::draw_armed` when the presentation target lacks `COPY_DST` (such as WebGL2 canvas targets), invalidating the retained target and blit pipeline on format switches, resizes, scale changes, occlusion uncover, and device/surface recreation.

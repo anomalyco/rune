@@ -166,6 +166,8 @@ pub(in crate::window) struct Win {
     pub(in crate::window) timer_frame: TimerFrame,
     /// Whether only its loops asked for the next frame (`LoopFrame`).
     pub(in crate::window) loop_frame: LoopFrame,
+    /// What its last frames changed, so the next redraws only that (`damage`).
+    pub(in crate::window) damage: damage::Damage,
     /// The last frame presented, while the window rests.
     pub(in crate::window) presented: Option<Presented>,
     /// A frame asked for while other windows covered it, still to draw (`CoveredDraw`).
@@ -206,6 +208,7 @@ impl Win {
         if (self.config.width, self.config.height) == (width, height) { return false; }
         self.config.width = width;
         self.config.height = height;
+        self.damage.reset();
         // No surface: `Host::reattach` is between the old one and the new, and takes this size
         // from the window itself; or the CPU renderer draws it, whose buffer follows this size.
         let (Some(surface), Some(gpu)) = (&self.surface, gpu) else { return true };

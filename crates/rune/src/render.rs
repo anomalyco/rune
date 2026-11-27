@@ -5,7 +5,6 @@ use crate::text::{ATLAS_SIZE, Atlas};
 
 mod backdrop_blur;
 mod breaker;
-#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
 mod damaged;
 mod device;
 mod dxbc;
@@ -80,8 +79,9 @@ mod webgl_shader_tests;
 
 use pass::{ActivePass, Backdrop};
 
-#[cfg(target_os = "windows")]
-pub(crate) use damaged::{KeptDraw, MAX_RECTS};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use damaged::KeptDraw;
+pub(crate) use damaged::MAX_RECTS;
 pub(crate) use shader_check::ShaderError;
 pub(crate) use surface_setup::SurfaceSetupError;
 #[cfg(not(target_arch = "wasm32"))]
@@ -385,10 +385,8 @@ pub struct Renderer {
     /// limit from JavaScript (about 35 µs), which a frame's layers used to pay.
     max_texture_dim: u32,
     /// The one instance per rectangle that clears a damaged one (`arm_damage`), made on first use.
-    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     clear_quad: std::sync::OnceLock<wgpu::Buffer>,
     /// The kept frame and the rectangles the next `draw` may redraw alone (`damaged`).
-    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     damage: std::sync::Mutex<damaged::DamageState>,
 }
 
@@ -719,8 +717,7 @@ impl Renderer {
     }
 
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: [f32; 4]) {
-        #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
-        if self.armed() && self.draw_armed(encoder, &view.texture()) { return; }
+        if self.armed() && self.draw_armed(encoder, view) { return; }
         self.draw_timed(encoder, view, clear, None);
     }
 

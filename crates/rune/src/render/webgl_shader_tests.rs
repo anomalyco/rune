@@ -130,6 +130,7 @@ fn shipped_shaders_translate_to_valid_webgl2_glsl_es_300() {
         ("backdrop_blur.wgsl".into(), backdrop_blur::BLUR_WGSL.into(), Vec::new()),
         ("backdrop_composite.wgsl".into(), composite, Vec::new()),
         ("surface_alpha.wgsl".into(), surface_alpha::WGSL.into(), Vec::new()),
+        ("damaged_blit.wgsl".into(), damaged::BLIT_WGSL.into(), Vec::new()),
         ("video.wgsl".into(), video.into(), Vec::new()),
     ];
     for &kind in &variant::PINNED {

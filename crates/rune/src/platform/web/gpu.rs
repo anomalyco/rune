@@ -22,9 +22,20 @@ pub(super) struct GpuSide {
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) renderer: Renderer,
     pub(super) backend: wgpu::Backend,
+    pub(super) damage: crate::window::damage::Damage,
+    configure_gen: Rc<Cell<u64>>,
     health: Rc<RefCell<(crate::machine::Seq, super::web_math::SurfaceHealth)>>,
     retry_due: Rc<Cell<Option<crate::machine::Attempt>>>,
     proxy: EventLoopProxy<Wake>,
+}
+
+impl GpuSide {
+    /// Generation counter incremented on every surface configuration so `Damage` always draws
+    /// whole after a resize, blend switch, or outdated-surface reconfigure, including across
+    /// asynchronous WebGPU error-scope completion and `Draw::HandingOver -> Draw::Gpu` moves.
+    pub(super) fn surface_generation(&self) -> u64 {
+        self.configure_gen.get()
+    }
 }
 
 /// A GPU device or WebGL2 context loss waiting for `Browser::lost_device` to handle.
@@ -273,6 +284,8 @@ pub(super) fn gpu_side(
         config,
         renderer,
         backend,
+        damage: crate::window::damage::Damage::default(),
+        configure_gen: Rc::new(Cell::new(0)),
         health: Rc::new(RefCell::new((crate::machine::Seq::default(), super::web_math::SurfaceHealth::default()))),
         retry_due: Rc::new(Cell::new(None)),
         proxy,
@@ -337,10 +350,15 @@ pub(super) fn configure_surface(side: &GpuSide) {
         state.step(seq, SurfaceHealthEvent::Begin(attempt));
         attempt
     };
+    side.configure_gen.set(side.configure_gen.get().wrapping_add(1));
+    let configure_gen = side.configure_gen.clone();
     let health = side.health.clone();
     let retry_due = side.retry_due.clone();
     let proxy = side.proxy.clone();
     crate::window::configure_then(&side.surface, &side.gpu, &side.config, move |res| {
+        if res.is_err() {
+            configure_gen.set(configure_gen.get().wrapping_add(1));
+        }
         let effects = {
             let mut h = health.borrow_mut();
             let (seq, state) = &mut *h;
@@ -443,31 +461,71 @@ pub(super) struct PreparedGpu {
     frame: wgpu::SurfaceTexture,
     encoder: wgpu::CommandEncoder,
     size: (u32, u32),
-    armed: bool,
+    armed_cycle: bool,
     readback: bool,
     copy: Option<Readback>,
 }
 
-/// Uploads dirty images, registers the renderer's frame wake, arms a cycle-only frame when `tick`
-/// applies, and opens the command encoder.
+/// Uploads dirty images, registers the renderer's frame wake, plans retained partial damage (or a
+/// cycle-only frame when `tick` applies), and opens the command encoder.
 pub(super) fn prepare_gpu_frame(
     side: &mut GpuSide,
     rt: &mut RuntimeCore,
     frame: wgpu::SurfaceTexture,
     readback: bool,
     tick: bool,
+    compositor_draws_own: bool,
 ) -> PreparedGpu {
     let size = (side.config.width, side.config.height);
+    let images_changed = rt.images.pages.iter().any(|p| p.dirty.is_some());
     side.renderer.upload_images(&side.gpu.device, &side.gpu.queue, &mut rt.images);
     side.renderer.set_frame_wake(rt.live_wake());
-    // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed, and redraws
-    // only where they are, into the last frame the renderer keeps, which is copied to the canvas.
+    // A loop-only step (`runtime/paint/cycle.rs`) writes only the dots it changed; any other frame
+    // diffs against the previous instance list (`Damage::plan`) and redraws only changed regions
+    // into the renderer's retained texture, then copies or blits it to the canvas.
     let (paint, slots) = rt.cycle_paint();
-    let armed = tick && side.config.usage.contains(wgpu::TextureUsages::COPY_DST)
-        && side.renderer.arm_cycle(&side.gpu.device, &side.gpu.queue, paint, &rt.instances, &slots, rt.clear_color(), size, side.config.format).is_ok();
-    side.renderer.next_instances(paint, tick.then_some(slots));
+    let copy_dst = side.config.usage.contains(wgpu::TextureUsages::COPY_DST);
+    let swap = side.surface_generation();
+    let atlas = crate::window::damage::GlyphAtlas::of(&rt.text.atlas);
+    let in_place = !images_changed && !compositor_draws_own;
+    let cycle_ok = tick
+        && in_place
+        && side.damage.can_patch_loop(&rt.instances, &slots, size, rt.clear_color(), swap, atlas).is_ok();
+    let armed_cycle = cycle_ok
+        && side.renderer.arm_cycle(
+            &side.gpu.device,
+            &side.gpu.queue,
+            paint,
+            &rt.instances,
+            &slots,
+            rt.clear_color(),
+            size,
+            side.config.format,
+            copy_dst,
+        ).is_ok();
+    if armed_cycle {
+        side.damage.patched(&rt.instances, &slots);
+    } else if let crate::window::damage::Plan::Part { draw, .. } = side.damage.plan(
+        &rt.instances,
+        size,
+        rt.clear_color(),
+        swap,
+        atlas,
+        in_place,
+    ) {
+        side.renderer.arm_damage(
+            &side.gpu.device,
+            &side.gpu.queue,
+            &draw,
+            rt.clear_color(),
+            size,
+            side.config.format,
+            copy_dst,
+        );
+    }
+    side.renderer.next_instances(paint, armed_cycle.then_some(slots));
     let encoder = side.gpu.device.create_command_encoder(&Default::default());
-    PreparedGpu { frame, encoder, size, armed, readback, copy: None }
+    PreparedGpu { frame, encoder, size, armed_cycle, readback, copy: None }
 }
 
 /// Encodes the UI or custom compositor pass (plus optional hand-over drift readback copy) into
@@ -479,16 +537,11 @@ pub(super) fn encode_gpu_frame(
     dt: f64,
     update_ms: f64,
 ) -> bool {
-    let comp_animating = if prepared.armed {
-        // Rune's default frame (a compositor that drew its own would have kept this a whole one):
-        // nothing draws into the canvas but the copy of the kept frame.
-        let rt = app.rt_mut();
-        side.renderer.set_fade_stops(rt.fade_stops());
-        side.renderer.prepare_ui(&side.gpu.device, &side.gpu.queue, &mut rt.text.atlas, &rt.instances, prepared.size);
-        side.renderer.draw_armed(&mut prepared.encoder, &prepared.frame.texture);
-        false
-    } else if app.has_compositor() {
-        let target = prepared.frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
+    let target = prepared.frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        format: (side.renderer.format() != side.config.format).then_some(side.renderer.format()),
+        ..Default::default()
+    });
+    let comp_animating = if app.has_compositor() && !prepared.armed_cycle {
         app.render_compositor(CompositorFrame {
             device: &side.gpu.device,
             queue: &side.gpu.queue,
@@ -501,7 +554,6 @@ pub(super) fn encode_gpu_frame(
             ui: &mut side.renderer,
         })
     } else {
-        let target = prepared.frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(side.renderer.format()), ..Default::default() });
         let rt = app.rt_mut();
         let clear = rt.clear_color();
         crate::frame::host_step::draw_ui(&mut side.renderer, &side.gpu, &mut prepared.encoder, &target, rt, prepared.size, clear);
