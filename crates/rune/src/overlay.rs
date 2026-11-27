@@ -860,6 +860,9 @@ pub(in crate::overlay) struct OverlayCore {
     pub(in crate::overlay) wayland_resize: sizing::WaylandResize,
     /// Declarative content-sizing mode and optional `(min_size, max_size)` bounds.
     pub(in crate::overlay) sizing: sizing::SizingConfig,
+    /// Whether this shown overlay currently holds the keyboard (for recreating a Wayland layer
+    /// surface without dropping keyboard interactivity).
+    pub(in crate::overlay) key_hold: keys::KeyHold,
     /// One-shot `OverlayHandle::after_hidden` coordination and Wayland hide sync.
     pub(in crate::overlay) after_hidden: after_hidden::AfterHiddenState,
     /// In-flight non-blocking `OverlayHandle::activation_token` requests.
@@ -978,6 +981,7 @@ impl OverlayCore {
             last_work_area: None,
             wayland_resize: sizing::WaylandResize::Ready,
             sizing: sizing::SizingConfig::default(),
+            key_hold: keys::KeyHold::default(),
             after_hidden: after_hidden::AfterHiddenState::default(),
             activation_tokens: requests::ActivationTokens::default(),
             closed: false,

@@ -766,11 +766,22 @@ fn drain_event_queue(queue: &mut EventQueue<State>, state: &mut State) {
     }
 }
 
+fn wayland_interactivity(mode: keyboard::Interactivity) -> KeyboardInteractivity {
+    match mode {
+        keyboard::Interactivity::None => KeyboardInteractivity::None,
+        keyboard::Interactivity::Exclusive => KeyboardInteractivity::Exclusive,
+        keyboard::Interactivity::OnDemand => KeyboardInteractivity::OnDemand,
+    }
+}
+
 impl LayerSurface {
     /// None when the display isn't Wayland, the compositor lacks layer-shell, or it never
     /// configures the surface within `configure_wait::TIMEOUT`.
+    /// When `hold_keys` is true and `options.keys` is supported by the bound `zwlr_layer_shell_v1`
+    /// version, the surface requests keyboard interactivity in its initial commit so a recreated
+    /// surface never maps without the keyboard.
     #[allow(unsafe_code)]
-    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
+    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, hold_keys: bool) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         let want_keys = options.keys.takes_keys();
         if want_keys { compose::warm(); }
@@ -816,7 +827,7 @@ impl LayerSurface {
         // Preserve existing overlay-layer semantics. There is no layer above Overlay;
         // relative ordering of peers is compositor policy, unlike AppKit's numeric levels.
         let layer = shell.get_layer_surface(&surface, output.as_ref(), Layer::Overlay, namespace.to_owned(), &qh, ());
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_keyboard_interactivity(wayland_interactivity(keyboard::interactivity(options.keys, layer.version(), hold_keys)));
         let shapes = globals.bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let text_input_manager = want_keys
             .then(|| globals.bind::<ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ()).ok())
@@ -936,9 +947,9 @@ impl LayerSurface {
     /// `wl_keyboard.leave` came), so the overlay is focused again at once, for the caller to
     /// deliver; otherwise focus follows the compositor's `enter`.
     pub fn request_keys(&mut self) -> bool {
-        if !keyboard::can_request_keys(self.options.keys, self.layer.version()) { return false; }
-        let mode = if self.options.keys == crate::KeyPolicy::Exclusive { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::OnDemand };
-        self.layer.set_keyboard_interactivity(mode);
+        let mode = keyboard::interactivity(self.options.keys, self.layer.version(), true);
+        if mode == keyboard::Interactivity::None { return false; }
+        self.layer.set_keyboard_interactivity(wayland_interactivity(mode));
         self.surface.commit();
         self.queue.flush().ok();
         let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Requested);
@@ -1197,3 +1208,7 @@ impl Drop for LayerSurface {
 #[cfg(test)]
 #[path = "layer_shell_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_shell/keys_tests.rs"]
+mod keys_tests;

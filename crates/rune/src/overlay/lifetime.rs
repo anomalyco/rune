@@ -115,7 +115,7 @@ impl OverlayCore {
         self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
         let made = if wayland {
-            self.layer(app, event_loop).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
+            self.layer(app, event_loop, showing).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
         } else if self.surface.parked().is_some() || self.window(app, event_loop).is_some() {
             // macOS made the surface with its panel; elsewhere the window waits parked.
             match self.surface.take_live() {
@@ -343,6 +343,7 @@ impl OverlayCore {
     /// `presence_due` steps its alpha (Windows), then hides it. Returns whether a live Wayland
     /// surface was destroyed as part of the hide.
     fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) -> bool {
+        self.key_hold.step(keys::KeyHoldEvent::Release);
         // A hide need not report a blur (a Wayland surface goes without `wl_keyboard.leave`),
         // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
         // and the next show's focus is a change; what it held is released.
@@ -454,7 +455,7 @@ impl OverlayCore {
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) fn layer(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) -> Option<Live> {
+    pub(super) fn layer(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, showing: bool) -> Option<Live> {
         use winit::raw_window_handle::HasDisplayHandle;
         use winit::platform::wayland::MonitorHandleExtWayland;
         let display = event_loop.display_handle().ok()?.as_raw();
@@ -466,7 +467,8 @@ impl OverlayCore {
             DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) if event_loop.available_monitors().any(|m| m.native_id() == *id) => Some(*id),
             _ => None,
         };
-        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output)?;
+        let hold_keys = showing && self.key_hold.is_held();
+        let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, hold_keys)?;
         layer.set_buffer_scale(scale);
         if let Some((w, h)) = layer.configured_size() {
             if w > 0 { self.at.size.0 = w as f32; }
@@ -481,7 +483,7 @@ impl OverlayCore {
     }
 
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-    pub(super) fn layer(&mut self, _app: &mut dyn OverlayApp, _event_loop: &ActiveEventLoop) -> Option<Live> {
+    pub(super) fn layer(&mut self, _app: &mut dyn OverlayApp, _event_loop: &ActiveEventLoop, _showing: bool) -> Option<Live> {
         None
     }
 

@@ -334,6 +334,15 @@ pub(crate) mod keyboard {
         }
     }
 
+    /// The `zwlr_layer_surface_v1` keyboard interactivity mode to request from the compositor.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) enum Interactivity {
+        #[default]
+        None,
+        Exclusive,
+        OnDemand,
+    }
+
     /// Whether a layer-shell overlay with `policy` may request keyboard interactivity on
     /// `zwlr_layer_surface_v1` `layer_version`. On-demand needs version 4; exclusive is in
     /// every version.
@@ -342,6 +351,20 @@ pub(crate) mod keyboard {
             crate::KeyPolicy::None => false,
             crate::KeyPolicy::OnDemand => layer_version >= 4,
             crate::KeyPolicy::Exclusive => true,
+        }
+    }
+
+    /// The `zwlr_layer_surface_v1` keyboard interactivity mode a layer surface asks for when
+    /// `hold_keys` is true, or `Interactivity::None` when false or unsupported by `policy` /
+    /// `layer_version`. On-demand requires version 4; exclusive works on every version.
+    pub(crate) fn interactivity(policy: crate::KeyPolicy, layer_version: u32, hold_keys: bool) -> Interactivity {
+        if !hold_keys || !can_request_keys(policy, layer_version) {
+            return Interactivity::None;
+        }
+        match policy {
+            crate::KeyPolicy::None => Interactivity::None,
+            crate::KeyPolicy::Exclusive => Interactivity::Exclusive,
+            crate::KeyPolicy::OnDemand => Interactivity::OnDemand,
         }
     }
 
