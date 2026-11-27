@@ -217,6 +217,7 @@ impl El {
         cold.pixels = Some(pixels.clone());
         cold.pixels_fit = None;
         cold.pixels_wrap = None;
+        cold.web_image = None;
         self
     }
     /// Shows `pixels` at its own aspect ratio, centred: `Fit` letterboxes the whole image inside
@@ -226,6 +227,7 @@ impl El {
         cold.pixels = Some(pixels.clone());
         cold.pixels_fit = Some(fit);
         cold.pixels_wrap = None;
+        cold.web_image = None;
         self
     }
     /// Places `pixels` at `rect` (`[x, y, w, h]` in points from the element's top-left, allowed
@@ -260,6 +262,7 @@ impl El {
         cold.pixels = Some(pixels.clone());
         cold.pixels_fit = None;
         cold.pixels_wrap = Some((rect, wrap));
+        cold.web_image = None;
         self
     }
     /// Repeats `pixels` across the element from its top-left at `tile` (`[w, h]` points per

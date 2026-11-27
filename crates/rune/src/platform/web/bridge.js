@@ -318,7 +318,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
-    const h = { canvas, form, textarea, input, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
+    const h = { canvas, form, textarea, input, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), webImages: null, webImageNodes: new Map(), pageHeight: 0, mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         inputMode: 'text', autofill: '', peerKey: '', peerSecure: false,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
@@ -936,7 +936,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // Printing prints what's on screen (the canvas, and the mirror's text over it, which the
         // PDF keeps selectable), fitted to the paper's width rather than cut off at its edge.
         const style = document.createElement('style');
-        style.textContent = '@media print{canvas,[data-rune-a11y]{transform:scale(var(--rune-print-scale,1));transform-origin:0 0}}';
+        style.textContent = '@media print{canvas,[data-rune-web-images],[data-rune-a11y]{transform:scale(var(--rune-print-scale,1));transform-origin:0 0}}';
         document.head.append(style);
         listen(window, 'beforeprint', () => {
             // An A4 or Letter page's printable width at the browser's default margins, in CSS pixels.
@@ -1610,6 +1610,7 @@ function applyKeyboardShift(h) {
     const value = shift > 0 ? `translate3d(0, ${-shift}px, 0)` : '';
     const sibling = h.canvas.previousElementSibling;
     const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [h.canvas, sibling, h.a11y] : [h.canvas, h.a11y];
+    if (h.webImages) targets.push(h.webImages);
     for (const target of targets) target.style.transform = value;
     placeCaretFields(h);
 }
@@ -2725,10 +2726,126 @@ export function scheduleA11y(h, attempt = 0, delayMs = 150) {
 // when none has).
 export function syncPage(h, height, focused) {
     h.focused = focused;
+    h.pageHeight = height;
     h.a11y.style.height = `${height}px`;
+    if (h.webImages) h.webImages.style.height = `${height}px`;
     // The clipper is as tall as the page, so the band's overscan past the document's end is
     // clipped instead of making the page scrollable past its foot.
     if (h.band && h.band.style.height !== `${height}px`) h.band.style.height = `${height}px`;
+}
+
+function ensureWebImagesLayer(h) {
+    if (h.webImages) return h.webImages;
+    const layer = document.createElement('div');
+    layer.setAttribute('data-rune-web-images', '');
+    layer.setAttribute('aria-hidden', 'true');
+    if (h.page) {
+        layer.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${h.pageHeight || 0}px;overflow:hidden;overflow:clip;pointer-events:none;z-index:1;`;
+    } else if (h.embedded && h.canvas.parentElement) {
+        layer.style.cssText = 'position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1;';
+    } else {
+        layer.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;';
+    }
+    if (h.keyboardShiftY > 0) {
+        layer.style.transform = `translate3d(0, ${-h.keyboardShiftY}px, 0)`;
+    }
+    // Place directly before a11y (same z-index, earlier in DOM order) so the images sit above
+    // the canvas while the a11y mirror stays above them for selection and focus outlines.
+    if (h.a11y.parentElement) h.a11y.parentElement.insertBefore(layer, h.a11y);
+    else document.body.append(layer);
+    h.webImages = layer;
+    return layer;
+}
+
+// Synchronizes display-only cross-origin `<img>` elements (`El::web_image`, `El::web_image_fit`)
+// with Rune's per-frame layout and nested clips without setting `crossOrigin` or reading pixels.
+export function syncWebImages(h, json) {
+    if (h.disposed) return;
+    const items = json ? JSON.parse(json) : [];
+    if (!items.length) {
+        if (h.webImages) {
+            for (const entry of h.webImageNodes.values()) (entry.clips[0] ?? entry.img).remove();
+            h.webImageNodes.clear();
+            h.webImages.remove();
+            h.webImages = null;
+        }
+        return;
+    }
+    const layer = ensureWebImagesLayer(h);
+    const seen = new Set();
+    let cursor = layer.firstElementChild;
+    for (const item of items) {
+        seen.add(item.id);
+        let entry = h.webImageNodes.get(item.id);
+        if (!entry) {
+            const img = document.createElement('img');
+            img.alt = '';
+            img.decoding = 'async';
+            img.draggable = false;
+            img.setAttribute('aria-hidden', 'true');
+            img.setAttribute('data-rune-web-image', item.id);
+            entry = { img, clips: [], url: '' };
+            h.webImageNodes.set(item.id, entry);
+        }
+        const specs = [];
+        if (item.c) specs.push([item.c[0], item.c[1], item.c[2], item.c[3], 0, 0, 0, 0]);
+        if (item.rc) {
+            for (const rc of item.rc) specs.push(rc);
+        }
+        const dropped = entry.clips.length > specs.length ? entry.clips.splice(specs.length) : [];
+        while (entry.clips.length < specs.length) {
+            entry.clips.push(document.createElement('div'));
+        }
+        const rootEl = entry.clips.length > 0 ? entry.clips[0] : entry.img;
+        if (cursor === rootEl) {
+            cursor = cursor.nextElementSibling;
+        } else {
+            while (cursor && (cursor === entry.img || dropped.includes(cursor))) {
+                cursor = cursor.nextElementSibling;
+            }
+        }
+        for (let k = 0; k < entry.clips.length; k++) {
+            const nextChild = k + 1 < entry.clips.length ? entry.clips[k + 1] : entry.img;
+            if (nextChild.parentElement !== entry.clips[k]) entry.clips[k].insertBefore(nextChild, null);
+        }
+        if (rootEl.parentElement !== layer || rootEl.nextElementSibling !== cursor) {
+            layer.insertBefore(rootEl, cursor);
+        }
+        for (const old of dropped) old.remove();
+
+        let ox = 0;
+        let oy = 0;
+        for (let k = 0; k < specs.length; k++) {
+            const [cx, cy, cw, ch, tl, tr, br, bl] = specs[k];
+            const el = entry.clips[k];
+            let css = `position:absolute;left:${cx - ox}px;top:${cy - oy}px;width:${cw}px;height:${ch}px;overflow:hidden;pointer-events:none;`;
+            if (tl || tr || br || bl) css += `border-radius:${tl}px ${tr}px ${br}px ${bl}px;`;
+            if (el.style.cssText !== css) el.style.cssText = css;
+            ox = cx;
+            oy = cy;
+        }
+        if (entry.url !== item.u) {
+            entry.url = item.u;
+            entry.img.src = item.u;
+        }
+        const [x, y, w, hPx] = item.r;
+        const fit = item.f ?? 'fill';
+        const pos = item.p ?? '50% 50%';
+        let css = item.m
+            ? `position:absolute;left:0;top:0;width:${w}px;height:${hPx}px;transform-origin:0 0;transform:matrix(${item.m[0]},${item.m[1]},${item.m[2]},${item.m[3]},${item.m[4] - ox},${item.m[5] - oy});`
+            : `position:absolute;left:${x - ox}px;top:${y - oy}px;width:${w}px;height:${hPx}px;`;
+        css += `display:block;margin:0;padding:0;border:0;max-width:none;max-height:none;object-fit:${fit};object-position:${pos};pointer-events:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;`;
+        if (item.rad) css += `border-radius:${item.rad[0]}px ${item.rad[1]}px ${item.rad[2]}px ${item.rad[3]}px;`;
+        if (item.n) css += 'image-rendering:pixelated;';
+        if (item.o !== undefined) css += `opacity:${item.o};`;
+        if (entry.img.style.cssText !== css) entry.img.style.cssText = css;
+    }
+    for (const [id, entry] of h.webImageNodes) {
+        if (!seen.has(id)) {
+            (entry.clips[0] ?? entry.img).remove();
+            h.webImageNodes.delete(id);
+        }
+    }
 }
 
 // Detects how this browser represents `Element.scrollLeft` on a `direction: rtl` container:
@@ -3208,6 +3325,9 @@ export function destroy(h) {
         if (sibling?.hasAttribute?.('data-rune-cpu')) sibling.style.transform = '';
         h.canvas.style.transform = '';
     }
+    h.webImageNodes.clear();
+    h.webImages?.remove();
+    h.webImages = null;
     h.a11y.remove();
     h.band?.remove();
     h.password.remove(); h.input.remove(); h.form.remove(); h.textarea.remove();

@@ -96,6 +96,8 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) text_quads: quads::TextQuads,
     /// `El::system_material` elements built this frame, in paint order.
     pub(super) materials: Vec<crate::system_material::MaterialDraw>,
+    /// `El::web_image` / `El::web_image_fit` elements built this frame, in paint order.
+    pub(super) web_images: Vec<crate::web_image::WebImageDraw>,
     /// Wayland blur regions emitted by `El::system_material` elements this frame (empty unless
     /// `wayland_blur_materials` is enabled).
     pub(super) wayland_material_blurs: Vec<crate::system_material::WaylandMaterialBlur>,
@@ -172,6 +174,7 @@ impl PaintState {
             text_rows: HashMap::default(),
             text_quads: quads::TextQuads::new(),
             materials: Vec::new(),
+            web_images: Vec::new(),
             wayland_material_blurs: Vec::new(),
             #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
             windows_material_draws: Vec::new(),
@@ -218,6 +221,7 @@ impl PaintState {
         shrink_vec(&mut self.cache_paint_scratch, 32);
         shrink_vec(&mut self.cache_inside_scratch, 32);
         shrink_vec(&mut self.materials, 16);
+        shrink_vec(&mut self.web_images, 16);
         shrink_vec(&mut self.wayland_material_blurs, 16);
         #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
         shrink_vec(&mut self.windows_material_draws, 16);
@@ -632,6 +636,21 @@ impl PaintState {
     #[inline]
     pub(crate) fn materials(&self) -> &[crate::system_material::MaterialDraw] {
         &self.materials
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_web_images(&mut self) {
+        self.web_images.clear();
+    }
+
+    #[inline]
+    pub(crate) fn push_web_image(&mut self, draw: crate::web_image::WebImageDraw) {
+        self.web_images.push(draw);
+    }
+
+    #[inline]
+    pub(crate) fn web_images(&self) -> &[crate::web_image::WebImageDraw] {
+        &self.web_images
     }
 
     #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]

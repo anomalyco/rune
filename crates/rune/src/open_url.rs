@@ -138,6 +138,17 @@ pub(crate) fn check_same_tab(url: &str) -> Result<String, OpenUrlError> { check_
 /// `https:`, `mailto:`, or a relative path/query/fragment that isn't scheme-relative (`//`).
 pub(crate) fn check_href(url: &str) -> Result<String, OpenUrlError> { check_link(url, true) }
 
+/// `check` for a display-only web `<img src>` (`El::web_image`): `http:`, `https:`, or a
+/// relative path/query/fragment that isn't scheme-relative (`//`). Rejects `mailto:` and
+/// non-HTTP schemes.
+pub(crate) fn check_image_url(url: &str) -> Result<String, OpenUrlError> {
+    let checked = check_link(url, true)?;
+    if checked.starts_with("mailto:") {
+        return Err(OpenUrlError::UnsupportedScheme("mailto".into()));
+    }
+    Ok(checked)
+}
+
 fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     let url = url.trim();
     if url.is_empty() { return Err(OpenUrlError::Empty); }

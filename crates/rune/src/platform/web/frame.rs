@@ -104,6 +104,10 @@ impl Running {
         }
     }
 
+    pub(super) fn sync_web_images(&mut self) {
+        self.web_images.sync(&self.input.handle, self.app.rt().paint.web_images());
+    }
+
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
         let rt = self.app.rt_mut();
         super::file_dialog::flush(rt, &self.input.handle);
@@ -246,6 +250,7 @@ impl FrameHost for WebFrameHost<'_> {
         let mut info = *info;
         self.sync_after_step(&mut info);
         self.r.sync_band(self.window);
+        self.r.sync_web_images();
         if self.r.app.rt_mut().shell_request.take().is_some() {
             self.should_end = true;
             return;
@@ -549,6 +554,7 @@ impl FrameHost for WebFrameHost<'_> {
         let now = self.now.unwrap_or(submitted);
         // In the same commit as the frame: the canvas moves to where this frame drew it.
         self.r.sync_band(self.window);
+        self.r.sync_web_images();
         // Only an ambient loop's step (a frame its wake asked for, no commit, nothing else moving).
         let ambient = {
             let rt = self.r.app.rt();

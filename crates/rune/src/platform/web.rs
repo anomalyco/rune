@@ -23,6 +23,7 @@ mod page_fonts;
 mod pipelines;
 pub(crate) mod platform;
 mod recovery;
+mod web_images;
 pub(crate) use rune_text::segmenter;
 
 thread_local! {
@@ -259,6 +260,7 @@ struct Running {
     _menus: crate::native_menu::MenuGuard,
     shortcuts: crate::shortcuts::Guard,
     input: input::Bridge,
+    web_images: web_images::WebImagesSync,
     clipboard: crate::clipboard::Client,
 }
 
@@ -456,7 +458,7 @@ impl Browser {
         app.rt_mut().set_touch_hold_policy(web_math::web_touch_hold_policy(input::live_touch_context_menu()));
         let input = input::Bridge::new(&window.canvas().unwrap(), Rc::downgrade(&self.running), window.clone(),
             input::Mode { embedded: self.embedded, fit_height, document });
-        *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, clipboard,
+        *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, web_images: Default::default(), clipboard,
             clock: crate::frame::clock::FrameClock::new(now), suspended: false, full_redraw: true, embedded: self.embedded,
             document, presented: false, cpu_blocked_on_gpu: false, last_presented: None, band: None, size: physical, on_ready, observability, frame_seq: 0,
             late_fonts, fonts: page_fonts, cursor, _menus: menus, shortcuts });
