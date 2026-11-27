@@ -111,4 +111,5 @@ mod titlebar_action_compat;
 mod tx_blur;
 mod virtual_rows_append;
 mod virtual_rows_rekey;
+mod wayland_csd_title;
 mod window_panel_compat;

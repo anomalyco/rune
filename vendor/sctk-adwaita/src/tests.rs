@@ -332,3 +332,37 @@ fn a_frame_waits_for_an_early_read_that_still_runs() {
     assert_eq!(crate::config::take(&slot), Some(1));
     assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+/// With the `ab_glyph` title renderer enabled, `TitleText::new` returns a renderer that draws
+/// visible pixels for a non-empty window title (falling back to the bundled Cantarell font when no
+/// system font is resolved).
+#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+#[test]
+fn ab_glyph_title_text_renders_non_empty_pixmap() {
+    let mut title = crate::title::TitleText::new(tiny_skia::Color::WHITE)
+        .expect("ab_glyph feature must construct TitleText");
+    title.update_title("Rune");
+    let pixmap = title.pixmap().expect("non-empty title must render a pixmap");
+    assert!(pixmap.width() > 0 && pixmap.height() > 0);
+    assert!(
+        pixmap.pixels().iter().any(|px| px.alpha() > 0),
+        "rendered title pixmap must contain visible glyph pixels",
+    );
+}
+
+/// The `ab_glyph` titlebar font read runs on a background thread and its result is consumed once.
+#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+#[test]
+fn early_title_font_read_is_off_thread_and_taken_once() {
+    fn fallback_font() -> crate::title::TitleFont {
+        crate::title::TitleFont {
+            font: None,
+            pt_size: 11.0,
+        }
+    }
+    let slot = std::sync::Mutex::new(crate::config::start(fallback_font));
+    let first = crate::config::take(&slot).expect("the early title font read");
+    assert_eq!(first.pt_size, 11.0);
+    assert!(first.font.is_none());
+    assert!(crate::config::take(&slot).is_none(), "the early title font must be taken once");
+}

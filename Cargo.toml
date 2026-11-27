@@ -135,8 +135,9 @@ winit = { path = "vendor/winit" }
 # draws above them rounds the top two, instead of drawing a square L over the shadow's rounded
 # cut-out; and `AdwaitaFrame::content_corner_radius` says what radius the content's own bottom
 # corners take, for the app to clear outside (`window/surface/corners.rs`); and
-# `read_system_config_early` starts the first frame's two `dbus-send` reads (colour scheme, button
-# layout) on threads of their own instead of in the window's first configure. Re-made by
+# `read_system_config_early` starts the first frame's system reads (colour scheme and button
+# layout via `dbus-send`, plus the `ab_glyph` titlebar font via `gsettings` and `fc-match` when
+# enabled) on threads of their own instead of in the window's first configure. Re-made by
 # `scripts/vendor-sctk-adwaita.sh <version>` when sctk-adwaita is bumped; apps that build Rune
 # patch it too.
 sctk-adwaita = { path = "vendor/sctk-adwaita" }

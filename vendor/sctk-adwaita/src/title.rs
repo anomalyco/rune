@@ -11,6 +11,9 @@ mod crossfont_renderer;
 #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
 mod ab_glyph_renderer;
 
+#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+pub(crate) use ab_glyph_renderer::{read_title_font, TitleFont};
+
 #[cfg(all(not(feature = "crossfont"), not(feature = "ab_glyph")))]
 mod dumb;
 

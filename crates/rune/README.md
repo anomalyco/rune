@@ -4043,7 +4043,10 @@ accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "<re
 Patch both `winit` and `sctk-adwaita`, and from the same revision: Rune's winit calls
 `AdwaitaFrame::content_corner_radius`, which only the vendored frame has, so a workspace that
 patches winit without sctk-adwaita doesn't compile. With both, a decorated Wayland window's
-buttons, titlebar and rounded bottom corners are drawn by the vendored frame.
+buttons, titlebar, window title (enabled by the default `wayland-csd-title` feature; disable with
+`default-features = false` for custom-titlebar or minimal Linux builds to omit `ab_glyph` and its
+fallback font while keeping CSD frames and buttons) and rounded bottom corners are drawn by the
+vendored frame.
 
 When you update Rune, check its [root `Cargo.toml`](../../Cargo.toml) at the new revision and
 use that same `rev` for Rune and every patch.

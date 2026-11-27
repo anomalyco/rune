@@ -5,24 +5,29 @@ use std::sync::{Mutex, OnceLock};
 
 type ButtonLayout = Option<(String, String)>;
 
-/// The two reads started before a window exists, each on a thread of its own. The first frame
+/// The system reads started before a window exists, each on a thread of its own. The first frame
 /// takes their answers; a later frame reads again, as it always did.
 struct Early {
     dark: Mutex<Option<Receiver<bool>>>,
     button_layout: Mutex<Option<Receiver<ButtonLayout>>>,
+    #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+    title_font: Mutex<Option<Receiver<crate::title::TitleFont>>>,
 }
 
 static EARLY: OnceLock<Early> = OnceLock::new();
 
 /// Starts the reads a frame's first drawing needs (the colour scheme and the button layout: a
-/// `dbus-send` process each, with 100 ms for the portal's reply) on threads of their own, once per
+/// `dbus-send` process each, with 100 ms for the portal's reply; plus the `ab_glyph` titlebar
+/// font's `gsettings` and `fc-match` lookups when compiled in) on threads of their own, once per
 /// process. Call it when a client-side frame is certain and before the window's first configure:
-/// the frame is made in that configure, on the event loop's thread, which otherwise starts both
+/// the frame is made in that configure, on the event loop's thread, which otherwise starts those
 /// processes one after the other and waits for each.
 pub fn read_system_config_early() {
     EARLY.get_or_init(|| Early {
         dark: Mutex::new(start(read_prefer_dark)),
         button_layout: Mutex::new(start(read_button_layout_config)),
+        #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+        title_font: Mutex::new(start(crate::title::read_title_font)),
     });
 }
 
@@ -56,6 +61,15 @@ pub(crate) fn get_button_layout_config() -> ButtonLayout {
         .get()
         .and_then(|early| take(&early.button_layout))
         .unwrap_or_else(read_button_layout_config)
+}
+
+/// Query the titlebar font preference and mapped system font file, reusing the early read once.
+#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+pub(crate) fn get_title_font() -> crate::title::TitleFont {
+    EARLY
+        .get()
+        .and_then(|early| take(&early.title_font))
+        .unwrap_or_else(crate::title::read_title_font)
 }
 
 fn read_prefer_dark() -> bool {

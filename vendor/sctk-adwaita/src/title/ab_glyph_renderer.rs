@@ -11,6 +11,23 @@ use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
 
 const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
 
+/// The resolved titlebar font preference and its memory-mapped font file, if found.
+pub(crate) struct TitleFont {
+    pub(crate) font: Option<(memmap2::Mmap, FontPreference)>,
+    pub(crate) pt_size: f32,
+}
+
+/// Reads the GNOME titlebar font preference (`gsettings`) and maps its matching font file
+/// (`fc-match`). Safe to run on a background thread before the first frame is created.
+pub(crate) fn read_title_font() -> TitleFont {
+    let font_pref = config::titlebar_font().unwrap_or_default();
+    let pt_size = font_pref.pt_size;
+    let font = font_file_matching(&font_pref)
+        .and_then(|f| mmap(&f))
+        .map(|mmap| (mmap, font_pref));
+    TitleFont { font, pt_size }
+}
+
 #[derive(Debug)]
 pub struct AbGlyphTitleText {
     title: String,
@@ -23,11 +40,10 @@ pub struct AbGlyphTitleText {
 
 impl AbGlyphTitleText {
     pub fn new(color: Color) -> Self {
-        let font_pref = config::titlebar_font().unwrap_or_default();
-        let font_pref_pt_size = font_pref.pt_size;
-        let font = font_file_matching(&font_pref)
-            .and_then(|f| mmap(&f))
-            .map(|mmap| (mmap, font_pref));
+        let TitleFont {
+            font,
+            pt_size: font_pref_pt_size,
+        } = crate::config::get_title_font();
 
         let size = parse_font(&font)
             .pt_to_px_scale(font_pref_pt_size)
