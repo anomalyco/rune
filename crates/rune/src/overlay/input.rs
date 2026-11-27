@@ -725,6 +725,8 @@ impl OverlayCore {
         }
         let reset_position = self.position_owner.apply_requests(&requests);
         let options_changed = requests.placement.is_some() || requests.display.is_some();
+        let was_shown = self.presence.shown();
+        let was_holding_keys = self.key_hold.is_held();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let recreate_layer = should_recreate_layer(
             &self.options.display,
@@ -732,7 +734,7 @@ impl OverlayCore {
             matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_))),
         );
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let layer_was_visible = self.presence.shown();
+        let layer_was_visible = was_shown;
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if recreate_layer { self.hide(app); }
         if let Some(placement) = requests.placement {
@@ -801,6 +803,10 @@ impl OverlayCore {
             self.window_backdrop = backdrop;
             self.sync_window_backdrop(app.rt_mut(), false);
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let had_live_layer = matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_)));
+        let will_show = keys::will_be_shown(was_shown, requests.visibility);
+        self.key_hold = keys::next_key_hold(was_holding_keys, will_show, self.options.keys, requests.keys);
         match requests.visibility {
             Some(Visibility::Show(fade)) => self.show_fading(app, event_loop, fade),
             Some(Visibility::Hide(fade)) => self.hide_fading(app, fade),
@@ -810,6 +816,9 @@ impl OverlayCore {
         if recreate_layer && self.surface.live().is_none() {
             if layer_was_visible && !matches!(requests.visibility, Some(Visibility::Hide(_))) { self.show_fading(app, event_loop, Duration::ZERO); }
             else if self.options.prewarm { self.prepare(app, event_loop, false); }
+        }
+        if !self.presence.shown() {
+            self.key_hold.step(keys::KeyHoldEvent::Release);
         }
         if new_after_hidden {
             self.after_hidden_queued(app);
@@ -832,12 +841,19 @@ impl OverlayCore {
         if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
             && let Some(panel) = &self.panel { panel.request_keys(); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
-            && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
-            && layer.request_keys() { self.surface_input(app, crate::platform::layer_shell::Input::Focus(true)); }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if requests.keys == Some(KeyRequest::Release) && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
-            && layer.release_keys() { self.surface_input(app, crate::platform::layer_shell::Input::Focus(false)); }
+        if let Some(req) = keys::should_apply_layer_key_request(had_live_layer, requests.keys, self.presence.shown(), self.options.keys) {
+            let focus = if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
+                match req {
+                    KeyRequest::Take => layer.request_keys().then_some(true),
+                    KeyRequest::Release => layer.release_keys().then_some(false),
+                }
+            } else {
+                None
+            };
+            if let Some(focused) = focus {
+                self.surface_input(app, crate::platform::layer_shell::Input::Focus(focused));
+            }
+        }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
             && let Some(x11) = &self.x11 { x11.request_keys(); }

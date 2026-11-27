@@ -83,6 +83,28 @@ fn layer_shell_key_translation_handles_ctrl_modifiers_space_and_non_ascii_layout
 }
 
 #[test]
+fn layer_shell_initial_interactivity_honors_hold_keys_policy_and_protocol_version() {
+    use super::keyboard::{Interactivity, interactivity};
+    use crate::KeyPolicy;
+
+    // When not holding keys, every policy and layer-shell version starts at None.
+    for policy in [KeyPolicy::None, KeyPolicy::OnDemand, KeyPolicy::Exclusive] {
+        for version in [1, 3, 4] {
+            assert_eq!(interactivity(policy, version, false), Interactivity::None);
+        }
+    }
+
+    // Holding keys picks the policy's interactivity only when the layer-shell version supports it.
+    assert_eq!(interactivity(KeyPolicy::None, 4, true), Interactivity::None);
+    assert_eq!(interactivity(KeyPolicy::Exclusive, 1, true), Interactivity::Exclusive);
+    assert_eq!(interactivity(KeyPolicy::Exclusive, 3, true), Interactivity::Exclusive);
+    assert_eq!(interactivity(KeyPolicy::Exclusive, 4, true), Interactivity::Exclusive);
+    assert_eq!(interactivity(KeyPolicy::OnDemand, 1, true), Interactivity::None);
+    assert_eq!(interactivity(KeyPolicy::OnDemand, 3, true), Interactivity::None);
+    assert_eq!(interactivity(KeyPolicy::OnDemand, 4, true), Interactivity::OnDemand);
+}
+
+#[test]
 fn keymap_decode_reads_at_offset_zero_strips_nul_and_enforces_cap() {
     use super::keyboard::{MAX_KEYMAP_BYTES, decode_keymap};
     use std::io::{Error, ErrorKind};

@@ -1,0 +1,1 @@
+- Wayland overlays: a shown key-taking overlay that holds keyboard focus (`OverlayHandle::request_keys`) now keeps holding it when its layer surface is recreated for a display change (`set_display`), requesting keyboard interactivity in the replacement surface's initial commit until `release_keys` or a hide clears it.

@@ -111,7 +111,7 @@ fn activation_token_returns_without_roundtrip_and_completes_after_layer_drop() -
     ));
     let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
     let options = OverlayOptions { keys: KeyPolicy::Exclusive, ..OverlayOptions::default() };
-    let mut layer = super::super::LayerSurface::new(display, "test-async-activation", placement, true, &options, None)
+    let mut layer = super::super::LayerSurface::new(display, "test-async-activation", placement, true, &options, None, false)
         .expect("configured layer surface");
 
     let mut pending = layer.start_activation_token().expect("non-blocking start");

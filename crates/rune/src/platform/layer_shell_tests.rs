@@ -392,7 +392,7 @@ fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_close
         ));
         let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
         let options = OverlayOptions::default();
-        let mut layer = super::LayerSurface::new(display, "test-pending", placement, false, &options, None)
+        let mut layer = super::LayerSurface::new(display, "test-pending", placement, false, &options, None, false)
             .expect("configured layer surface");
 
         assert!(layer.is_live());
@@ -584,7 +584,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
         ));
-        let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None)
+        let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None, false)
             .expect("configured layer surface");
         let conn_probe = layer.conn.clone();
 
@@ -658,7 +658,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
         ));
-        let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None)
+        let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None, false)
             .expect("configured layer surface");
         let conn_probe = layer.conn.clone();
         layer.request_frame();
@@ -714,7 +714,7 @@ fn layer_surface_fail_connection_populates_close_reason_once() -> std::io::Resul
         size: (100.0, 40.0), edge: crate::ScreenEdge::Top, margin: 0.0, align: crate::Align::Center, inset: 0.0,
     };
     let options = crate::OverlayOptions::default();
-    let mut layer = super::LayerSurface::new(display, "test-close-reason", placement, false, &options, None)
+    let mut layer = super::LayerSurface::new(display, "test-close-reason", placement, false, &options, None, false)
         .expect("configured layer surface");
     assert_eq!(layer.close_reason(), None);
     layer.fail_connection(Some("broken pipe".into()));
@@ -834,7 +834,7 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     ));
     let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
     let options = OverlayOptions { keys: KeyPolicy::Exclusive, ..OverlayOptions::default() };
-    let mut layer = super::LayerSurface::new(display, "test-activation", placement, true, &options, None)
+    let mut layer = super::LayerSurface::new(display, "test-activation", placement, true, &options, None, false)
         .expect("configured layer surface");
 
     let seat_id = layer.seat.as_ref().expect("bound wl_seat").id().protocol_id();
