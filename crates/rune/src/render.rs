@@ -157,7 +157,7 @@ pub use offscreen::write_png;
 pub use rune_core::Blend;
 pub use warmup::warm_gpu;
 pub use warmup::warm_gpu_cache;
-pub use warmup::warm_gpu_with;
+pub use warmup::{prewarm_gpu_with, warm_gpu_with};
 
 /// Rows the first glyph atlas page's texture starts with: a window that shows a few labels holds
 /// 512 KiB of it, not 4 MiB. It doubles as its shelves fill, up to `ATLAS_SIZE` (`prepare`).

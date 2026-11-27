@@ -325,6 +325,7 @@ pub use render::gpu_events::GpuEvent;
 pub use render::gpu_events::on_gpu;
 pub use render::prewarm_gpu;
 pub use render::prewarm_gpu_on;
+pub use render::prewarm_gpu_with;
 pub use render::set_gpu_memory_policy;
 pub use render::warm_gpu;
 pub use render::warm_gpu_cache;

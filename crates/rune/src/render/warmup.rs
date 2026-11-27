@@ -363,6 +363,33 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     let _ = (features, prepare);
 }
 
+/// `prewarm_gpu`, then `prepare` on a thread of its own with a [`GpuHandle`](crate::compose::GpuHandle)
+/// to the prewarmed device as soon as it exists, so an app builds its pipelines and uploads while
+/// the window is made and its first frame finds them. Called once the device exists, `prepare`
+/// gets it at once. The handle is the one `Frame::gpu_handle` gives the first window's frames
+/// when that window draws with the prewarmed device: compare its `key` with `Frame::device_key`.
+/// When the window doesn't (an app choosing another backend should call `prewarm_gpu_on` first;
+/// a compositor wanting features the device lacks), the device is dropped, the handle reports
+/// `is_lost`, and the app builds on `Frame::gpu_handle` as without this. Only on macOS, as
+/// `prewarm_gpu`; elsewhere `prepare` never runs.
+///
+/// ```no_run
+/// fn main() {
+///     rune::prewarm_gpu_with(|gpu| {
+///         // Build pipelines on this thread; hand them to the compositor with `gpu.key()`.
+///         let _ = gpu.with(|device, _queue| device.features());
+///     });
+///     // rune::run(...)
+/// }
+/// ```
+pub fn prewarm_gpu_with(prepare: impl FnOnce(crate::compose::GpuHandle) + Send + 'static) {
+    #[cfg(target_os = "macos")]
+    super::prewarm::prepare(Box::new(prepare));
+    #[cfg(not(target_os = "macos"))]
+    let _ = prepare;
+    super::device::prewarm_gpu();
+}
+
 /// App-attributed form of [`warm_gpu_with`] used by [`crate::AppHandle::warm_gpu_with`].
 #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub(crate) fn warm_gpu_with_owner(

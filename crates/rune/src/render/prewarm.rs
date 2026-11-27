@@ -1,6 +1,7 @@
 //! `prewarm_gpu`'s thread and the slot a window takes its result from.
 
 use super::{Gpu, Renderer, warm_machine::ShutdownOutcome, warmup::WarmRenderer};
+use crate::compose::GpuHandle;
 use std::sync::{Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -57,6 +58,7 @@ impl Slot {
                 #[cfg(test)]
                 let loads_before = super::metallib::thread_loads();
                 let renderer = Renderer::try_new_warm(&gpu.device, FORMAT).ok()?;
+                if is_global { PREPARED.made(gpu.handle(renderer.device_key)); }
                 #[cfg(test)]
                 if super::metallib::metallib_enabled() {
                     assert_eq!(super::metallib::thread_loads(), loads_before + 1, "prewarm_gpu loads the precompiled metallib");
@@ -122,7 +124,45 @@ impl Slot {
     }
 }
 
+/// What `prewarm_gpu_with` asks to run with the prewarmed device.
+pub(super) type Prepare = Box<dyn FnOnce(GpuHandle) + Send>;
+
+/// The latest prewarmed device's handle, or what waits for the first (`prewarm_gpu_with`). Each
+/// waiting `Prepare` runs on a thread of its own, so a long one never holds up the window that
+/// joins the prewarm thread.
+pub(super) struct Prepared(Mutex<Handle>);
+
+enum Handle {
+    Unmade(Vec<Prepare>),
+    Made(GpuHandle),
+}
+
+impl Prepared {
+    pub(super) const fn new() -> Self { Prepared(Mutex::new(Handle::Unmade(Vec::new()))) }
+
+    /// Runs `prepare` with the handle: now if a device was made, else once one is.
+    pub(super) fn add(&self, prepare: Prepare) {
+        match &mut *self.0.lock().unwrap_or_else(|e| e.into_inner()) {
+            Handle::Made(gpu) => run(prepare, gpu.clone()),
+            Handle::Unmade(waiting) => waiting.push(prepare),
+        }
+    }
+
+    /// A prewarm thread made its device: what waits gets its handle, and so does what comes later.
+    pub(super) fn made(&self, gpu: GpuHandle) {
+        let before = std::mem::replace(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()), Handle::Made(gpu.clone()));
+        if let Handle::Unmade(waiting) = before {
+            for prepare in waiting { run(prepare, gpu.clone()); }
+        }
+    }
+}
+
+fn run(prepare: Prepare, gpu: GpuHandle) {
+    std::thread::Builder::new().name("rune-gpu-prepare".into()).spawn(move || prepare(gpu)).ok();
+}
+
 static GLOBAL: Slot = Slot::new();
+static PREPARED: Prepared = Prepared::new();
 
 pub(super) fn start() { GLOBAL.start(); }
 pub(super) fn take() -> Option<(Gpu, Renderer)> { GLOBAL.take() }
@@ -132,3 +172,4 @@ pub(super) fn discard() { GLOBAL.discard(); }
 pub(super) fn cancel() { GLOBAL.discard(); }
 pub(super) fn shutdown(timeout: Duration) -> ShutdownOutcome { GLOBAL.shutdown(timeout) }
 pub(super) fn reopen() { GLOBAL.reopen(); }
+pub(super) fn prepare(prepare: Prepare) { PREPARED.add(prepare); }

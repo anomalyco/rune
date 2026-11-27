@@ -147,7 +147,8 @@ impl Lease {
 
 /// Rune's device and queue for work off the frame: worker threads upload buffers and atlases and
 /// build pipelines ahead of the compositor that draws with them. `Clone`, and `Send + Sync` off
-/// the web; take one from [`Frame::gpu_handle`] whenever [`Frame::device_key`] changes.
+/// the web; take one from [`Frame::gpu_handle`] whenever [`Frame::device_key`] changes, or, on
+/// macOS, before the first frame from [`prewarm_gpu_with`](crate::prewarm_gpu_with).
 ///
 /// - **Borrow, don't keep.** [`GpuHandle::with`] lends the device and queue for one closure. Keep
 ///   what it makes (buffers, textures, pipelines), not clones of the device or queue.

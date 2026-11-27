@@ -28,7 +28,8 @@ mod macos {
     /// The window gets the thread's device and its compiled pipeline, once, in the Mac window format.
     #[test]
     fn a_window_takes_the_prewarmed_gpu_and_renderer_once() {
-        crate::prewarm_gpu();
+        let (sent, handed) = std::sync::mpsc::channel();
+        crate::prewarm_gpu_with(move |gpu| sent.send(gpu).unwrap());
         crate::prewarm_gpu();
         let layer = layer();
         let (gpu, _surface, renderer) = match Gpu::for_surface(wgpu::Features::empty(), false, |i| surface(i, &layer)) {
@@ -43,7 +44,12 @@ mod macos {
         let native = false;
         assert!(native || gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS));
         assert_eq!(renderer.format, wgpu::TextureFormat::Bgra8Unorm);
+        // `prewarm_gpu_with` handed over the device the window took, before its first frame.
+        let handle = handed.recv_timeout(std::time::Duration::from_secs(30)).expect("the prewarmed device's handle");
+        assert_eq!(handle.key(), renderer.device_key(), "the key of the window's frames");
+        assert_eq!(handle.with(|device, _| device.adapter_info()), Some(gpu.device.adapter_info()));
         drop((renderer, gpu));
+        assert!(handle.is_lost(), "the handle lets go with the window's GPU");
         let (_, _surface, again) = Gpu::for_surface(wgpu::Features::empty(), false, |i| surface(i, &layer)).expect("a second GPU");
         assert!(again.is_none(), "the prewarmed GPU goes to one window");
 
@@ -140,5 +146,30 @@ mod macos {
         assert_eq!(gpu.device.limits().max_immediate_size, 4096);
         let described = crate::gpu::backend::describe(&gpu.device);
         assert!(described.starts_with("Rune's Metal backend on ") && described.ends_with("(the default)"), "{described}");
+    }
+
+    /// What `prewarm_gpu_with` asks for runs once a device is made, or at once after; a later
+    /// device's handle replaces the earlier one.
+    #[test]
+    fn prepares_run_with_the_latest_prewarmed_device() {
+        use crate::compose::{DeviceKey, GpuHandle};
+        use std::sync::{Arc, Weak, atomic::AtomicBool, mpsc};
+        let handle = || GpuHandle::new(Weak::new(), Arc::new(AtomicBool::new(false)), DeviceKey::next());
+        let prepared = super::super::prewarm::Prepared::new();
+        let (sent, got) = mpsc::channel::<DeviceKey>();
+        let wait = std::time::Duration::from_secs(5);
+        let early = sent.clone();
+        prepared.add(Box::new(move |gpu| early.send(gpu.key()).unwrap()));
+        assert!(got.try_recv().is_err(), "waits for a device");
+        let first = handle();
+        prepared.made(first.clone());
+        assert_eq!(got.recv_timeout(wait).unwrap(), first.key());
+        let late = sent.clone();
+        prepared.add(Box::new(move |gpu| late.send(gpu.key()).unwrap()));
+        assert_eq!(got.recv_timeout(wait).unwrap(), first.key(), "runs at once once one exists");
+        let second = handle();
+        prepared.made(second.clone());
+        prepared.add(Box::new(move |gpu| sent.send(gpu.key()).unwrap()));
+        assert_eq!(got.recv_timeout(wait).unwrap(), second.key(), "with the latest device");
     }
 }

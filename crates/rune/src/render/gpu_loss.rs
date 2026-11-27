@@ -366,6 +366,13 @@ impl Gpu {
         }
     }
 
+    /// A handle to this GPU's device for worker threads, for the frames whose key is `key` (the
+    /// renderer drawing them).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn handle(&self, key: crate::compose::DeviceKey) -> crate::compose::GpuHandle {
+        crate::compose::GpuHandle::new(Arc::downgrade(&self.lease), self.callbacks.lost_flag(), key)
+    }
+
     /// Captures the owning instance, adapter, and shared callback state for a [`Renderer`].
     pub(crate) fn host(&self) -> GpuHost {
         GpuHost {
