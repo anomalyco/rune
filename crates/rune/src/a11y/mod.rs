@@ -24,6 +24,8 @@ mod dump_tests;
 #[cfg(test)]
 mod macos_tests;
 pub(crate) mod node;
+#[cfg(test)]
+mod role_description_tests;
 pub(crate) mod roles;
 #[cfg(test)]
 mod tests;

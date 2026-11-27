@@ -2051,6 +2051,7 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-multiline', item.ml ? 'true' : undefined],
         ['aria-readonly', item.ro ? 'true' : undefined],
         ['aria-invalid', item.inv ? 'true' : undefined],
+        ['aria-roledescription', item.rd],
         ['aria-placeholder', item.ph],
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
@@ -2335,6 +2336,7 @@ function syncFieldA11y(field, f, defaultLabel) {
     field.setAttribute('aria-label', (f && f.t) || defaultLabel);
     const attrs = [
         ['aria-description', f?.d || undefined],
+        ['aria-roledescription', f?.rd || undefined],
         ['aria-disabled', f?.dis ? 'true' : undefined],
         ['aria-readonly', f?.ro ? 'true' : undefined],
         ['aria-invalid', f?.inv ? 'true' : undefined],
@@ -2405,6 +2407,7 @@ export function focusA11y(h, json) {
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
+    if (f.rd) el.setAttribute('aria-roledescription', f.rd);
     if (f.c) el.setAttribute('aria-checked', f.c);
     if (f.pr) el.setAttribute('aria-pressed', f.pr);
     if (f.s !== undefined) el.setAttribute('aria-selected', String(f.s));

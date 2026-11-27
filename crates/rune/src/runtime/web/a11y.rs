@@ -119,6 +119,7 @@ pub(crate) struct MirrorAria {
     pub multiline: bool,
     pub read_only: bool,
     pub invalid: bool,
+    pub role_description: Option<String>,
     pub placeholder: Option<String>,
     pub has_popup: Option<&'static str>,
     pub orientation: Option<&'static str>,
@@ -670,10 +671,11 @@ impl RuntimeCore {
             let live_role = roles::default_live(n.role).and_then(|_| roles::container_aria(n.role));
             let text_aria = (n.text.is_some() && end == i + 1).then(|| roles::container_aria(n.role)).flatten();
             let raw_href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref());
-            // A labelled `group` (a game's surface naming its keys, a set of controls) is a div
-            // with the role and its label; an unlabelled one adds nothing a reader would say unless
-            // it is a live region container.
-            let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
+            // A labelled `group` (a game's surface naming its keys, a set of controls) or an
+            // explicit `role("group")` with a role description is a div with `role="group"`; a
+            // plain unlabelled one adds nothing a reader would say unless it is a live region.
+            let explicit_group_rd = n.role == "group" && n.a11y.explicit_group && self.a11y_role_description(i).is_some();
+            let labelled_group = n.role == "group" && (self.mirror_name(i).is_some() || explicit_group_rd);
             let live_group = n.role == "group" && n.text.is_none() && n.handlers.on_press.is_none()
                 && raw_href.is_none() && live.is_some();
             let ordered_list = n.role == "list" && n.a11y.more.as_deref().is_some_and(|m| m.list_start.is_some());
@@ -731,6 +733,7 @@ impl RuntimeCore {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
                 item.busy = busy;
+                item.aria.role_description = self.a11y_role_description(i).map(str::to_owned);
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -828,7 +831,8 @@ impl RuntimeCore {
                 if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
                     let text_disabled = self.node_disabled(i);
-                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled;
+                    let role_description = self.a11y_role_description(i).map(str::to_owned);
+                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled && role_description.is_none();
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -883,6 +887,7 @@ impl RuntimeCore {
                     item.live = live;
                     item.disabled = text_disabled;
                     item.busy = busy;
+                    item.aria.role_description = role_description;
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
@@ -920,6 +925,7 @@ impl RuntimeCore {
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
                 item.live = live;
                 item.busy = busy;
+                item.aria.role_description = self.a11y_role_description(i).map(str::to_owned);
                 item.text = lbl;
                 item.id = anchor_id(n.key.as_deref());
                 push(&mut out, item);
@@ -974,6 +980,7 @@ impl RuntimeCore {
             aria.required = m.required;
             aria.read_only = m.read_only;
             aria.invalid = m.invalid;
+            aria.role_description = self.a11y_role_description(i).map(str::to_owned);
             // Password inputs are exposed strictly as secure textboxes, never as comboboxes with
             // popup/autocomplete/controls relations (matching HTML <input type="password">).
             if !secure {
@@ -1290,6 +1297,7 @@ impl RuntimeCore {
         if aria.multiline { o.insert("ml".into(), json!(true)); }
         if aria.read_only { o.insert("ro".into(), json!(true)); }
         if aria.invalid { o.insert("inv".into(), json!(true)); }
+        if let Some(rd) = aria.role_description.as_deref() { o.insert("rd".into(), json!(rd)); }
         if let Some(ph) = aria.placeholder.as_deref() { o.insert("ph".into(), json!(ph)); }
         if n.input.is_some() && in_secure { o.insert("sec".into(), json!(true)); }
         if let Some(hp) = aria.has_popup { o.insert("hp".into(), json!(hp)); }

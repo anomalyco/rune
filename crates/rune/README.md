@@ -3989,7 +3989,7 @@ feature (`crates/rune/src/a11y/`).
   offsets, modal dialogs (the background leaves the tree), and secure text (never exposed).
   Plain layout boxes with no key, label or role join their parent, so the tree reads like the
   interface, not the layout.
-- **Builders for the rest**: `description`, `a11y_value`, `range_value` and `range_step`,
+- **Builders for the rest**: `description` / `description_static`, `role_description` / `role_description_static` (ARIA `aria-roledescription`, ignored on elements with no role), `a11y_value`, `range_value` and `range_step`,
   `checked` and `checked_mixed`, `disabled`, `aria_disabled` (unavailable to assistive tech
   without stripping keyboard focusability, still advertising `Action::Focus` while suppressing
   activation actions), `read_only`, `invalid`, `required`, `multiselectable`,

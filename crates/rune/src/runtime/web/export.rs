@@ -120,7 +120,11 @@ impl RuntimeCore {
             if let Some(id) = anchor_id(n.key.as_deref()) { write!(attrs, " id=\"{id}\"").ok(); }
         }
         if let Some(start) = list_start.filter(|&s| s != 1) { write!(attrs, " start=\"{start}\"").ok(); }
-        if let Some(role) = roles::container_aria(n.role) { write!(attrs, " role=\"{role}\"").ok(); }
+        let mut has_aria_role = false;
+        if let Some(role) = roles::container_aria(n.role) {
+            write!(attrs, " role=\"{role}\"").ok();
+            has_aria_role = true;
+        }
         if let Some(h) = &href { write!(attrs, " href=\"{}\"", escape(h)).ok(); }
         if let Some(url) = pixels_url {
             let [x0, y0, x1, y1] = n.target;
@@ -131,8 +135,36 @@ impl RuntimeCore {
             // Images below the first screen wait until the reader scrolls near them.
             if y0 > 900.0 { attrs.push_str(" loading=\"lazy\""); }
         } else if let Some(l) = label.filter(|_| n.text.is_none() && tag != "a") {
-            let role = matches!(n.role, "image" | "img").then_some(" role=\"img\"").unwrap_or("");
+            let role = if matches!(n.role, "image" | "img") {
+                has_aria_role = true;
+                " role=\"img\""
+            } else {
+                ""
+            };
             write!(attrs, "{role} aria-label=\"{}\"", escape(l)).ok();
+        }
+        if !n.a11y.hidden && let Some(rd) = self.a11y_role_description(i) {
+            let implicit_role = !matches!(tag, "div" | "span");
+            if !implicit_role && !has_aria_role {
+                let extra_role = if n.role == "group" && n.a11y.explicit_group {
+                    Some("group")
+                } else if n.role == "button" {
+                    Some("button")
+                } else if n.role == "progressbar" {
+                    Some("progressbar")
+                } else if matches!(n.role, "image" | "img") {
+                    Some("img")
+                } else {
+                    roles::web_control_role(n.role)
+                };
+                if let Some(role) = extra_role {
+                    write!(attrs, " role=\"{role}\"").ok();
+                    has_aria_role = true;
+                }
+            }
+            if implicit_role || has_aria_role {
+                write!(attrs, " aria-roledescription=\"{}\"", escape(rd)).ok();
+            }
         }
         if n.a11y.hidden || n.role == "list-marker" { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);

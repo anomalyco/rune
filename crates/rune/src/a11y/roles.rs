@@ -364,6 +364,7 @@ const fn ak_meta(role: Role) -> AkRoleMeta {
         Role::Dialog => D.focus("dialog"),
         Role::AlertDialog => D.focus("alertdialog"),
         Role::Region => D.focus("region"),
+        Role::Article => D.focus("article"),
         Role::Image => D.focus("img"),
         _ => D,
     }

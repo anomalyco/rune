@@ -55,8 +55,37 @@ impl RuntimeCore {
             has_text: text.is_some_and(|t| !t.source_text().trim().is_empty() || t.redacted),
             image: n.vis.pixels.is_some() || n.vis.surface.is_some(),
         };
-        // A control the keyboard reaches is always in the tree, whatever its role says.
-        roles::map(n.role, &cx).or_else(|| (input.is_some() || self.can_focus(i)).then_some(Role::Group))
+        // A control the keyboard reaches is always in the tree, whatever its role says; an
+        // explicit `role("group")` with a role description also enters the tree as a group.
+        roles::map(n.role, &cx).or_else(|| {
+            let explicit_group_rd = n.role == "group"
+                && n.a11y.explicit_group
+                && n.a11y.more.as_deref()
+                    .and_then(|m| m.role_description.as_deref())
+                    .is_some_and(|s| !s.trim().is_empty());
+            (input.is_some() || self.can_focus(i) || explicit_group_rd).then_some(Role::Group)
+        })
+    }
+
+    /// Node `i`'s effective role description (`El::role_description` / `El::role_description_static`),
+    /// or `None` when unset, empty/whitespace-only, or the element has no valid accessible role
+    /// (WAI-ARIA 1.2 `aria-roledescription`).
+    pub(crate) fn a11y_role_description(&self, i: usize) -> Option<&str> {
+        let n = &self.tree.nodes[i];
+        let desc = n.a11y.more.as_deref()?.role_description.as_deref()?;
+        if desc.trim().is_empty() {
+            return None;
+        }
+        let role = self.a11y_role(i)?;
+        if matches!(role, Role::GenericContainer) {
+            return None;
+        }
+        let has_role = if n.role == "group" {
+            n.a11y.explicit_group || !matches!(role, Role::Group | Role::ScrollView)
+        } else {
+            n.input.is_some() || roles::spec(n.role).is_some()
+        };
+        has_role.then_some(desc)
     }
 
     /// A hash of everything [`Self::a11y_node`] and its text's lines and links read of node
@@ -75,10 +104,11 @@ impl RuntimeCore {
         self.node_disabled(i).hash(&mut h);
         self.has_image_menu(i).hash(&mut h);
         n.a11y.live.hash(&mut h);
+        n.a11y.explicit_group.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
                 m.row_count, m.column_count, m.row_index, m.column_index).hash(&mut h);
-            (m.multiselectable, m.required, m.has_popup, m.orientation, m.auto_complete, m.list_start).hash(&mut h);
+            (&m.role_description, m.multiselectable, m.required, m.has_popup, m.orientation, m.auto_complete, m.list_start).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
@@ -261,6 +291,9 @@ impl RuntimeCore {
         match more.and_then(|m| m.description.as_deref()).or(described.as_deref()).or(help.as_deref()) {
             Some(d) if !d.is_empty() => node.set_description(d),
             _ => {}
+        }
+        if let Some(rd) = self.a11y_role_description(i) {
+            node.set_role_description(rd);
         }
         if let Some(m) = more {
             if m.invalid { node.set_invalid(accesskit::Invalid::True); }
