@@ -11,10 +11,10 @@ use taffy::style::{
     AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf, AlignmentSafety, BlockContainerStyle,
     BlockItemStyle, BoxGenerationMode, BoxSizing, CompactLength, Contain, CoreStyle, Dimension, Direction, Display,
     FlexDirection, FlexWrap, FlexboxContainerStyle, FlexboxItemStyle, GridAutoFlow, GridContainerStyle, GridItemStyle,
-    GridPlacement, JustifyContent, LengthPercentage, LengthPercentageAuto, OofItemStyle, Overflow, Position, Style,
-    TextAlign,
+    GridPlacement, JustifyContent, LengthPercentage, LengthPercentageAuto, OofItemStyle, Overflow, Position,
+    RepetitionCount, Style, TextAlign,
 };
-use taffy::style_helpers::{TaffyAuto, TaffyZero, fr, line, span};
+use taffy::style_helpers::{TaffyAuto, TaffyZero, fr, length, line, minmax, repeat, span};
 
 const IDX_SIZE_W: usize = 0;
 const IDX_SIZE_H: usize = 1;

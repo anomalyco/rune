@@ -255,6 +255,28 @@ impl CompactStyle {
     }
 
     #[inline(always)]
+    fn set_auto_columns(&mut self, count: RepetitionCount, min_width: f32) {
+        self.modify_cold(|s| {
+            s.display = Display::Grid;
+            s.grid_template_columns = if min_width.is_finite() && min_width > 0.0 {
+                vec![repeat(count, vec![minmax(length(min_width), fr(1.0))])]
+            } else {
+                vec![fr(1.0)]
+            };
+        });
+    }
+
+    #[inline(always)]
+    pub fn set_auto_fit_columns(&mut self, min_width: f32) {
+        self.set_auto_columns(RepetitionCount::AutoFit, min_width);
+    }
+
+    #[inline(always)]
+    pub fn set_auto_fill_columns(&mut self, min_width: f32) {
+        self.set_auto_columns(RepetitionCount::AutoFill, min_width);
+    }
+
+    #[inline(always)]
     pub fn set_grid_cell(&mut self, column: usize) {
         self.modify_cold(|s| {
             s.grid_column = Line {

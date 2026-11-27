@@ -284,3 +284,141 @@ fn h_frac_sizes_height_as_fraction_of_parent() {
     assert!((r("indefinite")[3] - 34.0).abs() < 0.01, "h_frac in indefinite-height parent falls back to content height: {:?}", r("indefinite"));
     assert!((r("abs_half")[3] - 100.0).abs() < 0.01, "absolute h_frac(0.5) resolves against parent padding box: {:?}", r("abs_half"));
 }
+
+#[test]
+fn auto_fit_and_auto_fill_columns_lay_out_in_single_pass_and_resize() {
+    use rune::{ScrollSpec, text};
+
+    // 1. Single-pass responsive layout inside a column (no `on_layout` round-trip) + live resize.
+    fn responsive(_: &(), _: &mut Cx<()>) -> El {
+        col().w_full().gap(10.0)
+            .child(
+                el().key("grid").auto_fit_columns(240.0).gap(12.0)
+                    .children((0..5).map(|k| col().key(format!("c{k}")).h(60.0))),
+            )
+            .child(el().key("after").h(20.0))
+    }
+
+    let mut rt = Runtime::new((), responsive, (980.0, 600.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Frame 1 at 980 pt: floor((980 + 12) / (240 + 12)) = 3 columns of (980 - 24) / 3 = 318.67 pt.
+    let col3_w = (980.0 - 24.0) / 3.0;
+    let g = rect(&rt, "grid");
+    assert!((g[2] - 980.0).abs() < 0.01 && (g[3] - 132.0).abs() < 0.01, "grid at 980: {g:?}");
+    assert!((rect(&rt, "after")[1] - 142.0).abs() < 0.01, "sibling sits below 2-row grid");
+    for (k, (ex, ey)) in [
+        (0, (0.0, 0.0)),
+        (1, (col3_w + 12.0, 0.0)),
+        (2, ((col3_w + 12.0) * 2.0, 0.0)),
+        (3, (0.0, 72.0)),
+        (4, (col3_w + 12.0, 72.0)),
+    ] {
+        let r = rect(&rt, &format!("c{k}"));
+        assert!(
+            (r[0] - ex).abs() < 0.05 && (r[1] - ey).abs() < 0.05 && (r[2] - col3_w).abs() < 0.05 && (r[3] - 60.0).abs() < 0.01,
+            "980 c{k}: got {r:?}, want x={ex}, y={ey}, w={col3_w}, h=60"
+        );
+    }
+
+    // Resize to 500 pt without rebuilding view: 2 columns of (500 - 12) / 2 = 244 pt across 3 rows.
+    rt.set_viewport((500.0, 600.0), 1.0);
+    rt.frame(0.0);
+    let g500 = rect(&rt, "grid");
+    assert!((g500[2] - 500.0).abs() < 0.01 && (g500[3] - 204.0).abs() < 0.01, "grid at 500: {g500:?}");
+    assert!((rect(&rt, "c0")[2] - 244.0).abs() < 0.05);
+    assert!((rect(&rt, "c1")[0] - 256.0).abs() < 0.05 && rect(&rt, "c1")[1].abs() < 0.01);
+    assert!(rect(&rt, "c2")[0].abs() < 0.01 && (rect(&rt, "c2")[1] - 72.0).abs() < 0.05);
+    assert!(rect(&rt, "c4")[0].abs() < 0.01 && (rect(&rt, "c4")[1] - 144.0).abs() < 0.05);
+
+    // Resize to 1200 pt: 4 columns of (1200 - 36) / 4 = 291 pt across 2 rows.
+    rt.set_viewport((1200.0, 600.0), 1.0);
+    rt.frame(0.0);
+    assert!((rect(&rt, "grid")[3] - 132.0).abs() < 0.01);
+    assert!((rect(&rt, "c3")[0] - 909.0).abs() < 0.05 && rect(&rt, "c3")[1].abs() < 0.01);
+    assert!(rect(&rt, "c4")[0].abs() < 0.01 && (rect(&rt, "c4")[1] - 72.0).abs() < 0.05);
+
+    // Resize below min_width (180 < 240): 1 column of 240 pt (CSS minmax(240px, 1fr)), 5 rows.
+    rt.set_viewport((180.0, 600.0), 1.0);
+    rt.frame(0.0);
+    assert!((rect(&rt, "grid")[3] - 348.0).abs() < 0.01, "5 rows of 60 + 4 gaps of 12 = 348");
+    assert!((rect(&rt, "c0")[2] - 240.0).abs() < 0.05);
+    assert!(rect(&rt, "c1")[0].abs() < 0.01 && (rect(&rt, "c1")[1] - 72.0).abs() < 0.05);
+
+    // 2. auto_fit collapses empty trailing tracks; auto_fill preserves them; padding, scroll,
+    // in-place setters, wrapping text, and non-positive/non-finite fallbacks.
+    fn variants(_: &(), _: &mut Cx<()>) -> El {
+        let mut in_place_fit = el().key("ip_fit").w(980.0).gap(12.0)
+            .child(el().key("ip_fit0").h(40.0))
+            .child(el().key("ip_fit1").h(40.0));
+        in_place_fit.set_auto_fit_columns(240.0);
+
+        let mut in_place_fill = el().key("ip_fill").w(980.0).gap(12.0)
+            .child(el().key("ip_fill0").h(40.0))
+            .child(el().key("ip_fill1").h(40.0));
+        in_place_fill.set_auto_fill_columns(240.0);
+
+        col().w(980.0).gap(10.0)
+            .child(in_place_fit)
+            .child(in_place_fill)
+            // Padding reduces available track space: inner width = 980 - 40 = 940 -> 3 cols of (940 - 24) / 3.
+            .child(
+                el().key("padded").w(980.0).padding(20.0).auto_fit_columns(240.0).gap(12.0)
+                    .children((0..3).map(|k| el().key(format!("p{k}")).h(30.0))),
+            )
+            // Scroll directly on the auto-fit container (exercises take_box_placement).
+            .child(
+                el().key("scroll_self").w(980.0).h(100.0).scroll(ScrollSpec { stick_bottom: false })
+                    .auto_fit_columns(240.0).gap(12.0)
+                    .children((0..4).map(|k| el().key(format!("ss{k}")).h(60.0))),
+            )
+            // Wrapping text inside cards stays within the 1fr track width.
+            .child(
+                el().key("text_grid").w(980.0).auto_fit_columns(240.0).gap(12.0)
+                    .children((0..3).map(|k| {
+                        col().key(format!("t{k}")).child(
+                            text("Long card copy that wraps cleanly inside its responsive grid column without widening the track.").wrap(),
+                        )
+                    })),
+            )
+            // Non-positive and non-finite min_width fall back to 1 full-width column (1fr).
+            .child(el().w(400.0).auto_fit_columns(0.0).child(el().key("zero").h(20.0)).child(el().key("zero2").h(20.0)))
+            .child(el().w(400.0).auto_fit_columns(-50.0).child(el().key("neg").h(20.0)))
+            .child(el().w(400.0).auto_fit_columns(f32::NAN).child(el().key("nan").h(20.0)))
+            .child(el().w(400.0).auto_fill_columns(f32::INFINITY).child(el().key("inf").h(20.0)))
+            // Existing equal_columns(3) stays unchanged.
+            .child(el().w(300.0).equal_columns(3).child(el().key("eq0").h(20.0)).child(el().key("eq1").h(20.0)))
+    }
+
+    let mut rt2 = Runtime::new((), variants, (980.0, 1200.0), Env::new(true, 1.0));
+    rt2.frame(0.0);
+
+    // 2 items in 980 pt: auto_fit -> 2 cols of 484 pt; auto_fill -> 3-col width of 318.67 pt.
+    assert!((rect(&rt2, "ip_fit0")[2] - 484.0).abs() < 0.05 && (rect(&rt2, "ip_fit1")[0] - 496.0).abs() < 0.05);
+    assert!((rect(&rt2, "ip_fill0")[2] - col3_w).abs() < 0.05 && (rect(&rt2, "ip_fill1")[0] - (col3_w + 12.0)).abs() < 0.05);
+
+    // Padded container: inner width 940 -> (940 - 24) / 3 = 305.33 pt.
+    let pad_w = (940.0 - 24.0) / 3.0;
+    assert!((rect(&rt2, "p0")[0] - 20.0).abs() < 0.05 && (rect(&rt2, "p0")[2] - pad_w).abs() < 0.05);
+    assert!((rect(&rt2, "p2")[0] - (20.0 + (pad_w + 12.0) * 2.0)).abs() < 0.05);
+
+    // Scroll-self grid still lays out 3 columns on row 1 and 1 on row 2.
+    assert!((rect(&rt2, "ss0")[2] - col3_w).abs() < 0.05);
+    assert!((rect(&rt2, "ss2")[0] - (col3_w + 12.0) * 2.0).abs() < 0.05);
+    assert!(rect(&rt2, "ss3")[0].abs() < 0.01 && (rect(&rt2, "ss3")[1] - rect(&rt2, "ss0")[1] - 72.0).abs() < 0.05);
+
+    // Wrapping text cards keep equal 3-column widths.
+    for k in 0..3 {
+        let tr = rect(&rt2, &format!("t{k}"));
+        assert!((tr[2] - col3_w).abs() < 0.05 && tr[3] > 0.0, "t{k}: {tr:?}");
+    }
+
+    // Invalid min_width falls back to 1 column of 400 pt.
+    for k in ["zero", "neg", "nan", "inf"] {
+        assert!((rect(&rt2, k)[2] - 400.0).abs() < 0.05, "{k}: {:?}", rect(&rt2, k));
+    }
+    assert!((rect(&rt2, "zero2")[1] - rect(&rt2, "zero")[1] - 20.0).abs() < 0.05, "1 column stacks vertically");
+
+    // Existing equal_columns(3) default preserved.
+    assert!((rect(&rt2, "eq0")[2] - 100.0).abs() < 0.05 && (rect(&rt2, "eq1")[0] - 100.0).abs() < 0.05);
+}
