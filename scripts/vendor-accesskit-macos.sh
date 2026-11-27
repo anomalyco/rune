@@ -8,7 +8,9 @@
 # (VoiceOver's Actions rotor); and accessibility
 # children, focus and hit test reading the adapter's state only on the main thread, since AppKit
 # calls them from a background thread while the process queries itself and the main thread may hold
-# that borrow, which raced or aborted). Run it when
+# that borrow, which raced or aborted; and those three methods keeping visible native AppKit
+# subviews (such as an embedded WKWebView) in accessibilityChildren, accessibilityHitTest:, and
+# accessibilityFocusedUIElement alongside AccessKit's own tree). Run it when
 # AccessKit is bumped, then build: a patch that no longer applies fails here, and the change goes
 # back in by hand. If upstream AccessKit takes the change, delete vendor/accesskit_macos and its
 # `[patch.crates-io]` entry instead.

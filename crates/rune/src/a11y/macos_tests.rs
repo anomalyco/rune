@@ -6,7 +6,9 @@ use accesskit::{Action as Ak, Role};
 use crate::{Cx, El, Env, Runtime, ScrollSpec, col, el, row, text};
 
 const MACOS_NODE_RS: &str = include_str!("../../../../vendor/accesskit_macos/src/node.rs");
+const MACOS_SUBCLASS_RS: &str = include_str!("../../../../vendor/accesskit_macos/src/subclass.rs");
 const MACOS_PATCH: &str = include_str!("../../../../vendor/accesskit_macos.patch");
+const SYSTEM_MATERIAL_MACOS_RS: &str = include_str!("../system_material/macos.rs");
 
 fn ns_role_body() -> &'static str {
     let start = MACOS_NODE_RS
@@ -124,4 +126,53 @@ fn vendored_accesskit_macos_exposes_ax_aria_current_and_patch_preserves_it() {
             && MACOS_PATCH.contains("+                        || aria_current_str(node).is_some()"),
         "vendor/accesskit_macos.patch must carry the AXARIACurrent mapping"
     );
+}
+
+#[test]
+fn vendored_accesskit_macos_exposes_native_child_views_and_patch_preserves_it() {
+    // children: merges AppKit's unignored native subviews after AccessKit's children,
+    // after releasing the adapter borrow.
+    assert!(
+        MACOS_SUBCLASS_RS.contains("arrayByAddingObjectsFromArray: native_children")
+            && MACOS_SUBCLASS_RS.contains("msg_send![super(this, prev), accessibilityChildren]"),
+        "vendor/accesskit_macos/src/subclass.rs must append native subview accessibilityChildren"
+    );
+    // hit_test: asks AppKit's subview hit-test first and rejects self/ancestor fallbacks (e.g. NSWindow).
+    assert!(
+        MACOS_SUBCLASS_RS.contains("fn is_self_or_ancestor(")
+            && MACOS_SUBCLASS_RS.contains("msg_send![super(this, prev), accessibilityHitTest: point]")
+            && MACOS_SUBCLASS_RS.contains("is_self_or_ancestor(this, native_hit.cast::<AnyObject>())"),
+        "vendor/accesskit_macos/src/subclass.rs must delegate accessibilityHitTest: to native subviews while filtering self/ancestors"
+    );
+    // focus: forwards accessibilityFocusedUIElement to a focused descendant NSView with a re-entrancy guard.
+    assert!(
+        MACOS_SUBCLASS_RS.contains("fn focused_native_subview(")
+            && MACOS_SUBCLASS_RS.contains("window.firstResponder()")
+            && MACOS_SUBCLASS_RS.contains("responder_view.isDescendantOf(view)")
+            && MACOS_SUBCLASS_RS.contains("IN_NATIVE_FOCUS"),
+        "vendor/accesskit_macos/src/subclass.rs must forward accessibilityFocusedUIElement to focused descendant NSViews"
+    );
+    // Patch file must carry all three changes so scripts/vendor-accesskit-macos.sh reproduces them.
+    assert!(
+        MACOS_PATCH.contains("+unsafe fn is_self_or_ancestor(")
+            && MACOS_PATCH.contains("+unsafe fn focused_native_subview(")
+            && MACOS_PATCH.contains("+    unsafe { msg_send![ak_children, arrayByAddingObjectsFromArray: native_children] }"),
+        "vendor/accesskit_macos.patch must carry the native child view accessibility hooks"
+    );
+}
+
+#[test]
+fn macos_material_host_hides_backdrop_views_from_accessibility() {
+    for selector in [
+        "sel!(isAccessibilityElement)",
+        "sel!(accessibilityIsIgnored)",
+        "sel!(accessibilityChildren)",
+        "sel!(accessibilityChildrenInNavigationOrder)",
+        "sel!(accessibilityHitTest:)",
+    ] {
+        assert!(
+            SYSTEM_MATERIAL_MACOS_RS.contains(selector),
+            "RuneMaterialHost in crates/rune/src/system_material/macos.rs must override {selector} so native backdrop views stay invisible to VoiceOver and hit tests"
+        );
+    }
 }
