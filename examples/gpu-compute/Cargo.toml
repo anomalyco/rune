@@ -1,0 +1,23 @@
+[package]
+name = "gpu-compute"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rune = { workspace = true, default-features = true }
+wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
+bytemuck = { workspace = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+
+[target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
+wgpu = { workspace = true, features = ["vulkan"] }
+
+[lints]
+workspace = true

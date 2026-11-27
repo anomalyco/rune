@@ -1585,6 +1585,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-compute"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "rune",
+ "wgpu",
+]
+
+[[package]]
 name = "gungraun"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

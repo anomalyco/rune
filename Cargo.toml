@@ -50,6 +50,7 @@ members = [
     "examples/video-player",
     "examples/video-tiles",
     "examples/cursed-settings",
+    "examples/gpu-compute",
     "examples/drag-out",
     "examples/sketch",
     "examples/drop-files",
