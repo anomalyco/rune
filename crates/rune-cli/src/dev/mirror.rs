@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use toml_edit::{Array, DocumentMut, Item, TableLike, Value};
 
@@ -290,6 +291,231 @@ pub fn sync_mirror(
         .map_err(|err| CliError::new(format!("failed to serialize mirror index: {err}")))?;
     atomic_write(&inputs_manifest, &json)?;
     Ok(())
+}
+
+/// Finds the mirrored crate key owning `package`, falling back to `default_crate_key`.
+pub fn resolve_package_crate_key(
+    default_crate_key: &str,
+    snapshot: &Snapshot,
+    package: Option<&str>,
+) -> String {
+    let default_key = default_crate_key.trim_end_matches('/');
+    let Some(target_pkg) = package else {
+        return default_key.to_string();
+    };
+    if manifest_package_name(snapshot, &format!("{default_key}/Cargo.toml")).as_deref()
+        == Some(target_pkg)
+    {
+        return default_key.to_string();
+    }
+    for key in snapshot.keys() {
+        let Some(pkg_key) = key.strip_suffix("/Cargo.toml") else {
+            continue;
+        };
+        if manifest_package_name(snapshot, key).as_deref() == Some(target_pkg) {
+            return pkg_key.to_string();
+        }
+    }
+    default_key.to_string()
+}
+
+/// Resolves the mirrored entry source file key(s) for the target binary in `crate_key`.
+///
+/// Honors explicit `[[bin]]` targets (with explicit or Cargo-inferred paths),
+/// `[package].default-run`, `[package].autobins`, and Cargo's standard `src/main.rs`,
+/// `src/bin/<name>.rs`, and `src/bin/<name>/main.rs` locations.
+pub fn resolve_bin_entry_keys(
+    crate_key: &str,
+    snapshot: &Snapshot,
+    bin: Option<&str>,
+) -> Vec<String> {
+    let prefix = crate_key.trim_end_matches('/');
+    let manifest_key = format!("{prefix}/Cargo.toml");
+    let doc = snapshot
+        .get(&manifest_key)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .and_then(|text| text.parse::<DocumentMut>().ok());
+
+    let pkg_table = doc
+        .as_ref()
+        .and_then(|d| d.get("package"))
+        .and_then(Item::as_table_like);
+    let pkg_name = pkg_table
+        .and_then(|p| p.get("name"))
+        .and_then(Item::as_str)
+        .map(ToString::to_string);
+    let default_run = pkg_table
+        .and_then(|p| p.get("default-run"))
+        .and_then(Item::as_str)
+        .map(ToString::to_string);
+    let autobins = pkg_table
+        .and_then(|p| p.get("autobins"))
+        .and_then(Item::as_bool)
+        .unwrap_or(true);
+
+    let mut candidates: Vec<(Option<String>, String)> = Vec::new();
+    let mut seen_keys: BTreeSet<String> = BTreeSet::new();
+
+    if let Some(bins) = doc
+        .as_ref()
+        .and_then(|d| d.get("bin"))
+        .and_then(Item::as_array_of_tables)
+    {
+        for tbl in bins.iter() {
+            let name = tbl
+                .get("name")
+                .and_then(Item::as_str)
+                .map(ToString::to_string);
+            let explicit_path = tbl.get("path").and_then(Item::as_str);
+            let key = if let Some(rel) = explicit_path {
+                let norm = glob::normalize_rel(rel);
+                let full = format!("{prefix}/{norm}");
+                snapshot.contains_key(&full).then_some(full)
+            } else if let Some(ref bin_name) = name {
+                infer_named_bin_key(prefix, snapshot, pkg_name.as_deref(), bin_name)
+            } else {
+                None
+            };
+            if let Some(entry_key) = key {
+                seen_keys.insert(entry_key.clone());
+                candidates.push((name, entry_key));
+            }
+        }
+    }
+
+    if autobins {
+        let main_key = format!("{prefix}/src/main.rs");
+        if snapshot.contains_key(&main_key) && seen_keys.insert(main_key.clone()) {
+            candidates.push((pkg_name.clone(), main_key));
+        }
+        let bin_dir_prefix = format!("{prefix}/src/bin/");
+        for key in snapshot.keys() {
+            let Some(rest) = key.strip_prefix(&bin_dir_prefix) else {
+                continue;
+            };
+            let inferred_name = if !rest.contains('/') {
+                rest.strip_suffix(".rs").map(ToString::to_string)
+            } else if let Some((dir, file)) = rest.split_once('/')
+                && file == "main.rs"
+                && !dir.contains('/')
+            {
+                Some(dir.to_string())
+            } else {
+                None
+            };
+            if let Some(bin_name) = inferred_name
+                && seen_keys.insert(key.clone())
+            {
+                candidates.push((Some(bin_name), key.clone()));
+            }
+        }
+    }
+
+    let wanted = bin.or(default_run.as_deref());
+    if let Some(target_name) = wanted {
+        let mut matched: Vec<String> = candidates
+            .iter()
+            .filter(|(name, _)| name.as_deref() == Some(target_name))
+            .map(|(_, key)| key.clone())
+            .collect();
+        matched.sort();
+        matched.dedup();
+        if !matched.is_empty() {
+            return matched;
+        }
+    }
+
+    if !candidates.is_empty() {
+        let mut all: Vec<String> = candidates.into_iter().map(|(_, key)| key).collect();
+        all.sort();
+        all.dedup();
+        return all;
+    }
+
+    let fallback = format!("{prefix}/src/main.rs");
+    if snapshot.contains_key(&fallback) {
+        vec![fallback]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Rewrites the mirrored binary entry file(s) with identical bytes and advances their mtime so
+/// Cargo always recompiles and relinks the target binary on each `dx serve --hot-patch` launch.
+///
+/// Without a fresh link step, `dx` never intercepts `rustc` into `dx/.captured-args` and fails
+/// with `Missing rustc capture` on a warm `CARGO_TARGET_DIR`. Dependencies stay cached.
+pub fn touch_bin_entries(
+    mirror_dir: &Path,
+    crate_key: &str,
+    snapshot: &Snapshot,
+    package: Option<&str>,
+    bin: Option<&str>,
+) -> Result<Vec<PathBuf>, CliError> {
+    let target_crate = resolve_package_crate_key(crate_key, snapshot, package);
+    let keys = resolve_bin_entry_keys(&target_crate, snapshot, bin);
+    let mut touched = Vec::with_capacity(keys.len());
+    for key in keys {
+        let dest = join_posix(mirror_dir, &key);
+        if dest.is_file() {
+            touch_mirror_file(&dest)?;
+            touched.push(dest);
+        }
+    }
+    Ok(touched)
+}
+
+fn touch_mirror_file(path: &Path) -> Result<(), CliError> {
+    let old_mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    let bytes = fs::read(path)
+        .map_err(|err| CliError::new(format!("failed to read {}: {err}", path.display())))?;
+    atomic_write(path, &bytes)?;
+    let new_mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    if let (Some(old), Some(new)) = (old_mtime, new_mtime)
+        && new <= old
+    {
+        for bump in [Duration::from_millis(10), Duration::from_secs(1)] {
+            if let Some(target) = old.checked_add(bump)
+                && let Ok(file) = fs::OpenOptions::new().write(true).open(path)
+                && file.set_modified(target).is_ok()
+                && fs::metadata(path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .is_some_and(|m| m > old)
+            {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn manifest_package_name(snapshot: &Snapshot, manifest_key: &str) -> Option<String> {
+    let bytes = snapshot.get(manifest_key)?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    let doc = text.parse::<DocumentMut>().ok()?;
+    doc.get("package")
+        .and_then(Item::as_table_like)
+        .and_then(|p| p.get("name"))
+        .and_then(Item::as_str)
+        .map(ToString::to_string)
+}
+
+fn infer_named_bin_key(
+    prefix: &str,
+    snapshot: &Snapshot,
+    pkg_name: Option<&str>,
+    bin_name: &str,
+) -> Option<String> {
+    let mut candidates = Vec::with_capacity(3);
+    if pkg_name == Some(bin_name) {
+        candidates.push(format!("{prefix}/src/main.rs"));
+    }
+    candidates.push(format!("{prefix}/src/bin/{bin_name}.rs"));
+    candidates.push(format!("{prefix}/src/bin/{bin_name}/main.rs"));
+    candidates
+        .into_iter()
+        .find(|key| snapshot.contains_key(key))
 }
 
 /// Atomically writes `bytes` to `dest` via a sibling temporary file.

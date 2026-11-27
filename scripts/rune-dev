@@ -368,6 +368,109 @@ def staged_workspace(text, staged):
     return text
 
 
+def bin_entry_keys(crate, data, package=None, bin_name=None):
+    """Mirrored entry source keys for the target binary in `crate` (or `package`)."""
+    def pkg_name_of(manifest_key):
+        raw = data.get(manifest_key)
+        if not raw:
+            return None
+        try:
+            return tomllib.loads(raw.decode()).get("package", {}).get("name")
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+            return None
+
+    prefix = crate.rstrip("/")
+    if package and pkg_name_of(f"{prefix}/Cargo.toml") != package:
+        for key in sorted(data):
+            if key.endswith("/Cargo.toml") and pkg_name_of(key) == package:
+                prefix = key.removesuffix("/Cargo.toml")
+                break
+
+    doc = {}
+    raw_manifest = data.get(f"{prefix}/Cargo.toml")
+    if raw_manifest:
+        try:
+            doc = tomllib.loads(raw_manifest.decode())
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+            doc = {}
+    pkg = doc.get("package", {}) if isinstance(doc.get("package"), dict) else {}
+    pkg_name = pkg.get("name") if isinstance(pkg.get("name"), str) else None
+    default_run = pkg.get("default-run") if isinstance(pkg.get("default-run"), str) else None
+    autobins = pkg.get("autobins", True) is not False
+
+    candidates, seen = [], set()
+    for entry in doc.get("bin", []) if isinstance(doc.get("bin"), list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") if isinstance(entry.get("name"), str) else None
+        rel = entry.get("path") if isinstance(entry.get("path"), str) else None
+        key = None
+        if rel:
+            norm = posix_str(rel.replace("\\", "/"))
+            full = f"{prefix}/{norm}"
+            if full in data:
+                key = full
+        elif name:
+            checks = ([f"{prefix}/src/main.rs"] if name == pkg_name else []) + [
+                f"{prefix}/src/bin/{name}.rs",
+                f"{prefix}/src/bin/{name}/main.rs",
+            ]
+            key = next((c for c in checks if c in data), None)
+        if key:
+            seen.add(key)
+            candidates.append((name, key))
+
+    if autobins:
+        main_key = f"{prefix}/src/main.rs"
+        if main_key in data and main_key not in seen:
+            seen.add(main_key)
+            candidates.append((pkg_name, main_key))
+        bin_prefix = f"{prefix}/src/bin/"
+        for key in sorted(data):
+            if not key.startswith(bin_prefix) or key in seen:
+                continue
+            rest = key.removeprefix(bin_prefix)
+            inferred = None
+            if "/" not in rest and rest.endswith(".rs"):
+                inferred = rest.removesuffix(".rs")
+            elif rest.count("/") == 1 and rest.endswith("/main.rs"):
+                inferred = rest.split("/", 1)[0]
+            if inferred:
+                seen.add(key)
+                candidates.append((inferred, key))
+
+    wanted = bin_name or default_run
+    if wanted:
+        matched = sorted({key for name, key in candidates if name == wanted})
+        if matched:
+            return matched
+    if candidates:
+        return sorted({key for _, key in candidates})
+    fallback = f"{prefix}/src/main.rs"
+    return [fallback] if fallback in data else []
+
+
+def touch_bin_entries(mirror, crate, data, package=None, bin_name=None):
+    """Rewrite mirrored binary entry file(s) and advance mtime so Cargo always relinks for dx."""
+    touched = []
+    for key in bin_entry_keys(crate, data, package=package, bin_name=bin_name):
+        dest = mirror / key
+        if not dest.is_file():
+            continue
+        old_ns = dest.stat().st_mtime_ns
+        raw = dest.read_bytes()
+        tmp = dest.with_name(f".{dest.name}.rune-tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(dest)
+        if dest.stat().st_mtime_ns <= old_ns:
+            for bump in (10_000_000, 1_000_000_000):
+                os.utime(dest, ns=(old_ns + bump, old_ns + bump))
+                if dest.stat().st_mtime_ns > old_ns:
+                    break
+        touched.append(dest)
+    return touched
+
+
 def mirror_overrides(crate, data):
     """Mirror bytes that differ from the source: the app's workspace members."""
     key = crate and workspace_key(crate, data)
@@ -1010,6 +1113,7 @@ def run(args):
         if not dest.exists() or dest.read_bytes() != data: dest.write_bytes(data)
     old_manifest.parent.mkdir(parents=True, exist_ok=True)
     old_manifest.write_text(json.dumps(list(baseline)))
+    touch_bin_entries(mirror, crate or f"examples/{opts.example}", baseline, package=package, bin_name=opts.bin)
     # Workspace excludes reference this independent tool; Cargo needn't see its source.
     dx = Path(os.environ.get("RUNE_DX", str(Path.home() / ".cargo/bin/dx")))
     if not dx.exists(): parser.error("install dioxus-cli 0.7.10 (the Deno dx command is unrelated)")

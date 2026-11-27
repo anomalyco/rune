@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rune_cli::args::{Command, DevArgs, DevMode, NewArgs, parse};
 use rune_cli::config::{resolve_dev_config};
 use rune_cli::dev::hot::{ChangeDecision, build_dx_args, classify_change};
-use rune_cli::dev::mirror::{discover_layout, prune_workspace_manifest, sync_mirror};
+use rune_cli::dev::mirror::{
+    discover_layout, prune_workspace_manifest, resolve_bin_entry_keys, resolve_package_crate_key,
+    sync_mirror, touch_bin_entries,
+};
 use rune_cli::dev::restart::build_cargo_run_args;
 use rune_cli::dev::{SelectedMode, select_mode};
 use rune_cli::dx::{DxStatus, is_required_dioxus_version};
@@ -585,4 +588,226 @@ fn rune_binary_new_check_and_doctor_work_end_to_end() {
     let doc_out = String::from_utf8_lossy(&doctor.stdout);
     assert!(doc_out.contains("project: smoke-app"));
     assert!(doc_out.contains("Rune pins: URL, rev, and [patch.crates-io] agree"));
+}
+
+#[test]
+fn bin_entry_resolution_handles_default_custom_named_autobins_and_workspace_packages() {
+    let mut snap: Snapshot = BTreeMap::new();
+    snap.insert(
+        "external/app/Cargo.toml".to_string(),
+        br#"[package]
+name = "app"
+version = "0.1.0"
+default-run = "tool"
+
+[[bin]]
+name = "custom"
+path = "./src/custom_entry.rs"
+
+[[bin]]
+name = "inferred"
+"#
+        .to_vec(),
+    );
+    snap.insert("external/app/src/main.rs".to_string(), b"fn main() {}".to_vec());
+    snap.insert(
+        "external/app/src/custom_entry.rs".to_string(),
+        b"fn main() {}".to_vec(),
+    );
+    snap.insert(
+        "external/app/src/bin/tool.rs".to_string(),
+        b"fn main() {}".to_vec(),
+    );
+    snap.insert(
+        "external/app/src/bin/inferred/main.rs".to_string(),
+        b"fn main() {}".to_vec(),
+    );
+    snap.insert(
+        "external/app/src/bin/extra/main.rs".to_string(),
+        b"fn main() {}".to_vec(),
+    );
+    snap.insert("external/app/src/lib.rs".to_string(), b"pub fn f() {}".to_vec());
+
+    // default-run selects src/bin/tool.rs when --bin is omitted
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &snap, None),
+        svec(&["external/app/src/bin/tool.rs"])
+    );
+    // Explicit --bin overrides default-run for custom [[bin]] path, inferred [[bin]], auto bin, and package main
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &snap, Some("custom")),
+        svec(&["external/app/src/custom_entry.rs"])
+    );
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &snap, Some("inferred")),
+        svec(&["external/app/src/bin/inferred/main.rs"])
+    );
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &snap, Some("extra")),
+        svec(&["external/app/src/bin/extra/main.rs"])
+    );
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &snap, Some("app")),
+        svec(&["external/app/src/main.rs"])
+    );
+
+    // autobins = false ignores src/main.rs and src/bin/* unless declared in [[bin]]
+    let mut no_auto: Snapshot = BTreeMap::new();
+    no_auto.insert(
+        "external/app/Cargo.toml".to_string(),
+        br#"[package]
+name = "app"
+version = "0.1.0"
+autobins = false
+
+[[bin]]
+name = "only"
+path = "bin/only.rs"
+"#
+        .to_vec(),
+    );
+    no_auto.insert("external/app/src/main.rs".to_string(), b"fn main() {}".to_vec());
+    no_auto.insert("external/app/bin/only.rs".to_string(), b"fn main() {}".to_vec());
+    assert_eq!(
+        resolve_bin_entry_keys("external/app", &no_auto, None),
+        svec(&["external/app/bin/only.rs"])
+    );
+
+    // Workspace package lookup resolves a sibling package when -p names another member
+    let mut ws_snap: Snapshot = BTreeMap::new();
+    ws_snap.insert(
+        "external/apps/a/Cargo.toml".to_string(),
+        br#"[package]
+name = "alpha"
+"#
+        .to_vec(),
+    );
+    ws_snap.insert("external/apps/a/src/main.rs".to_string(), b"fn main() {}".to_vec());
+    ws_snap.insert(
+        "external/apps/b/Cargo.toml".to_string(),
+        br#"[package]
+name = "beta"
+"#
+        .to_vec(),
+    );
+    ws_snap.insert("external/apps/b/src/main.rs".to_string(), b"fn main() {}".to_vec());
+    assert_eq!(
+        resolve_package_crate_key("external/apps/a", &ws_snap, Some("beta")),
+        "external/apps/b"
+    );
+}
+
+#[test]
+fn touch_bin_entries_advances_mtime_preserving_bytes_and_forces_cargo_relink_on_warm_target() {
+    let tmp = TempDir::new("hot-relink");
+    let src = tmp.path().join("app");
+    fs::create_dir_all(src.join("src")).unwrap();
+    fs::write(
+        src.join("Cargo.toml"),
+        r#"[package]
+name = "relink-probe"
+version = "0.1.0"
+edition = "2024"
+
+[profile.rune-hot]
+inherits = "dev"
+debug = 0
+incremental = true
+"#,
+    )
+    .unwrap();
+    let lib_src = br#"pub fn greeting() -> &'static str { "ok" }
+"#;
+    let main_src = br#"fn main() { let _ = relink_probe::greeting(); }
+"#;
+    fs::write(src.join("src/lib.rs"), lib_src).unwrap();
+    fs::write(src.join("src/main.rs"), main_src).unwrap();
+
+    let layout = discover_layout(&src.join("Cargo.toml")).unwrap();
+    let mut cache = FileCache::default();
+    let snap = scan_sources(&mut cache, &layout.source_entries()).unwrap();
+
+    let mirror = tmp.path().join("mirror");
+    let target_dir = tmp.path().join("target");
+    sync_mirror(&mirror, &layout.crate_key, &snap).unwrap();
+
+    let mirror_manifest = mirror.join("external/Cargo.toml");
+    let mirror_main = mirror.join("external/src/main.rs");
+    let mirror_lib = mirror.join("external/src/lib.rs");
+
+    let run_cargo = || {
+        std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--manifest-path",
+                mirror_manifest.to_str().unwrap(),
+                "--profile",
+                "rune-hot",
+                "-v",
+            ])
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("CARGO_INCREMENTAL", "1")
+            .env("RUSTC_WRAPPER", "")
+            .output()
+            .unwrap()
+    };
+
+    // First build populates the warm target directory.
+    let build1 = run_cargo();
+    assert!(
+        build1.status.success(),
+        "initial build failed: {}",
+        String::from_utf8_lossy(&build1.stderr)
+    );
+
+    // Second run with no source changes: sync_mirror leaves files untouched, so Cargo skips relink.
+    sync_mirror(&mirror, &layout.crate_key, &snap).unwrap();
+    let build2_untouched = run_cargo();
+    assert!(build2_untouched.status.success());
+    let build2_err = String::from_utf8_lossy(&build2_untouched.stderr);
+    assert!(
+        !build2_err.contains("--crate-type bin"),
+        "expected Cargo to skip bin relink before touching entry; stderr:
+{build2_err}"
+    );
+
+    // Touching the mirrored binary entry advances its mtime without altering bytes or lib.rs.
+    let main_mtime_before = fs::metadata(&mirror_main).unwrap().modified().unwrap();
+    let lib_mtime_before = fs::metadata(&mirror_lib).unwrap().modified().unwrap();
+    let touched = touch_bin_entries(
+        &mirror,
+        &layout.crate_key,
+        &snap,
+        Some("relink-probe"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(touched, vec![mirror_main.clone()]);
+    assert_eq!(fs::read(&mirror_main).unwrap(), main_src);
+    let main_mtime_after = fs::metadata(&mirror_main).unwrap().modified().unwrap();
+    let lib_mtime_after = fs::metadata(&mirror_lib).unwrap().modified().unwrap();
+    assert!(
+        main_mtime_after > main_mtime_before,
+        "expected main.rs mtime to advance ({main_mtime_after:?} <= {main_mtime_before:?})"
+    );
+    assert_eq!(lib_mtime_after, lib_mtime_before, "lib.rs must stay untouched");
+
+    // Cargo now recompiles and relinks the bin target while keeping the lib target cached.
+    let build3_touched = run_cargo();
+    assert!(
+        build3_touched.status.success(),
+        "relink build failed: {}",
+        String::from_utf8_lossy(&build3_touched.stderr)
+    );
+    let build3_err = String::from_utf8_lossy(&build3_touched.stderr);
+    assert!(
+        build3_err.contains("--crate-type bin"),
+        "expected Cargo to invoke rustc for bin target after touching entry; stderr:
+{build3_err}"
+    );
+    assert!(
+        !build3_err.contains("--crate-type lib"),
+        "expected lib target to remain cached when only bin entry is touched; stderr:
+{build3_err}"
+    );
 }
