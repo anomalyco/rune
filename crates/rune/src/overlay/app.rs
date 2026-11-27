@@ -15,9 +15,10 @@ use std::time::Duration;
 use winit::window::Window;
 
 use super::frame::OverlayRenderArgs;
-use super::{OverlayCore, OverlayHandle, Placement, Shared, SharedCore};
+use super::requests::AfterHidden;
 #[cfg(test)]
 use super::requests::Update;
+use super::{OverlayCore, OverlayHandle, Placement, Shared, SharedCore};
 use crate::compose::{Compositor, Frame};
 use crate::el::Tx;
 use crate::frame::clock::FrameClock;
@@ -38,6 +39,14 @@ pub(super) trait OverlayApp {
     fn notify_availability(&mut self, availability: super::Availability) -> bool;
     /// Drains queued typed updates into `rt`, returning `(queued, updated)`.
     fn drain_updates(&mut self) -> (bool, bool);
+    /// Moves newly queued `OverlayHandle::after_hidden` callbacks into this host's pending list.
+    fn take_after_hidden(&mut self) -> bool;
+    /// Runs all pending `after_hidden` callbacks once in FIFO order; returns whether any ran.
+    fn run_after_hidden(&mut self) -> bool;
+    /// Drops all pending `after_hidden` callbacks unrun (both moved and still in `Shared<T>`).
+    fn drop_after_hidden(&mut self);
+    /// Closes the `after_hidden` queue and drops all pending callbacks unrun.
+    fn close_after_hidden(&mut self);
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
     fn compositor_animating(&self) -> bool;
@@ -167,6 +176,69 @@ impl dyn OverlayApp + '_ {
     }
 }
 
+/// Owns parked `after_hidden` callbacks for one overlay host and closes the handle's queue on drop.
+pub(super) struct AfterHiddenSlot<T: 'static> {
+    shared: Arc<Shared<T>>,
+    pending: Vec<AfterHidden<T>>,
+}
+
+impl<T: 'static> AfterHiddenSlot<T> {
+    pub(super) fn new(shared: Arc<Shared<T>>) -> Self {
+        Self { shared, pending: Vec::new() }
+    }
+
+    pub(super) fn take_from_shared(&mut self) -> bool {
+        let newly = self
+            .shared
+            .after_hidden
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let any = !newly.is_empty();
+        self.pending.extend(newly);
+        any
+    }
+
+    pub(super) fn run(&mut self, rt: &mut Runtime<T>) -> bool {
+        let callbacks = std::mem::take(&mut self.pending);
+        if callbacks.is_empty() {
+            return false;
+        }
+        for f in callbacks {
+            rt.update(f);
+        }
+        true
+    }
+
+    pub(super) fn drop_all(&mut self) {
+        let queued = self
+            .shared
+            .after_hidden
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let parked = std::mem::take(&mut self.pending);
+        drop((queued, parked));
+    }
+
+    pub(super) fn close(&mut self) {
+        let queued = self
+            .shared
+            .after_hidden
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .close();
+        let parked = std::mem::take(&mut self.pending);
+        drop((queued, parked));
+    }
+}
+
+impl<T: 'static> Drop for AfterHiddenSlot<T> {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// The only per-state-type structure owned by a live overlay host.
 pub(super) struct TypedOverlayApp<T: 'static> {
     pub(super) rt: Runtime<T>,
@@ -174,6 +246,7 @@ pub(super) struct TypedOverlayApp<T: 'static> {
     pub(super) setup: Option<fn(&mut T, Waker)>,
     pub(super) on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     pub(super) shared: Arc<Shared<T>>,
+    pub(super) after_hidden_slot: AfterHiddenSlot<T>,
 }
 
 impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
@@ -214,6 +287,14 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
         }
         (queued, updated)
     }
+
+    fn take_after_hidden(&mut self) -> bool { self.after_hidden_slot.take_from_shared() }
+
+    fn run_after_hidden(&mut self) -> bool { self.after_hidden_slot.run(&mut self.rt) }
+
+    fn drop_after_hidden(&mut self) { self.after_hidden_slot.drop_all(); }
+
+    fn close_after_hidden(&mut self) { self.after_hidden_slot.close(); }
 
     fn has_compositor(&self) -> bool { self.compositor.is_some() }
 
@@ -271,7 +352,11 @@ fn build_parts<S, T: 'static>(
     let inherits_font_smoothing = font_smoothing.is_none();
     runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
     let shared_core = Arc::new(SharedCore::default());
-    let shared = Arc::new(Shared { core: shared_core.clone(), updates: Default::default() });
+    let shared = Arc::new(Shared {
+        core: shared_core.clone(),
+        updates: Default::default(),
+        after_hidden: Default::default(),
+    });
     let text = TextSystem::for_window(app.fonts, app.families);
     let mut rt = Runtime::with_text(state, spec.view, spec.size, Env::default(), text);
     rt.configure(runtime);
@@ -304,7 +389,8 @@ fn build_parts<S, T: 'static>(
     core.on_materials = on_materials;
     core.requested_renderer = renderer;
     core.sizing = super::sizing::SizingConfig { mode: sizing, min_size, max_size };
-    let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
+    let after_hidden_slot = AfterHiddenSlot::new(shared.clone());
+    let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone(), after_hidden_slot };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
 
@@ -344,6 +430,7 @@ pub(super) struct Overlay<T: 'static> {
     pub(super) setup: Option<fn(&mut T, Waker)>,
     pub(super) on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     pub(super) shared: Arc<Shared<T>>,
+    pub(super) after_hidden_slot: AfterHiddenSlot<T>,
 }
 
 #[cfg(test)]
@@ -364,6 +451,7 @@ struct BorrowOverlayApp<'a, T: 'static> {
     setup: &'a mut Option<fn(&mut T, Waker)>,
     on_availability: Option<fn(&mut T, super::Availability, &mut Tx)>,
     shared: &'a Arc<Shared<T>>,
+    after_hidden_slot: &'a mut AfterHiddenSlot<T>,
 }
 
 #[cfg(test)]
@@ -395,6 +483,10 @@ impl<T: 'static> OverlayApp for BorrowOverlayApp<'_, T> {
         for f in updates { updated |= self.rt.update_if(f); }
         (queued, updated)
     }
+    fn take_after_hidden(&mut self) -> bool { self.after_hidden_slot.take_from_shared() }
+    fn run_after_hidden(&mut self) -> bool { self.after_hidden_slot.run(self.rt) }
+    fn drop_after_hidden(&mut self) { self.after_hidden_slot.drop_all(); }
+    fn close_after_hidden(&mut self) { self.after_hidden_slot.close(); }
     fn has_compositor(&self) -> bool { self.compositor.is_some() }
     fn compositor_features(&self) -> wgpu::Features {
         self.compositor.as_ref().map_or(wgpu::Features::empty(), |c| c.features())
@@ -438,6 +530,7 @@ macro_rules! with_app {
             setup: &mut $self.setup,
             on_availability: $self.on_availability,
             shared: &$self.shared,
+            after_hidden_slot: &mut $self.after_hidden_slot,
         };
         $body
     }};
@@ -447,8 +540,8 @@ macro_rules! with_app {
 impl<T: 'static> Overlay<T> {
     pub(super) fn new<S>(configured: impl Into<ConfiguredOverlay<T>>, state: T, app: &AppSpec<S>) -> (Self, OverlayHandle<T>) {
         let (core, typed, handle, _) = build_parts(configured.into(), state, app, crate::FontSmoothing::default());
-        let TypedOverlayApp { rt, compositor, setup, on_availability, shared } = typed;
-        (Overlay { core, rt, compositor, setup, on_availability, shared }, handle)
+        let TypedOverlayApp { rt, compositor, setup, on_availability, shared, after_hidden_slot } = typed;
+        (Overlay { core, rt, compositor, setup, on_availability, shared, after_hidden_slot }, handle)
     }
 
     pub(super) fn wake_deadline(&self) -> Option<Instant> { self.core.wake_deadline(self.rt.core()) }
@@ -479,6 +572,24 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }
     pub(super) fn presence_due(&mut self, now: Instant) { with_app!(self, |core, app| core.presence_due(&mut app, now)) }
+    pub(super) fn sync_after_hidden(&mut self) {
+        with_app!(self, |core, app| {
+            if app.take_after_hidden() {
+                core.after_hidden_queued(&mut app);
+            }
+        })
+    }
+    pub(super) fn mark_shown_for_test(&mut self) {
+        with_app!(self, |core, app| {
+            let effects = core.presence.step(super::presence::Event::Show, core.release);
+            core.carry_out(&mut app, effects);
+            core.after_hidden_shown(&mut app);
+        })
+    }
+    pub(super) fn after_hidden_new_turn(&mut self) { with_app!(self, |core, app| core.after_hidden_new_turn(&mut app)) }
+    pub(super) fn poll_after_hidden(&mut self) { with_app!(self, |core, app| core.poll_after_hidden(&mut app)) }
+    pub(super) fn cancel_after_hidden(&mut self) { with_app!(self, |core, app| core.cancel_after_hidden(&mut app)) }
+    pub(super) fn close_after_hidden(&mut self) { with_app!(self, |core, app| core.close_after_hidden(&mut app)) }
     pub(super) fn accent_changed(&mut self, accent: crate::SystemAccent) { self.core.accent_changed(self.rt.core_mut(), accent) }
     pub(super) fn scroll_bars_changed(&mut self, bars: crate::platform::scroll_bars::SystemScrollBars) { self.core.scroll_bars_changed(self.rt.core_mut(), bars) }
     pub(super) fn theme_changed(&mut self, dark: bool) { self.core.theme_changed(self.rt.core_mut(), dark) }

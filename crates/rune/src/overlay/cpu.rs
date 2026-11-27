@@ -602,6 +602,7 @@ impl super::OverlayCore {
         super::frame::record_presented(false);
         let effects = self.presence.step(super::presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.after_hidden_shown(app);
         self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);

@@ -636,8 +636,10 @@ impl OverlayCore {
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
         if self.poll_terminal_gpu_loss(app) {
             self.drain_tokens_none();
+            self.close_after_hidden(app);
             return;
         }
+        self.record_wayland_display(event_loop);
         self.clipboard_due(app);
         if app.popup_answer(&mut self.popup) {
             self.dirty = true;
@@ -646,6 +648,7 @@ impl OverlayCore {
         if app.rt().live_pending() { self.dirty = true; }
         self.drag_ends_due(app);
         let mut requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
+        let new_after_hidden = app.take_after_hidden();
         for reply in requests.tokens.take() { reply(self.activation_token()); }
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input(app.rt());
@@ -747,6 +750,9 @@ impl OverlayCore {
         if recreate_layer && self.surface.live().is_none() {
             if layer_was_visible && !matches!(requests.visibility, Some(Visibility::Hide(_))) { self.show_fading(app, event_loop, Duration::ZERO); }
             else if self.options.prewarm { self.prepare(app, event_loop, false); }
+        }
+        if new_after_hidden {
+            self.after_hidden_queued(app);
         }
         if requests.refollow && self.presence.shown() && let Some(point) = Self::sample_pointer(event_loop) {
             self.refollow(app, event_loop, point);
