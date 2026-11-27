@@ -120,7 +120,7 @@ impl Host {
     }
 
     #[cfg(target_os = "macos")]
-    pub(in crate::window) fn fn_key(&mut self, event_loop: &ActiveEventLoop) {
+    pub(in crate::window) fn fn_key(&mut self, event_loop: Option<&ActiveEventLoop>) {
         if self.poll_gpu_loss() { return; }
         let changes = {
             let Some(l) = &self.win else { return };
@@ -136,13 +136,14 @@ impl Host {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
-        if redraw && !self.dispatch_immediate_keyboard(event_loop) && let Some(l) = &self.win {
+        let dispatched = event_loop.is_some_and(|el| self.dispatch_immediate_keyboard(el));
+        if redraw && !dispatched && let Some(l) = &self.win {
             l.request_redraw();
         }
     }
 
     #[cfg(target_os = "macos")]
-    pub(in crate::window) fn media_keys(&mut self, event_loop: &ActiveEventLoop) {
+    pub(in crate::window) fn media_keys(&mut self, event_loop: Option<&ActiveEventLoop>) {
         if self.poll_gpu_loss() { return; }
         let events = {
             let Some(l) = &self.win else { return };
@@ -153,7 +154,8 @@ impl Host {
         for (decoded, mods) in events {
             redraw |= self.app.media_key(decoded, mods);
         }
-        if redraw && !self.dispatch_immediate_keyboard(event_loop) && let Some(l) = &self.win {
+        let dispatched = event_loop.is_some_and(|el| self.dispatch_immediate_keyboard(el));
+        if redraw && !dispatched && let Some(l) = &self.win {
             l.request_redraw();
         }
     }

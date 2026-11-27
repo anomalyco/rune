@@ -462,8 +462,8 @@ impl Host {
         if self.idle_placement(event_loop) { return false; }
         #[cfg(target_os = "macos")]
         {
-            self.fn_key(event_loop);
-            self.media_keys(event_loop);
+            self.fn_key(Some(event_loop));
+            self.media_keys(Some(event_loop));
         }
         self.flush_files(event_loop);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
