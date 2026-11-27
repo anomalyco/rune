@@ -26,7 +26,7 @@
 use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex};
@@ -123,7 +123,7 @@ mod toplevel;
 pub(crate) mod xwayland;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use app::{AppOverlayDefaults, OverlayHost};
+pub(crate) use app::{AppOverlayDefaults, OverlayBuilder, OverlayDefaults, OverlayHost, make_pending_overlay};
 #[cfg(not(target_arch = "wasm32"))]
 use app::OverlayApp;
 #[cfg(test)]
@@ -202,19 +202,54 @@ pub(in crate::overlay) struct SharedCore {
     /// Latest physical top-left origin and backing scale for `OverlayHandle::screen_to_local`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::overlay) screen_transform: Mutex<Option<((i32, i32), f32)>>,
+    /// `OverlayHandle::close` was called; further calls on this handle neither queue nor wake.
+    pub(in crate::overlay) closed: AtomicBool,
 }
 
 impl SharedCore {
+    #[inline]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     pub(super) fn wake(&self) {
-        let wake = self.wake.lock().unwrap().clone();
+        if self.is_closed() {
+            return;
+        }
+        let wake = self.wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         if let Some(wake) = wake {
             wake();
         }
     }
 
     fn request(&self, f: impl FnOnce(&mut Requests)) {
-        f(&mut self.requests.lock().unwrap());
+        if self.is_closed() {
+            return;
+        }
+        f(&mut self.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         self.wake();
+    }
+
+    fn close(&self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pending = self
+                .requests
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tokens
+                .close();
+            for reply in pending {
+                reply(None);
+            }
+        }
+        let wake = self.wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(wake) = wake {
+            wake();
+        }
     }
 
     fn set_input(&self, input: OverlayInput) { self.request(|q| q.input = Some(input)); }
@@ -265,6 +300,9 @@ impl SharedCore {
     fn surface_description(&self) -> Option<String> { self.surface.lock().unwrap().clone() }
     #[cfg(not(target_arch = "wasm32"))]
     fn send_pointer(&self, event: crate::PointerInput) {
+        if self.is_closed() {
+            return;
+        }
         let should_wake = self.pointers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(event);
         if should_wake { self.wake(); }
     }
@@ -300,11 +338,24 @@ impl<T> Clone for OverlayHandle<T> {
 }
 
 impl<T: 'static> OverlayHandle<T> {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::overlay) fn pending() -> (Arc<Shared<T>>, Self) {
+        let shared = Arc::new(Shared {
+            core: Arc::default(),
+            updates: Mutex::default(),
+            after_hidden: Mutex::default(),
+        });
+        (shared.clone(), Self { shared })
+    }
+
     pub(crate) fn disconnected() -> Self {
+        let core = Arc::new(SharedCore::default());
+        core.closed.store(true, Ordering::Release);
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = core.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.close();
         Self {
             shared: Arc::new(Shared {
-                core: Arc::default(),
+                core,
                 updates: Mutex::default(),
                 after_hidden: Mutex::new(requests::AfterHiddenQueue::Closed),
             }),
@@ -452,6 +503,25 @@ impl<T: 'static> OverlayHandle<T> {
     #[inline(always)]
     pub fn hide(&self) { self.shared.core.hide(); }
 
+    /// Closes this overlay so the event loop hides its surface and drops its host on the next
+    /// turn. Pending `activation_token` replies answer `None`, pending `after_hidden` callbacks
+    /// are dropped unrun, and further calls on this handle or its clones do not wake the loop.
+    pub fn close(&self) {
+        let pending = self
+            .shared
+            .after_hidden
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .close();
+        drop(pending);
+        self.shared
+            .updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.shared.core.close();
+    }
+
     /// Runs `f` once on the event thread after the overlay is hidden and the hide took effect.
     ///
     /// On Wayland this waits for a `wl_display.sync` roundtrip after the surface is destroyed,
@@ -572,7 +642,10 @@ impl<T: 'static> OverlayHandle<T> {
     /// Returning false after changing state the view reads leaves the screen stale until the
     /// next change.
     pub fn update_if(&self, f: impl FnOnce(&mut T, &mut Tx) -> bool + Send + 'static) {
-        self.shared.updates.lock().unwrap().push(Box::new(f));
+        if self.shared.core.is_closed() {
+            return;
+        }
+        self.shared.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(Box::new(f));
         self.shared.core.wake();
     }
 
@@ -791,6 +864,8 @@ pub(in crate::overlay) struct OverlayCore {
     pub(in crate::overlay) after_hidden: after_hidden::AfterHiddenState,
     /// In-flight non-blocking `OverlayHandle::activation_token` requests.
     pub(in crate::overlay) activation_tokens: requests::ActivationTokens,
+    /// Closed through `OverlayHandle::close`: `AnyHost::finished` reports true so the loop drops it.
+    pub(in crate::overlay) closed: bool,
     /// Test hooks for Wayland frame callbacks, activation tokens, and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -905,6 +980,7 @@ impl OverlayCore {
             sizing: sizing::SizingConfig::default(),
             after_hidden: after_hidden::AfterHiddenState::default(),
             activation_tokens: requests::ActivationTokens::default(),
+            closed: false,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]

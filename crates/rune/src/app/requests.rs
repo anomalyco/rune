@@ -101,6 +101,20 @@ impl<S> std::ops::Deref for Requests<S> {
     fn deref(&self) -> &WindowRequests { &self.window_requests }
 }
 
+/// Deferred overlay builders queued by `AppHandle::overlay`, closed once the owning host ends.
+#[cfg(not(target_arch = "wasm32"))]
+enum OverlayQueue {
+    Open(Vec<crate::overlay::OverlayBuilder>),
+    Closed,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for OverlayQueue {
+    fn default() -> Self {
+        Self::Open(Vec::new())
+    }
+}
+
 /// Non-generic shared state backing [`AppHandle<S>`] and the window host.
 #[derive(Default)]
 pub(crate) struct SharedCore {
@@ -115,6 +129,9 @@ pub(crate) struct SharedCore {
     /// cloned before or after `.gpu_loss_policy(...)` sees the app's latch.
     #[cfg(not(target_arch = "wasm32"))]
     gpu_loss_latch: Mutex<Option<Arc<crate::render::loss_latch::GpuLossLatch>>>,
+    /// Overlays queued dynamically through `AppHandle::overlay`.
+    #[cfg(not(target_arch = "wasm32"))]
+    overlays: Mutex<OverlayQueue>,
 }
 
 impl SharedCore {
@@ -257,6 +274,49 @@ impl SharedCore {
     pub(crate) fn take_place(&self) -> Option<crate::windows::PlaceRequest> {
         self.requests.lock().unwrap().place.take()
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn push_overlay(&self, builder: crate::overlay::OverlayBuilder) -> bool {
+        let rejected = match &mut *self.overlays.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            OverlayQueue::Open(pending) => {
+                pending.push(builder);
+                None
+            }
+            OverlayQueue::Closed => Some(builder),
+        };
+        if let Some(builder) = rejected {
+            drop(builder);
+            false
+        } else {
+            self.wake();
+            true
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn has_overlays(&self) -> bool {
+        match &*self.overlays.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            OverlayQueue::Open(pending) => !pending.is_empty(),
+            OverlayQueue::Closed => false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_overlays(&self) -> Vec<crate::overlay::OverlayBuilder> {
+        match &mut *self.overlays.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            OverlayQueue::Open(pending) => std::mem::take(pending),
+            OverlayQueue::Closed => Vec::new(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn close_overlays(&self) {
+        let dropped = std::mem::replace(
+            &mut *self.overlays.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            OverlayQueue::Closed,
+        );
+        drop(dropped);
+    }
 }
 
 pub(crate) struct Shared<S> {
@@ -359,6 +419,36 @@ impl<S: 'static> AppHandle<S> {
             tx.request_urgent_frame();
             true
         });
+    }
+
+    /// Adds a transparent overlay to the running app from any thread and returns its
+    /// [`OverlayHandle`](crate::OverlayHandle) immediately.
+    ///
+    /// `build` runs on the UI thread in the next event-loop turn (or at startup if called before
+    /// [`App::run`]) and returns the overlay's configuration and initial state. Requests queued on
+    /// the returned handle before `build` runs (such as `show`, `update`, or `close`) apply as
+    /// soon as the overlay connects. Inherits this app's fonts, font families, font smoothing
+    /// (unless overridden on [`ConfiguredOverlay`](crate::ConfiguredOverlay)), emoji family,
+    /// prewarmed effects, and GPU-loss policy. Headless runs and web (`wasm32`) return a
+    /// disconnected handle.
+    pub fn overlay<T: 'static, C: Into<crate::ConfiguredOverlay<T>>>(
+        &self,
+        build: impl FnOnce() -> (C, T) + Send + 'static,
+    ) -> crate::overlay::OverlayHandle<T> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (builder, handle) = crate::overlay::make_pending_overlay(build);
+            if self.shared.core.push_overlay(builder) {
+                handle
+            } else {
+                crate::overlay::OverlayHandle::disconnected()
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = build;
+            crate::overlay::OverlayHandle::disconnected()
+        }
     }
 }
 

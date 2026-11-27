@@ -123,6 +123,7 @@ pub(in crate::window) struct Host {
     /// Opening mode (`App::maximized`, `App::full_screen`) and restored frame across recreation.
     pub(in crate::window) reopen: ReopenState,
     pub(in crate::window) shared: Arc<crate::app::SharedCore>,
+    pub(in crate::window) overlay_defaults: crate::overlay::OverlayDefaults,
     pub(in crate::window) shortcuts: crate::shortcuts::Guard,
     pub(in crate::window) menus: crate::native_menu::MenuGuard,
     pub(in crate::window) popup: crate::popup_menu::Presenter,
@@ -223,6 +224,7 @@ impl HostWaker {
 struct HostInit {
     prepared: HostWaker,
     shared: Arc<crate::app::SharedCore>,
+    overlay_defaults: crate::overlay::OverlayDefaults,
     chrome: Chrome,
     titlebar: Option<crate::Titlebar>,
     options: WindowOptions,
@@ -283,6 +285,9 @@ impl Host {
         if let Some(hook) = app.on_display_close.take() {
             cx.on_display_close.push(hook);
         }
+        if let Some(hook) = app.on_displays.take() {
+            cx.on_displays.push(hook);
+        }
         let (prepared, native_handle, slot, gpu_pool, wayland) =
             HostWaker::prepare(&key, handle, &mut app.overlays, cx, app.standard_menus);
         let (on_window, on_ready, on_frame_encoded, on_frame_drawn) = (
@@ -327,6 +332,17 @@ impl Host {
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
+        let overlay_defaults = crate::overlay::OverlayDefaults::from_spec(
+            &app.spec,
+            crate::overlay::AppOverlayDefaults {
+                font_smoothing: app.runtime.font_smoothing,
+                wheel_glide: app.runtime.wheel_glide,
+                wheel_line: app.runtime.wheel_line,
+            },
+            app.runtime.emoji_family.clone(),
+            prewarm_effects,
+            gpu_loss_latch.clone(),
+        );
         let (spec, mut rt, shared) = {
             let _startup_stages = observability.scope_stages(None);
             let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
@@ -350,6 +366,7 @@ impl Host {
         Self::from_app(typed, HostInit {
             prepared,
             shared: shared_core,
+            overlay_defaults,
             chrome,
             titlebar,
             options,
@@ -407,6 +424,7 @@ impl Host {
                 frame_proxy,
             },
             shared,
+            overlay_defaults,
             chrome,
             titlebar,
             options,
@@ -583,6 +601,7 @@ impl Host {
             open_inactive,
             reopen,
             shared,
+            overlay_defaults,
             shortcuts,
             menus,
             popup,

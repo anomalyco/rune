@@ -13,6 +13,12 @@ use winit::window::Window;
 
 use crate::windows::Display;
 
+#[path = "displays/watch.rs"]
+mod watch;
+pub use watch::DisplayEvent;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use watch::DisplayWatch;
+
 thread_local! {
     /// The native windows made on this thread, to read monitors from.
     static WINDOWS: RefCell<Vec<Weak<Window>>> = const { RefCell::new(Vec::new()) };
@@ -163,7 +169,49 @@ pub(crate) fn collect(source: &impl Monitors) -> Vec<Display> {
     displays
 }
 
-fn read(source: &impl Monitors) -> Vec<Display> {
+/// Reads the displays from `source` using `watch`'s live committed Wayland output metadata,
+/// skipping any output that winit knows about before the watch has received its atomic `done`
+/// boundary (or after the watch saw `global_remove`).
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) fn read_from_wayland_watch(
+    source: &impl Monitors,
+    watch: &crate::platform::wayland::output::OutputWatch,
+) -> Vec<Display> {
+    let primary = source.primary();
+    source
+        .monitors()
+        .into_iter()
+        .filter_map(|m| {
+            let id = crate::DisplayId::from_monitor(m.clone(), true);
+            let fallback = ((m.position().x, m.position().y), (m.size().width, m.size().height), m.scale_factor());
+            let (position, size, scale) = match id.native_id() {
+                Some(crate::NativeDisplayId::Wayland(output_id)) => {
+                    let raw = watch.committed(output_id)?;
+                    let resolved = crate::platform::wayland::output::resolve(
+                        Some(raw),
+                        crate::platform::wayland::output::ResolvedOutput {
+                            position: fallback.0,
+                            size: fallback.1,
+                            scale: fallback.2,
+                        },
+                    );
+                    (resolved.position, resolved.size, resolved.scale)
+                }
+                _ => fallback,
+            };
+            Some(Display {
+                id: Some(id),
+                name: m.name(),
+                position,
+                size,
+                scale,
+                primary: primary.as_ref() == Some(&m),
+            })
+        })
+        .collect()
+}
+
+pub(super) fn read(source: &impl Monitors) -> Vec<Display> {
     let wayland = source.wayland();
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     let wayland_outputs = wayland

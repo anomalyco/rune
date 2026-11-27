@@ -50,7 +50,7 @@ impl OverlayCore {
     }
 
     pub(super) fn wake_deadline(&self, rt: &RuntimeCore) -> Option<Instant> {
-        if self.gpu_loss_failed() { return None; }
+        if self.closed || self.gpu_loss_failed() { return None; }
         // A running display link consumes due runtime timers. Keep the independent
         // pointer deadline, but do not spin on an overdue animation timer. Without one (hidden,
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
@@ -112,11 +112,20 @@ impl OverlayCore {
         self.clipboard.connect(wake.clone());
         self.popup.connect(wake.clone());
         self.gpu_pool = gpu;
-        *self.shared.wake.lock().unwrap() = Some(wake.clone());
+        {
+            let mut slot = self.shared.wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.shared.is_closed() {
+                drop(slot);
+                self.close_host(app);
+                return;
+            }
+            *slot = Some(wake.clone());
+        }
         self.connect_terminal_gpu_wake();
         let rerun = || -> Waker {
             let shared = self.shared.clone();
             Arc::new(move || {
+                if shared.is_closed() { return; }
                 let first = !std::mem::replace(&mut shared.requests.lock().unwrap().woken, true);
                 if first { shared.wake(); }
             })
@@ -130,11 +139,34 @@ impl OverlayCore {
         // Requests made before the loop existed.
         wake();
     }
+
+    /// Marks the overlay finished after `OverlayHandle::close`, tearing down its native surface,
+    /// cancelling pending callbacks/menus, and clearing its handle's waker so the event loop
+    /// drops the host in `cleanup`.
+    pub(super) fn close_host(&mut self, app: &mut dyn OverlayApp) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        *self.shared.wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.close_tokens();
+        app.close_after_hidden();
+        self.cancel_after_hidden(app);
+        self.drop_injected_pointers();
+        app.popup_cancel(&mut self.popup);
+        self.hide(app);
+        self.release();
+        self.set_availability(Availability::Unavailable);
+    }
 }
 
 impl AnyHost for OverlayHost {
+    fn finished(&self) -> bool {
+        self.core.closed
+    }
+
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
-        if self.core.poll_terminal_gpu_loss(&mut *self.app) { return; }
+        if self.core.closed || self.core.poll_terminal_gpu_loss(&mut *self.app) { return; }
         self.core.after_hidden_new_turn(&mut *self.app);
         self.core.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         self.core.turn_frame.step(frame::TurnEvent::NewEvents);
@@ -206,6 +238,10 @@ impl AnyHost for OverlayHost {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        if self.core.shared.is_closed() {
+            self.core.close_host(&mut *self.app);
+            return;
+        }
         if self.core.poll_terminal_gpu_loss(&mut *self.app) {
             self.core.close_tokens();
             self.core.close_after_hidden(&mut *self.app);
@@ -249,7 +285,7 @@ impl AnyHost for OverlayHost {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let core = &mut self.core;
         let app = &mut *self.app;
-        if core.poll_terminal_gpu_loss(app) { return; }
+        if core.closed || core.poll_terminal_gpu_loss(app) { return; }
         if !matches!(event, WindowEvent::RedrawRequested) { core.meter.waited(); }
         #[cfg(target_os = "windows")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) {
@@ -485,6 +521,10 @@ impl AnyHost for OverlayHost {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool {
         let core = &mut self.core;
         let app = &mut *self.app;
+        if core.shared.is_closed() {
+            core.close_host(app);
+            return false;
+        }
         if core.poll_terminal_gpu_loss(app) {
             core.close_tokens();
             return false;

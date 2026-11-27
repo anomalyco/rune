@@ -257,3 +257,85 @@ fn multi_monitor_native_bounds_are_contiguous() {
     assert_eq!((cx + cw).round(), rx);
     assert_eq!((rw.round(), rh.round()), (797.0, 1469.0));
 }
+
+#[test]
+fn output_tracker_commits_only_after_done_and_tracks_live_changes() {
+    use super::OutputTracker;
+
+    let mut tracker = OutputTracker::new(true);
+    tracker.add_output(7, 4);
+    assert!(tracker.committed(7).is_none(), "not committed before wl_output and xdg_output arrive");
+
+    // Initial wl_output batch before xdg_output arrives: staged, not yet committed.
+    tracker.on_geometry(7, (0, 0), OutputTransform::Normal);
+    tracker.on_mode(7, 2560, 1440);
+    tracker.on_scale(7, 2);
+    tracker.on_wl_done(7);
+    assert!(tracker.committed(7).is_none(), "waits for xdg_output when manager is present");
+
+    // xdg_output arrives followed by wl_output.done (xdg-output v3).
+    tracker.on_xdg_position(7, (1920, 0));
+    tracker.on_xdg_size(7, (1707, 960));
+    assert!(tracker.committed(7).is_none(), "waits for done boundary");
+    tracker.on_wl_done(7);
+
+    let initial = *tracker.committed(7).expect("committed once both wl_output and xdg_output finished");
+    assert_eq!(initial.mode, Some((2560, 1440)));
+    assert_eq!(initial.logical_position, Some((1920, 0)));
+    assert_eq!(initial.logical_size, Some((1707, 960)));
+
+    // Live scale, rotation, and position update without reconnect: staged until done.
+    tracker.on_geometry(7, (0, 0), OutputTransform::Rotate90);
+    tracker.on_xdg_position(7, (1920, 100));
+    tracker.on_xdg_size(7, (960, 1707));
+    assert_eq!(tracker.committed(7), Some(&initial), "intermediate events do not leak before done");
+
+    tracker.on_wl_done(7);
+    let updated = *tracker.committed(7).expect("updated after done");
+    assert_eq!(updated.transform, OutputTransform::Rotate90);
+    assert_eq!(updated.logical_position, Some((1920, 100)));
+    assert_eq!(updated.logical_size, Some((960, 1707)));
+
+    // xdg_output v1/v2 sends zxdg_output_v1.done independently on position move.
+    tracker.on_xdg_position(7, (0, 0));
+    tracker.on_xdg_done(7);
+    assert_eq!(tracker.committed(7).unwrap().logical_position, Some((0, 0)));
+
+    // Removal drops committed state immediately.
+    assert!(tracker.remove_output(7));
+    assert!(tracker.committed(7).is_none());
+}
+
+#[test]
+fn output_tracker_without_xdg_manager_commits_on_wl_done() {
+    use super::OutputTracker;
+
+    let mut tracker = OutputTracker::new(false);
+    tracker.add_output(3, 4);
+    tracker.on_geometry(3, (100, 200), OutputTransform::Normal);
+    tracker.on_mode(3, 1920, 1080);
+    tracker.on_scale(3, 1);
+    assert!(tracker.committed(3).is_none());
+    tracker.on_wl_done(3);
+    let committed = tracker.committed(3).expect("commits on wl_output.done without xdg_output");
+    assert_eq!(committed.mode, Some((1920, 1080)));
+    assert_eq!(committed.geometry_position, Some((100, 200)));
+
+    // Dropping xdg manager later still allows pending outputs to commit, and
+    // finish_initial_roundtrip commits outputs that already received wl_output.done.
+    let mut late = OutputTracker::new(true);
+    late.add_output(9, 4);
+    late.on_mode(9, 1280, 720);
+    late.on_wl_done(9);
+    assert!(late.committed(9).is_none());
+    late.finish_initial_roundtrip();
+    assert_eq!(late.committed(9).unwrap().mode, Some((1280, 720)));
+
+    let mut removed_mgr = OutputTracker::new(true);
+    removed_mgr.add_output(11, 4);
+    removed_mgr.on_mode(11, 800, 600);
+    removed_mgr.on_wl_done(11);
+    assert!(removed_mgr.committed(11).is_none());
+    removed_mgr.set_has_xdg_manager(false);
+    assert_eq!(removed_mgr.committed(11).unwrap().mode, Some((800, 600)));
+}

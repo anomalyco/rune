@@ -7,7 +7,7 @@ use crate::{Align, Cx, El, OverlaySpec, ScreenEdge};
 pub struct DisplayId(pub(crate) winit::monitor::MonitorHandle, Option<NativeDisplayId>);
 
 /// Native display identity. Windows handles retain their full pointer width.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NativeDisplayId {
     MacOS(u32), Windows(isize),
     /// winit identifies X11 monitors by RandR CRTC. Output IDs can also be targeted below.

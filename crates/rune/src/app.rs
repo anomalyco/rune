@@ -50,6 +50,9 @@ pub(crate) type OnWindow = Box<dyn FnMut(&crate::WindowHandle)>;
 /// `App::on_display_close`'s hook, run once on the UI thread before the event loop drops windows
 /// and closes the native display connection.
 pub(crate) type OnDisplayClose = Box<dyn FnOnce()>;
+/// `App::on_displays`'s hook, run on the UI thread whenever connected displays change.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) type OnDisplays = Box<dyn FnMut(&crate::DisplayEvent, &[crate::Display])>;
 
 /// Decision returned by [`App::on_close_request`] and
 /// [`WindowSpec::on_close_request`](crate::WindowSpec::on_close_request) when a native window
@@ -135,6 +138,8 @@ pub struct App<S: 'static> {
     pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
     pub(crate) placement: crate::window::placement::AppPlacement<S>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) on_displays: Option<OnDisplays>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
@@ -227,6 +232,7 @@ impl<S: 'static> App<S> {
             on_window_geometry: None,
             placement: Default::default(),
             on_display_close: None,
+            on_displays: None,
             on_frame_encoded: None,
             on_frame_presented: None,
             on_frame_drawn: None,
@@ -1080,6 +1086,22 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn on_display_close(mut self, f: impl FnOnce() + 'static) -> Self {
         self.on_display_close = Some(Box::new(f));
+        self
+    }
+
+    /// Runs on the UI thread whenever a display is added, removed, or changes geometry, scale,
+    /// name, or primary status, with the [`DisplayEvent`](crate::DisplayEvent) and the updated
+    /// list of connected displays.
+    ///
+    /// Multiple changes observed together are delivered in order: removals first, then changes,
+    /// then additions. [`crate::displays`] already returns the updated list when `f` runs. Works
+    /// in windowless apps (`.windowless().keep_running()`) as well as apps with windows. Native
+    /// desktop runs only (ignored on headless and web).
+    pub fn on_displays(
+        mut self,
+        f: impl FnMut(&crate::DisplayEvent, &[crate::Display]) + 'static,
+    ) -> Self {
+        self.on_displays = Some(Box::new(f));
         self
     }
 

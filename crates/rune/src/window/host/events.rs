@@ -317,7 +317,7 @@ impl Host {
             WakeEvent::ResizeSync(_) => {}
             #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
             WakeEvent::MaterialPolicyChanged => {}
-            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::QuitRequest | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
+            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::QuitRequest | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme | WakeEvent::DisplaysChanged => {}
         }
     }
 

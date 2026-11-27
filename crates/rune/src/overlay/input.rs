@@ -689,6 +689,10 @@ impl OverlayCore {
 
     /// Applies requests from other threads: updates, edge, show and hide.
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
+        if self.shared.is_closed() {
+            self.close_host(app);
+            return;
+        }
         if self.poll_terminal_gpu_loss(app) {
             self.close_tokens();
             self.close_after_hidden(app);
