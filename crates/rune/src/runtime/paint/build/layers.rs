@@ -344,9 +344,10 @@ impl RuntimeCore {
             && effective_opacity > 0.001 && paint_own * pinh.paint_opacity * n.vis.paint_alpha > 0.001)
             .then(|| paint_slots::push_backdrop_blur(&mut self.instances, n.vis.backdrop_blur, ([r[0], r[1], w, h], radii, n.vis_flags.continuous_corners()),
                 (*clip, *fade, *fade_origin), *rounded, sc * s, (paint_own * pinh.paint_opacity * n.vis.paint_alpha).clamp(0.0, 1.0)));
+        let paint_visible_alpha = (paint_own * pinh.paint_opacity) > 0.001;
         // The packed ABI carries one clip rectangle. Preserve a rectangular cut through
         // a rounded corner on a separate outer scope, never recenter the rounded mask.
-        if !skip_paint && let Some((mask, _)) = rounded.or(own_round)
+        if !skip_paint && paint_visible_alpha && let Some((mask, _)) = rounded.or(own_round)
             && intersect(*clip, mask) != mask {
             let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
             marker.fade = crate::render::pack_fade(*fade, *fade_origin, *clip);
@@ -356,7 +357,7 @@ impl RuntimeCore {
         }
         // Two rounded rectangles cannot generally be represented by one rounded rectangle.
         // Consume the ancestor on an outer composite, retaining both original corner centres.
-        if !skip_paint && rounded.is_some() && own_round.is_some() && *rounded != own_round {
+        if !skip_paint && paint_visible_alpha && rounded.is_some() && own_round.is_some() && *rounded != own_round {
             let (mask, radii) = rounded.take().unwrap();
             let mut marker = Instance::begin_layer([r[0], r[1], w, h], mask, Default::default());
             marker.fade = crate::render::pack_fade(*fade, *fade_origin, mask);
@@ -372,7 +373,7 @@ impl RuntimeCore {
         // `El::cutout_circle` / `El::cutout_circles`: the subtree draws in one layer per hole
         // whose composite cuts it. The outermost hole takes any clips from above; further holes
         // nest inside it with `NO_CLIP`, intersecting their alpha masks.
-        if !skip_paint && !n.vis.cutouts.is_empty() {
+        if !skip_paint && paint_visible_alpha && !n.vis.cutouts.is_empty() {
             let k = sc * s;
             for &c in &n.vis.cutouts {
                 let mut marker = Instance::begin_layer([r[0], r[1], w, h], *clip, Default::default());
@@ -405,6 +406,7 @@ impl RuntimeCore {
             let parent = next.is_some_and(|j| self.tree.nodes[j].parent == Some(i));
             *isolate = paints >= 2 || (paints == 1 && parent);
         }
+        if !paint_visible_alpha { *isolate = false; }
         let o = if *isolate { 1.0 } else { (paint_own * pinh.paint_opacity).clamp(0.0, 1.0) };
         if !skip_paint && *isolate {
             let start_idx = self.instances.len();

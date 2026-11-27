@@ -132,20 +132,24 @@ pub(crate) fn extend(origin: (usize, usize), at: (usize, usize)) -> (usize, usiz
 /// their highlights match.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::runtime) fn push_selection(out: &mut Vec<Instance>, flow: TextFlow<'_>, a: usize, b: usize, origin: [f32; 2], k: f32,
-    fill: [f32; 4], s: f32, clip: [f32; 4], fade: [f32; 4]) {
+    fill: [f32; 4], s: f32, clip: [f32; 4], fade: [f32; 4], join_from: usize) {
     for (bb, _) in flow.range_boxes(a, b, true) {
         let rect = super::text_marks::pixel_rect(origin, bb, k);
+        if !super::visibility::rect_in_clip(rect, clip) { continue; }
         let radius = 2.0 * s * k;
-        extend_run(out, rect, fill, radius, clip, fade, 40.0 * s * k);
+        extend_run(out, rect, fill, radius, clip, fade, 40.0 * s * k, join_from);
     }
 }
 
 /// A text field's selection: one layout, so no runs to join, and a field's own fill behind it
 /// is the field, not a chip the highlight should stretch to.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::runtime) fn push_field_selection(out: &mut Vec<Instance>, layout: TextFlow<'_>, a: usize, b: usize, origin: [f32; 2], k: f32,
     fill: [f32; 4], s: f32, clip: [f32; 4], fade: [f32; 4]) {
     for (bb, _) in layout.range_boxes(a, b, true) {
-        out.push(rect_inst(super::text_marks::pixel_rect(origin, bb, k), fill, 2.0 * s * k, clip, fade));
+        let rect = super::text_marks::pixel_rect(origin, bb, k);
+        if !super::visibility::rect_in_clip(rect, clip) { continue; }
+        out.push(rect_inst(rect, fill, 2.0 * s * k, clip, fade));
     }
 }
 
@@ -154,8 +158,9 @@ pub(in crate::runtime) fn push_field_selection(out: &mut Vec<Instance>, layout: 
 /// it, so a run reads as one rect with no seams, as tall as the line's tallest text. When
 /// something filled was drawn in between (a chip's background), a rect of its own is drawn on
 /// top, reaching back to where the last one ended.
-fn extend_run(out: &mut Vec<Instance>, mut rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4], reach: f32) {
-    let from = out.len().saturating_sub(256);
+#[allow(clippy::too_many_arguments)]
+fn extend_run(out: &mut Vec<Instance>, mut rect: [f32; 4], fill: [f32; 4], radius: f32, clip: [f32; 4], fade: [f32; 4], reach: f32, join_from: usize) {
+    let from = out.len().saturating_sub(256).max(join_from);
     let found = out[from..].iter().rposition(|i| {
         let gap = rect[0] - (i.rect[0] + i.rect[2]);
         let overlap = (i.rect[1] + i.rect[3]).min(rect[1] + rect[3]) - i.rect[1].max(rect[1]);
@@ -266,7 +271,9 @@ impl caret::TextInputState {
 impl RuntimeCore {
     pub(in crate::runtime) fn is_selectable(&self, i: usize) -> bool {
         let n = &self.tree.nodes[i];
-        n.input.is_none() && n.text.as_ref().is_some_and(|t| t.selectable && !t.redacted)
+        n.input.is_none()
+            && n.text.as_ref().is_some_and(|t| t.selectable && !t.redacted)
+            && !self.is_text_hidden(i)
     }
 
     pub(in crate::runtime) fn live(&self, path: &str) -> Option<usize> {
@@ -640,9 +647,13 @@ impl RuntimeCore {
     /// above them, or the hidden lines of a long folded prompt), and a drag that reached it
     /// selected everything between it and the press.
     fn shown_box(&self, j: usize) -> Option<[f32; 4]> {
+        if self.is_text_hidden(j) { return None; }
         let r = self.drawn_box(j);
-        if self.paint.inh_scratch.len() != self.tree.nodes.len() || self.paint.drawn.get(j).is_none_or(|d| d[2] <= 0.0 && d[3] <= 0.0) {
+        if !self.tree.built || self.paint.inh_scratch.len() != self.tree.nodes.len() {
             return Some(r);
+        }
+        if self.paint.drawn.get(j).is_none_or(|d| d[2] <= 0.0 || d[3] <= 0.0) {
+            return None;
         }
         let c = self.screen_clip_of_parent(Some(j)).map(|v| v / self.env.scale);
         let v = [r[0].max(c[0]), r[1].max(c[1]), r[2].min(c[2]), r[3].min(c[3])];

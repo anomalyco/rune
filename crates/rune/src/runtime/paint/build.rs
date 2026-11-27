@@ -607,7 +607,7 @@ impl RuntimeCore {
             // Unpulled out of sight, a video still counts, so a scroll across a clip edge doesn't commit.
             if !painted && let Some((surface, _)) = &n.vis.surface { video_signature = crate::video::fold_unpulled(video_signature, surface); }
             self.paint.node_animated_icon = false;
-            let faded_slot = if painted {
+            let (faded_slot, text_start) = if painted {
                 self.paint_node_box(
                     i,
                     s,
@@ -655,7 +655,7 @@ impl RuntimeCore {
                     &mut glyph_count,
                 )
             } else {
-                None
+                (None, None)
             };
             let packed_fade = crate::render::pack_fade(fade, fade_origin, clip);
             for instance in &mut self.instances[first_instance..] {
@@ -670,11 +670,11 @@ impl RuntimeCore {
             } else {
                 clip
             };
-            self.clip_text_instances(i, first_instance, (r, r_exact), sc, text_clip, fade, fade_origin);
+            self.clip_text_instances(i, text_start, (r, r_exact), sc, text_clip, fade, fade_origin);
             let n = &self.tree.nodes[i];
             if let Some((_, radii)) = rounded {
-                for instance in &mut self.instances[primitive_start..] {
-                    if glyphs_clear && instance.params[1] == KIND_GLYPH { continue; }
+                for (idx, instance) in self.instances[primitive_start..].iter_mut().enumerate() {
+                    if glyphs_clear && text_start.is_some_and(|ts| primitive_start + idx >= ts) { continue; }
                     instance.round_clip_corners(radii);
                 }
                 let packed = crate::render::pack_clip_radii(clip, radii);

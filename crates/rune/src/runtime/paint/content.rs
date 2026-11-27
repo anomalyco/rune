@@ -52,7 +52,7 @@ impl RuntimeCore {
         sel_ranges: &[(usize, usize, usize)],
         mark_ranges: &[(usize, usize, usize)],
         glyph_count: &mut usize,
-    ) {
+    ) -> Option<usize> {
         let s = self.env.scale;
         let srgb = self.paint.srgb_blend;
         let now = self.t;
@@ -278,8 +278,11 @@ impl RuntimeCore {
                 self.push_icon(icon_inst(&q, pos, drawn, turn, premul(color, o, srgb), clip, fade));
             }
         } else if n.text.as_deref().is_some_and(|t| t.positioned().is_some()) {
+            let text_start = self.instances.len();
             self.paint_positioned_text(i, &b, text_color, sel_ranges, mark_ranges);
+            return Some(text_start);
         } else if let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) {
+            let text_start = self.instances.len();
             let flow = laid.view();
             let link_fx = link_fx.unwrap();
             let color = text_tint(text_color.unwrap());
@@ -337,18 +340,35 @@ impl RuntimeCore {
                 ([0.0; 2], [0.0; 2])
             };
             let mut clip = clip;
+            let mut shown = shown;
+            let mut shown_x = shown_x;
+            let mut text_fades = false;
             if let Some(inp) = n.input.as_ref().filter(|i| i.single_line) && let Some(layout) = laid.single() {
                 let scroll = single_line_scroll(&mut self.edit.input_scroll, &n.path, inp, &spec.content, layout, s, (x1 - x0) / tk.max(1e-4)) * tk;
                 origin[0] -= scroll;
                 if layout.full_width() * tk > x1 - x0 {
                     clip = [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]];
+                    if clip[2] <= clip[0] || clip[3] <= clip[1] {
+                        self.text.set_emit(crate::text::outline::Emit::Atlas);
+                        return None;
+                    }
                 }
             } else if let Some(tc) = self.truncate_clip(i, (r, r_exact), sc, clip) {
                 if tc[2] <= tc[0] || tc[3] <= tc[1] {
                     self.text.set_emit(crate::text::outline::Emit::Atlas);
-                    return;
+                    return None;
                 }
                 clip = tc;
+                shown_x = [shown_x[0].max(tc[0]), shown_x[1].min(tc[2])];
+            } else if let Some((tc, _, overflows)) = self.text_clip(i, (r, r_exact), sc, clip) {
+                if tc[2] <= tc[0] || tc[3] <= tc[1] {
+                    self.text.set_emit(crate::text::outline::Emit::Atlas);
+                    return None;
+                }
+                clip = tc;
+                shown = [shown[0].max(tc[1]), shown[1].min(tc[3])];
+                shown_x = [shown_x[0].max(tc[0]), shown_x[1].min(tc[2])];
+                text_fades = spec.truncate_fade && overflows;
             }
             let rest_origin = [origin[0] - off[0], origin[1] - off[1]];
             // Paragraph block backgrounds, quote bars and list markers.
@@ -767,7 +787,7 @@ impl RuntimeCore {
                     let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
                     // `::selection` with a colour recolours the selected glyphs, as a field's does.
                     let (highlight, ink) = spec.cold.selection_style.map_or((spec.cold.selection, None), |st| st.pick(self.host.window_focused != Some(false)));
-                    selectable::push_selection(&mut self.instances, flow, a, b, base_origin, tk, premul(highlight, o, srgb), s, clip, fade);
+                    selectable::push_selection(&mut self.instances, flow, a, b, base_origin, tk, premul(highlight, o, srgb), s, clip, fade, if text_fades { text_start } else { 0 });
                     if let Some(c) = ink {
                         selected_ink = Some((a, b, premul(c, o, srgb)));
                     }
@@ -957,7 +977,11 @@ impl RuntimeCore {
                     self.paint.text_quads.insert(node, piece_index, layout_id, d);
                 }
             }
-            if let Some(c) = caret {
+            if let Some(c) = caret
+                && c[2] > 0.0 && c[3] > 0.0
+                && c[0] + c[2] > clip[0] && c[0] < clip[2]
+                && c[1] + c[3] > clip[1] && c[1] < clip[3]
+            {
                 let caret_color = match &n.input {
                     Some(inp) => if inp.caret_inked { inp.caret } else { color },
                     None => spec.cold.caret.unwrap_or(color),
@@ -968,7 +992,9 @@ impl RuntimeCore {
                 arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
             }
             self.text.set_emit(crate::text::outline::Emit::Atlas);
+            return Some(text_start);
         }
+        None
     }
 
     fn push_icon(&mut self, inst: Instance) {
@@ -1022,8 +1048,9 @@ impl RuntimeCore {
         // isn't clipped by either.
         let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
         let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
-        let overflows = layout.full_width() > laid_out + 0.5
-            && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc;
+        let overflows = (laid_out <= 0.0 && layout.full_width() > 0.0)
+            || (layout.full_width() > laid_out + 0.5
+                && layout.full_width() * sc > (bounds[2] - bounds[0]).max(exact) + 0.5 * sc);
         // A right-to-left paragraph runs out past its left edge.
         match (overflows, crate::el::Flow::of_layout(layout)) {
             (true, _) => {}
@@ -1033,17 +1060,20 @@ impl RuntimeCore {
         Some((intersect(clip, bounds), bounds, overflows))
     }
 
-    /// Text-only clipping leaves the box's fill/border and descendants untouched.
+    /// Text-only clipping leaves the box's fill/border and descendants untouched, while clipping
+    /// and fading every primitive emitted by the text leaf itself (glyphs, selection highlights,
+    /// marks, decorations, inline images/icons, and carets).
     pub(in crate::runtime) fn clip_text_instances(
         &mut self,
         i: usize,
-        first_instance: usize,
+        text_start: Option<usize>,
         (r, r_exact): ([f32; 4], [f32; 4]),
         sc: f32,
         clip: [f32; 4],
         fade: [f32; 4],
         fade_origin: [f32; 4],
     ) {
+        let Some(text_start) = text_start else { return };
         let s = self.env.scale;
         if let Some((text_clip, bounds, overflows)) = self.text_clip(i, (r, r_exact), sc, clip)
             && let Some(spec) = &self.tree.nodes[i].text
@@ -1061,11 +1091,10 @@ impl RuntimeCore {
                     else { [0.0, 0.0, width, 0.0] };
                 inherit_fade(&mut widths, &mut origins, bounds, own);
             }
-            for instance in &mut self.instances[first_instance..] {
-                if instance.params[1] == KIND_GLYPH {
-                    instance.clip = text_clip;
-                    instance.fade = crate::render::pack_fade(widths, origins, text_clip);
-                }
+            let packed = crate::render::pack_fade(widths, origins, text_clip);
+            for instance in &mut self.instances[text_start..] {
+                instance.clip = text_clip;
+                instance.fade = packed;
             }
         }
     }

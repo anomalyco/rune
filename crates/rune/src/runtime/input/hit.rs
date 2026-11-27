@@ -397,7 +397,11 @@ impl RuntimeCore {
             if Some(i) == primary { return primary; }
             if std::iter::successors(Some(i), |&k| self.tree.nodes[k].parent)
                 .take_while(|&k| !shared_ancestor(k))
-                .any(|k| self.tree.nodes[k].handlers.cursor.is_some())
+                .any(|k| {
+                    self.tree.nodes[k].handlers.cursor.is_some()
+                        && !(self.tree.nodes[k].text.as_ref().is_some_and(|t| t.flags.has(crate::el::TextFlags::SELECTABLE_CURSOR))
+                            && !self.is_selectable(k))
+                })
             {
                 return Some(i);
             }
@@ -487,7 +491,8 @@ impl RuntimeCore {
         let hits_before = self.hit.hits_len();
         if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
             || n.vis.cold.get().is_some_and(|c| c.image_menu.is_some())
-            || n.text.as_ref().is_some_and(|t| t.selectable || !t.cold.links.is_empty()))
+            || self.is_selectable(i)
+            || (n.text.as_ref().is_some_and(|t| !t.cold.links.is_empty()) && !self.is_text_hidden(i)))
             && !self.subtree_exiting(i)
             && self.allowed(i) && effective_opacity > 0.001 && visible
         {

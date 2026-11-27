@@ -125,6 +125,7 @@ impl RuntimeCore {
             pt.for_each_range_box(h.start as usize, h.end as usize, |r| {
                 let mut pr = tf.pixel_rect(r);
                 if pad > 0.0 { pr = [pr[0] - pad, pr[1] - pad, pr[2] + 2.0 * pad, pr[3] + 2.0 * pad]; }
+                if !super::visibility::rect_in_clip(pr, b.clip) { return; }
                 self.instances.push(rect_inst(pr, fill, radius, b.clip, b.fade));
             });
         }
@@ -138,7 +139,9 @@ impl RuntimeCore {
             let fill = premul(highlight, b.o, srgb);
             for &(_, a, end) in mark_ranges.iter().filter(|m| m.0 == i) {
                 pt.for_each_range_box(a, end, |r| {
-                    self.instances.push(rect_inst(tf.pixel_rect(r), fill, 0.0, b.clip, b.fade));
+                    let pr = tf.pixel_rect(r);
+                    if !super::visibility::rect_in_clip(pr, b.clip) { return; }
+                    self.instances.push(rect_inst(pr, fill, 0.0, b.clip, b.fade));
                 });
             }
         }
@@ -148,7 +151,9 @@ impl RuntimeCore {
             let fill = premul(highlight, b.o, srgb);
             let radius = 2.0 * s * tk;
             pt.for_each_range_box(a, end, |r| {
-                self.instances.push(rect_inst(tf.pixel_rect(r), fill, radius, b.clip, b.fade));
+                let pr = tf.pixel_rect(r);
+                if !super::visibility::rect_in_clip(pr, b.clip) { return; }
+                self.instances.push(rect_inst(pr, fill, radius, b.clip, b.fade));
             });
         } else if let Some((byte, _)) = collapsed
             && let Some([cx_s, cy_s, _, ch_s]) = pt.caret(byte)
@@ -162,14 +167,17 @@ impl RuntimeCore {
             } else {
                 (cx, (1.5 * s * tk).max(1.0))
             };
-            let caret_color = spec.cold.caret.unwrap_or_else(|| text_color.unwrap_or(spec.color));
-            self.instances.push(rect_inst(
-                [caret_x, cy + ch * 0.1, caret_w, ch * 0.8],
-                premul(caret_color, b.o, srgb),
-                0.0,
-                b.clip,
-                b.fade,
-            ));
+            let caret_rect = [caret_x, cy + ch * 0.1, caret_w, ch * 0.8];
+            if super::visibility::rect_in_clip(caret_rect, b.clip) {
+                let caret_color = spec.cold.caret.unwrap_or_else(|| text_color.unwrap_or(spec.color));
+                self.instances.push(rect_inst(
+                    caret_rect,
+                    premul(caret_color, b.o, srgb),
+                    0.0,
+                    b.clip,
+                    b.fade,
+                ));
+            }
         }
     }
 }
