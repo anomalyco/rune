@@ -223,7 +223,16 @@ impl DeviceInterface for MetalDevice {
         let raw = texture.raw.clone();
         if raw.is_shared() {
             zero_shared_texture(&raw);
-        } else if !raw.is_lazy() {
+        } else if raw.is_lazy() {
+            // Single-aspect 2D Private RENDER_ATTACHMENT textures clear lazily via render passes.
+        } else if raw.format.is_combined_depth_stencil_format()
+            && desc.usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            let subs = (0..raw.layers).flat_map(|layer| {
+                (0..raw.mips).map(move |mip| crate::lazy_init::Subresource { mip, layer })
+            });
+            self.shared.clear_subresources(&raw, subs);
+        } else if raw.sample_count == 1 {
             let zeros = self.shared.zeros.get_or_init(|| Zeros::new(&self.shared));
             self.shared.upload(|blit| zero_texture(blit, zeros, &raw), [raw.clone() as _], None);
         }

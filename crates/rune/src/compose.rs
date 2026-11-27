@@ -138,7 +138,7 @@ impl<S: 'static> Frame<'_, S> {
     /// attached GPU.
     ///
     /// On macOS, Rune's default native Metal backend implements the wgpu subset Rune uses; an
-    /// embedded renderer that needs depth/stencil, MSAA, render bundles, indirect draws, or other
+    /// embedded renderer that needs render bundles, indirect draws, occlusion queries, or other
     /// wgpu features should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
     /// `prewarm_gpu_on(GpuBackend::Wgpu)`.
     ///
@@ -189,7 +189,7 @@ impl<S: 'static> Frame<'_, S> {
     /// `Frame::ui` is a standalone [`Renderer::new`] or [`Renderer::try_new`] with no attached
     /// GPU.
     ///
-    /// On macOS, embedded engines needing depth/stencil, MSAA, render bundles, or indirect draws
+    /// On macOS, embedded engines needing render bundles, indirect draws, or occlusion queries
     /// should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
     /// `prewarm_gpu_on(GpuBackend::Wgpu)`.
     ///

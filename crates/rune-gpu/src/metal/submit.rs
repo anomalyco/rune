@@ -19,8 +19,8 @@ use wgpu::custom::*;
 
 use rune_core::machine::Effects;
 
-use crate::lazy_init::{Effect, Event, SubresourceRange};
-use super::encode::{MetalCommandBuffer, buffer_to_texture, clear_subresource, is_full_mip, replace_texture};
+use crate::lazy_init::{Effect, Event, Subresource, SubresourceRange};
+use super::encode::{MetalCommandBuffer, TextureCopy, buffer_to_texture, clear_subresource, is_full_mip, replace_texture};
 use super::resource::{BufferRaw, MetalBuffer, MetalTexture, TextureRaw};
 use super::surface::MetalOutput;
 use super::{Obj, Shared};
@@ -223,6 +223,16 @@ impl Shared {
     /// Encodes lazy clear-only render passes into the pre-submit clears command buffer.
     pub(super) fn clear_effects(&self, texture: &Arc<TextureRaw>, effects: Effects<Effect>) {
         if effects.is_empty() { return }
+        self.clear_subresources(texture, effects.into_iter().filter_map(|effect| match effect {
+            Effect::ClearSubresource(sub) => Some(sub),
+            Effect::PromoteLoadToClear => None,
+        }));
+    }
+
+    /// Encodes clear-only render passes for `subresources` into the pre-submit clears command buffer.
+    pub(super) fn clear_subresources(&self, texture: &Arc<TextureRaw>, subresources: impl IntoIterator<Item = Subresource>) {
+        let mut iter = subresources.into_iter().peekable();
+        if iter.peek().is_none() { return }
         let mut st = self.lock();
         let State { clears, spare, .. } = &mut *st;
         let clears = clears.get_or_insert_with(|| {
@@ -232,10 +242,8 @@ impl Shared {
             let keep = spare.pop().unwrap_or_else(|| Keep::with_capacity(8));
             Clears { cb, keep }
         });
-        for effect in effects {
-            if let Effect::ClearSubresource(sub) = effect {
-                clear_subresource(&clears.cb, texture, sub.mip, sub.layer);
-            }
+        for sub in iter {
+            clear_subresource(&clears.cb, texture, sub.mip, sub.layer);
         }
         clears.keep.push(texture.clone());
     }
@@ -524,7 +532,7 @@ impl QueueInterface for MetalQueue {
         let staging = Arc::new(BufferRaw::with_bytes(&self.0, data, Some("rune metal write_texture")));
         let uses = texture.uses.clone();
         self.0.upload(
-            |blit| buffer_to_texture(blit, &staging.raw, layout, &texture, dst.mip_level, dst.origin, size),
+            |blit| buffer_to_texture(blit, &staging.raw, layout, TextureCopy { texture: &texture, aspect: dst.aspect, mip: dst.mip_level, origin: dst.origin }, size),
             [staging.clone() as _, texture.clone() as _],
             uses.as_ref(),
         );

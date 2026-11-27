@@ -59,10 +59,33 @@ pub(crate) fn pixel_format(format: wgpu::TextureFormat) -> MTLPixelFormat {
         F::Rgba16Float => M::RGBA16Float,
         F::Rgba32Uint => M::RGBA32Uint,
         F::Rgba32Float => M::RGBA32Float,
-        F::Depth32Float => M::Depth32Float,
+        F::Stencil8 => M::Stencil8,
         F::Depth16Unorm => M::Depth16Unorm,
+        F::Depth24Plus => M::Depth32Float,
+        F::Depth24PlusStencil8 => M::Depth32Float_Stencil8,
+        F::Depth32Float => M::Depth32Float,
+        F::Depth32FloatStencil8 => M::Depth32Float_Stencil8,
         other => super::unsupported!("texture format {other:?}"),
     }
+}
+
+/// Metal pixel format for a texture view over a texture of `texture_format`.
+/// Combined depth-stencil formats use `X32_Stencil8` for stencil-only views and keep
+/// `Depth32Float_Stencil8` for depth-only views (Metal forbids aliasing combined depth-stencil
+/// textures to `Depth32Float`).
+fn view_pixel_format(
+    texture_format: wgpu::TextureFormat,
+    view_format: Option<wgpu::TextureFormat>,
+    aspect: wgpu::TextureAspect,
+) -> MTLPixelFormat {
+    if texture_format.is_combined_depth_stencil_format() {
+        return match aspect {
+            wgpu::TextureAspect::StencilOnly => MTLPixelFormat::X32_Stencil8,
+            wgpu::TextureAspect::DepthOnly | wgpu::TextureAspect::All => pixel_format(texture_format),
+            other => super::unsupported!("texture aspect {other:?}"),
+        };
+    }
+    pixel_format(view_format.unwrap_or(texture_format))
 }
 
 /// A buffer's storage, which its CPU pointer stays valid with.
@@ -91,6 +114,8 @@ pub(crate) struct TextureRaw {
     pub(super) raw: Obj<dyn MTLTexture>,
     pub(super) format: wgpu::TextureFormat,
     pub(super) dimension: wgpu::TextureDimension,
+    pub(super) raw_type: MTLTextureType,
+    pub(super) sample_count: u32,
     pub(super) layers: u32,
     pub(super) mips: u32,
     pub(super) drawable: bool,
@@ -116,6 +141,8 @@ pub(crate) struct MetalTexture {
 #[derive(Debug)]
 pub(crate) struct ViewRaw {
     pub(super) raw: Obj<dyn MTLTexture>,
+    pub(super) format: wgpu::TextureFormat,
+    pub(super) aspect: wgpu::TextureAspect,
     pub(super) drawable: bool,
     /// Its texture's in-flight usage counter, when the texture uses `MTLStorageMode::Shared`.
     pub(super) uses: Option<Arc<AtomicUsize>>,
@@ -250,8 +277,15 @@ impl BufferMappedRangeInterface for MappedRange {
     }
 }
 
-fn texture_type(dimension: wgpu::TextureViewDimension) -> MTLTextureType {
+fn texture_type(dimension: wgpu::TextureViewDimension, sample_count: u32) -> MTLTextureType {
     use wgpu::TextureViewDimension as D;
+    if sample_count > 1 {
+        return match dimension {
+            D::D2 => MTLTextureType::Type2DMultisample,
+            D::D2Array => MTLTextureType::Type2DMultisampleArray,
+            other => super::unsupported!("multisampled {other:?} texture view"),
+        };
+    }
     match dimension {
         D::D1 => MTLTextureType::Type1D,
         D::D2 => MTLTextureType::Type2D,
@@ -262,11 +296,22 @@ fn texture_type(dimension: wgpu::TextureViewDimension) -> MTLTextureType {
     }
 }
 
+fn descriptor_texture_type(dimension: wgpu::TextureDimension, layers: u32, sample_count: u32) -> MTLTextureType {
+    match dimension {
+        wgpu::TextureDimension::D1 => MTLTextureType::Type1D,
+        wgpu::TextureDimension::D2 if sample_count > 1 && layers > 1 => MTLTextureType::Type2DMultisampleArray,
+        wgpu::TextureDimension::D2 if sample_count > 1 => MTLTextureType::Type2DMultisample,
+        wgpu::TextureDimension::D2 if layers > 1 => MTLTextureType::Type2DArray,
+        wgpu::TextureDimension::D2 => MTLTextureType::Type2D,
+        wgpu::TextureDimension::D3 => MTLTextureType::Type3D,
+    }
+}
+
 impl TextureRaw {
     /// A drawable's texture, which a surface hands out for one frame.
     pub(super) fn drawable(raw: Obj<dyn MTLTexture>, format: wgpu::TextureFormat) -> Self {
-        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, layers: 1, mips: 1, drawable: true,
-            shared_storage: false, uses: None, lazy_init: None, owner: None, live: None }
+        TextureRaw { raw, format, dimension: wgpu::TextureDimension::D2, raw_type: MTLTextureType::Type2D, sample_count: 1,
+            layers: 1, mips: 1, drawable: true, shared_storage: false, uses: None, lazy_init: None, owner: None, live: None }
     }
 
     pub(super) fn is_shared(&self) -> bool { self.shared_storage }
@@ -294,20 +339,33 @@ impl TextureRaw {
 
 impl MetalTexture {
     pub(crate) fn new(shared: &Arc<Shared>, desc: &wgpu::TextureDescriptor<'_>, live: Live) -> Self {
-        if desc.sample_count != 1 { super::unsupported!("multisampled textures") }
+        let sample_count = desc.sample_count.max(1);
+        if sample_count > 1 {
+            if desc.dimension != wgpu::TextureDimension::D2 {
+                super::unsupported!("multisampled {:?} textures", desc.dimension);
+            }
+            if !shared.device.supportsTextureSampleCount(sample_count as usize) {
+                super::unsupported!("sample count {sample_count}");
+            }
+        }
         let layers = if desc.dimension == wgpu::TextureDimension::D3 { 1 } else { desc.size.depth_or_array_layers };
-        let (mtl, is_shared) = device_texture(&shared.device, desc, layers);
+        let raw_type = descriptor_texture_type(desc.dimension, layers, sample_count);
+        let (mtl, is_shared) = device_texture(&shared.device, desc, layers, raw_type, sample_count);
         let uses = (is_shared && desc.usage.contains(wgpu::TextureUsages::COPY_DST)).then(|| Arc::new(AtomicUsize::new(0)));
         let lazy_init = lazy_clear_texture(desc, is_shared).then(|| LazyInit::new(desc.mip_level_count, layers));
-        let raw = TextureRaw { raw: mtl, format: desc.format, dimension: desc.dimension, layers,
+        let raw = TextureRaw { raw: mtl, format: desc.format, dimension: desc.dimension, raw_type, sample_count, layers,
             mips: desc.mip_level_count, drawable: false, shared_storage: is_shared, uses, lazy_init, owner: None, live: Some(live) };
         MetalTexture { raw: Arc::new(raw), shared: Some(shared.clone()) }
     }
 
     /// Over `raw`, a texture made elsewhere that matches `desc`, kept valid by `owner`.
     pub(crate) fn from_raw(raw: Obj<dyn MTLTexture>, desc: &wgpu::TextureDescriptor<'_>, owner: Owner) -> Self {
-        let raw = TextureRaw { raw, format: desc.format, dimension: desc.dimension, layers: desc.size.depth_or_array_layers,
-            mips: desc.mip_level_count, drawable: false, shared_storage: false, uses: None, lazy_init: None, owner: Some(owner), live: None };
+        let sample_count = desc.sample_count.max(1);
+        let layers = if desc.dimension == wgpu::TextureDimension::D3 { 1 } else { desc.size.depth_or_array_layers };
+        let raw_type = descriptor_texture_type(desc.dimension, layers, sample_count);
+        let raw = TextureRaw { raw, format: desc.format, dimension: desc.dimension, raw_type, sample_count,
+            layers: desc.size.depth_or_array_layers, mips: desc.mip_level_count, drawable: false, shared_storage: false,
+            uses: None, lazy_init: None, owner: Some(owner), live: None };
         MetalTexture { raw: Arc::new(raw), shared: None }
     }
 }
@@ -327,41 +385,46 @@ fn shared_texture(device: &Obj<dyn MTLDevice>, desc: &wgpu::TextureDescriptor<'_
         && !desc.usage.intersects(U::RENDER_ATTACHMENT | U::STORAGE_BINDING | U::COPY_SRC)
 }
 
-/// Single-sample 2D color-renderable `Private` textures with `RENDER_ATTACHMENT` skip eager
-/// `zero_texture` blits and clear lazily via render-pass load actions or clear-only passes.
+/// Single-aspect 2D `Private` textures with `RENDER_ATTACHMENT` (single-sample or multisampled,
+/// color, depth-only, or stencil-only) skip eager `zero_texture` blits and clear lazily via
+/// render-pass load actions or clear-only passes. Combined depth-stencil formats clear eagerly
+/// via a clear-only render pass so depth and stencil can have independent store ops.
 fn lazy_clear_texture(desc: &wgpu::TextureDescriptor<'_>, is_shared: bool) -> bool {
     !is_shared
         && desc.dimension == wgpu::TextureDimension::D2
-        && desc.sample_count == 1
-        && !desc.format.is_depth_stencil_format()
-        && desc.format.block_copy_size(None).is_some()
+        && !desc.format.is_combined_depth_stencil_format()
         && desc.usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
 }
 
-fn device_texture(device: &Obj<dyn MTLDevice>, desc: &wgpu::TextureDescriptor<'_>, layers: u32) -> (Obj<dyn MTLTexture>, bool) {
+fn device_texture(
+    device: &Obj<dyn MTLDevice>,
+    desc: &wgpu::TextureDescriptor<'_>,
+    layers: u32,
+    kind: MTLTextureType,
+    sample_count: u32,
+) -> (Obj<dyn MTLTexture>, bool) {
     use wgpu::TextureUsages as U;
     let d = MTLTextureDescriptor::new();
-    let kind = match desc.dimension {
-        wgpu::TextureDimension::D1 => MTLTextureType::Type1D,
-        wgpu::TextureDimension::D2 if layers > 1 => MTLTextureType::Type2DArray,
-        wgpu::TextureDimension::D2 => MTLTextureType::Type2D,
-        wgpu::TextureDimension::D3 => MTLTextureType::Type3D,
-    };
     d.setTextureType(kind);
     d.setPixelFormat(pixel_format(desc.format));
-    // SAFETY: nonzero sizes, within the device's limits as wgpu's validation would require.
+    // SAFETY: nonzero sizes and validated sample count, within the device's limits.
     unsafe {
         d.setWidth(desc.size.width.max(1) as usize);
         d.setHeight(desc.size.height.max(1) as usize);
         d.setDepth(if kind == MTLTextureType::Type3D { desc.size.depth_or_array_layers.max(1) as usize } else { 1 });
         d.setArrayLength(layers.max(1) as usize);
         d.setMipmapLevelCount(desc.mip_level_count.max(1) as usize);
+        if sample_count > 1 {
+            d.setSampleCount(sample_count as usize);
+        }
     }
     let mut usage = MTLTextureUsage::Unknown;
     if desc.usage.intersects(U::TEXTURE_BINDING | U::STORAGE_BINDING) { usage |= MTLTextureUsage::ShaderRead; }
     if desc.usage.contains(U::STORAGE_BINDING) { usage |= MTLTextureUsage::ShaderWrite; }
     if desc.usage.contains(U::RENDER_ATTACHMENT) { usage |= MTLTextureUsage::RenderTarget; }
-    if desc.view_formats.iter().any(|f| *f != desc.format) { usage |= MTLTextureUsage::PixelFormatView; }
+    if desc.view_formats.iter().any(|f| *f != desc.format) || desc.format.is_combined_depth_stencil_format() {
+        usage |= MTLTextureUsage::PixelFormatView;
+    }
     d.setUsage(usage);
     let shared = shared_texture(device, desc);
     d.setStorageMode(if shared { MTLStorageMode::Shared } else { MTLStorageMode::Private });
@@ -378,7 +441,9 @@ impl TextureInterface for MetalTexture {
         let dimension = desc.dimension.unwrap_or_else(|| t.view_dimension());
         let mips = desc.mip_level_count.unwrap_or(t.mips - desc.base_mip_level);
         let layers = desc.array_layer_count.unwrap_or(t.layers - desc.base_array_layer);
-        let whole = format == t.format && dimension == t.view_dimension() && desc.base_mip_level == 0 && mips == t.mips
+        let raw_format = view_pixel_format(t.format, desc.format, desc.aspect);
+        let raw_type = texture_type(dimension, t.sample_count);
+        let whole = raw_format == pixel_format(t.format) && raw_type == t.raw_type && desc.base_mip_level == 0 && mips == t.mips
             && desc.base_array_layer == 0 && layers == t.layers;
         let raw = if whole {
             t.raw.clone()
@@ -386,7 +451,7 @@ impl TextureInterface for MetalTexture {
             let levels = NSRange::new(desc.base_mip_level as usize, mips as usize);
             let slices = NSRange::new(desc.base_array_layer as usize, layers as usize);
             // SAFETY: the ranges are within the texture, as wgpu's validation would require.
-            let view = unsafe { t.raw.newTextureViewWithPixelFormat_textureType_levels_slices(pixel_format(format), texture_type(dimension), levels, slices) }
+            let view = unsafe { t.raw.newTextureViewWithPixelFormat_textureType_levels_slices(raw_format, raw_type, levels, slices) }
                 .expect("a Metal texture view");
             #[cfg(debug_assertions)]
             if let Some(label) = desc.label {
@@ -398,7 +463,9 @@ impl TextureInterface for MetalTexture {
         };
         let texture = t.is_lazy().then(|| self.raw.clone());
         let range = SubresourceRange { base_mip: desc.base_mip_level, mips, base_layer: desc.base_array_layer, layers };
-        DispatchTextureView::custom(MetalView { raw: Arc::new(ViewRaw { raw, drawable: t.drawable, uses: t.uses.clone(), texture, range, owner: t.owner.clone() }) })
+        DispatchTextureView::custom(MetalView { raw: Arc::new(ViewRaw {
+            raw, format, aspect: desc.aspect, drawable: t.drawable, uses: t.uses.clone(), texture, range, owner: t.owner.clone(),
+        }) })
     }
     fn destroy(&self) {}
 }

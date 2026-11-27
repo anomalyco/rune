@@ -25,9 +25,9 @@
 //! Compute passes, timestamps at pass boundaries (`TIMESTAMP_QUERY`), and immediates
 //! (`IMMEDIATES`, set as inline vertex and fragment bytes, up to Metal's 4 KB) are as wgpu-hal's.
 //! New textures read as zero, as wgpu promises. A pipeline without a layout derives one from
-//! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect commands,
-//! depth and multisampling are not implemented: they panic naming the way back to wgpu
-//! (`unsupported!`).
+//! its shaders, as wgpu-core does (`derive`). Depth/stencil attachments and multisampled color
+//! and depth passes with resolve targets are supported. Other queries, render bundles, and
+//! indirect commands are not implemented: they panic naming the way back to wgpu (`unsupported!`).
 
 #[doc(hidden)]
 pub mod bench;
@@ -36,6 +36,8 @@ mod compute;
 #[cfg(test)]
 mod compute_tests;
 mod derive;
+#[cfg(test)]
+mod depth_msaa_tests;
 #[cfg(test)]
 mod derive_tests;
 mod device;
@@ -124,7 +126,10 @@ pub fn builtin_misses() -> usize { builtin::misses() }
 
 /// The wgpu features this backend can offer: a compositor that wants others draws with wgpu
 /// unless the app or `RUNE_GPU_BACKEND` asked for this backend (`backend::wgpu_for`).
-pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::IMMEDIATES);
+pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
+    .union(wgpu::Features::IMMEDIATES)
+    .union(wgpu::Features::DEPTH32FLOAT_STENCIL8)
+    .union(wgpu::Features::DEPTH_CLIP_CONTROL);
 
 /// The most immediate data a pipeline takes: what `setVertexBytes` and `setFragmentBytes` copy.
 const MAX_IMMEDIATE_SIZE: u32 = 4096;
@@ -263,7 +268,12 @@ impl AdapterInterface for MetalAdapter {
     fn get_texture_format_features(&self, format: wgpu::TextureFormat) -> wgpu::TextureFormatFeatures {
         use wgpu::TextureFormatFeatureFlags as F;
         let float = format.sample_type(None, None).is_some_and(|t| matches!(t, wgpu::TextureSampleType::Float { .. }));
-        let flags = if float { F::FILTERABLE | F::BLENDABLE } else { F::empty() };
+        let mut flags = if float { F::FILTERABLE | F::BLENDABLE | F::MULTISAMPLE_RESOLVE } else { F::empty() };
+        if !format.is_compressed() {
+            if self.device.supportsTextureSampleCount(2) { flags |= F::MULTISAMPLE_X2; }
+            if self.device.supportsTextureSampleCount(4) { flags |= F::MULTISAMPLE_X4; }
+            if self.device.supportsTextureSampleCount(8) { flags |= F::MULTISAMPLE_X8; }
+        }
         wgpu::TextureFormatFeatures { allowed_usages: wgpu::TextureUsages::all(), flags }
     }
     fn get_presentation_timestamp(&self) -> wgpu::PresentationTimestamp { wgpu::PresentationTimestamp(0) }
