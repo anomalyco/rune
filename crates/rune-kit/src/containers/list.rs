@@ -213,7 +213,7 @@ impl List {
             } else if pressable {
                 r = r.focus_highlight(c.surface_raised_hover);
             } else {
-                r = r.hover(c.surface_raised_hover);
+                r = k.apply_hover_motion(r.hover(c.surface_raised_hover));
             }
             if pressable {
                 r = r.focusable(true).focus_selected(item.selected);

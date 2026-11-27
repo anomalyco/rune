@@ -23,6 +23,7 @@ mod image_zoom;
 mod interactive;
 mod keybind;
 mod kit_metrics;
+mod kit_motion;
 mod list_keyboard;
 mod menu_description;
 mod menu_look;

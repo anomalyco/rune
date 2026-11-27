@@ -106,7 +106,7 @@ impl Accordion {
                 -2.0,
             );
             if item.state == State::Rest {
-                trigger = trigger.hover(c.hover);
+                trigger = k.apply_hover_motion(trigger.hover(c.hover));
             }
             let trigger = item.acts.apply(trigger, enabled);
             let mut e = col().key(format!("item{i}")).items_stretch().child(trigger);

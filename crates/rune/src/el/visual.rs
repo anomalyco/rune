@@ -75,6 +75,9 @@ pub struct VisualCold {
     pub(crate) backdrop_blur: f32,
     /// The hover track's enter and exit curves (default: snappy spring both ways).
     pub hover_motion: Option<Rc<(Anim, Anim)>>,
+    /// True when `hover_motion` came from a theme/token default (`El::token_hover_motion`), so
+    /// an enclosing `El::hover_motion_within` overrides it.
+    pub(crate) hover_motion_default: bool,
     /// Hover curves for this element and the hover tracks below it without their own.
     pub(crate) hover_within: Option<Rc<(Anim, Anim)>>,
     /// The press tracks' down and up curves (default: instant down, snappy/pop up).
@@ -191,6 +194,7 @@ impl Empty for VisualCold {
         effect: None,
         backdrop_blur: 0.0,
         hover_motion: None,
+        hover_motion_default: false,
         hover_within: None,
         press_motion: None,
         group_opacity: None,

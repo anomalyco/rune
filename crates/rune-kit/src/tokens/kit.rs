@@ -2,7 +2,7 @@
 //! appearance (see `rune-theme-opencode` for the OpenCode theme, or [`Kit::neutral`]).
 //! Components never name raw colours, sizes or fonts outside these fields.
 
-use rune::{Color, El, Icon, Shadow, Spring, TextStyle};
+use rune::{Anim, Color, Curve, Easing, El, Icon, Shadow, Spring, TextStyle};
 
 /// Colours for one status role (success, warning, danger, info).
 #[derive(Clone, Copy, Debug, Hash)]
@@ -216,8 +216,92 @@ impl std::hash::Hash for Radius {
     }
 }
 
-/// Motion tokens. Hover/press overlays use the runtime's own snappy track.
-#[derive(Clone, Copy, Debug)]
+fn f32_hash_bits(x: f32) -> u32 {
+    if x == 0.0 {
+        0
+    } else if x.is_nan() {
+        f32::NAN.to_bits()
+    } else {
+        x.to_bits()
+    }
+}
+
+pub(crate) fn hash_anim<H: std::hash::Hasher>(anim: &Anim, state: &mut H) {
+    use std::hash::Hash;
+    match anim.curve {
+        Curve::Spring(s) => (0u8, f32_hash_bits(s.duration), f32_hash_bits(s.bounce)).hash(state),
+        Curve::Tween { duration, easing } => {
+            (1u8, f32_hash_bits(duration)).hash(state);
+            match easing {
+                Easing::Linear => 0u8.hash(state),
+                Easing::CubicBezier(b) => {
+                    (1u8, [b.x1, b.y1, b.x2, b.y2].map(f32_hash_bits)).hash(state);
+                }
+                Easing::Steps(n, pos) => {
+                    let p = match pos {
+                        rune_motion::StepPosition::Start => 0u8,
+                        rune_motion::StepPosition::End => 1u8,
+                        rune_motion::StepPosition::None => 2u8,
+                        rune_motion::StepPosition::Both => 3u8,
+                    };
+                    (2u8, n, p).hash(state);
+                }
+                Easing::Piecewise(stops) => {
+                    (3u8, stops.len()).hash(state);
+                    for [x, y] in stops {
+                        (f32_hash_bits(*x), f32_hash_bits(*y)).hash(state);
+                    }
+                }
+            }
+        }
+        Curve::Decay(d) => (2u8, f32_hash_bits(d.rate)).hash(state),
+        Curve::Instant => 3u8.hash(state),
+        Curve::Hermite { duration, end_velocity } => {
+            (4u8, f32_hash_bits(duration), f32_hash_bits(end_velocity)).hash(state);
+        }
+    }
+    let blend = match anim.blend {
+        rune_motion::Blend::Auto => 0u8,
+        rune_motion::Blend::Merge => 1u8,
+        rune_motion::Blend::Additive => 2u8,
+    };
+    f32_hash_bits(anim.delay).hash(state);
+    blend.hash(state);
+    match anim.velocity {
+        rune_motion::Velocity::Inherit => 0u8.hash(state),
+        rune_motion::Velocity::Zero => 1u8.hash(state),
+        rune_motion::Velocity::Uniform(v) => (2u8, f32_hash_bits(v)).hash(state),
+    }
+    anim.token.hash(state);
+}
+
+pub(crate) fn hash_anim_pair<H: std::hash::Hasher>(pair: Option<(Anim, Anim)>, state: &mut H) {
+    use std::hash::Hash;
+    match pair {
+        None => 0u8.hash(state),
+        Some((a, b)) => {
+            1u8.hash(state);
+            hash_anim(&a, state);
+            hash_anim(&b, state);
+        }
+    }
+}
+
+/// Motion tokens for controls, overlays, disclosures, and pointer hover/press feedback.
+///
+/// `hover` and `press` default to `None`, keeping the runtime's built-in tracks (instant hover
+/// enter / 0.1 s ease-out exit; `tok::motion::INSTANT` press down / `SNAPPY` or `POP` up) and
+/// letting an enclosing [`El::hover_motion_within`](rune::El::hover_motion_within) apply.
+///
+/// ```
+/// # use rune::{Anim, Curve, Easing};
+/// # use rune_kit::Kit;
+/// let mut k = Kit::neutral(true);
+/// k.motion = k.motion
+///     .hover_motion(Anim::INSTANT, Curve::tween(0.12, Easing::EASE_OUT))
+///     .press_motion(Curve::tween(0.08, Easing::EASE_OUT), Curve::tween(0.16, Easing::EASE_OUT));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Motion {
     /// Controls changing state (switch thumb, checkbox, colour changes): ~90–170 ms ease-out on the web.
     pub control: Spring,
@@ -225,6 +309,50 @@ pub struct Motion {
     pub overlay: Spring,
     /// Disclosure transitions (shell `SplitView` panes via `PaneMotion`, and `SidebarSection` collapse/expand).
     pub disclosure: Spring,
+    /// Default hover `(enter, exit)` curves for kit controls; `None` keeps the runtime default
+    /// (instant enter, 0.1 s ease-out exit). Overridden by explicit [`El::hover_motion`] or an
+    /// enclosing [`El::hover_motion_within`], and reduced under Reduce Motion.
+    pub hover: Option<(Anim, Anim)>,
+    /// Default press `(down, up)` curves for kit controls; `None` keeps the runtime default
+    /// (`tok::motion::INSTANT` down, `SNAPPY` / `POP` up). Overridden by explicit
+    /// [`El::press_motion`], and reduced under Reduce Motion.
+    pub press: Option<(Anim, Anim)>,
+}
+
+impl Default for Motion {
+    fn default() -> Self {
+        Self {
+            control: rune::tok::motion::SNAPPY,
+            overlay: rune::tok::motion::SNAPPY,
+            disclosure: rune::tok::motion::DEFAULT,
+            hover: None,
+            press: None,
+        }
+    }
+}
+
+impl Motion {
+    /// Sets the default hover `(enter, exit)` curves for kit controls.
+    pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        self.hover = Some((enter.into(), exit.into()));
+        self
+    }
+
+    /// Sets the default press `(down, up)` curves for kit controls.
+    pub fn press_motion(mut self, down: impl Into<Anim>, up: impl Into<Anim>) -> Self {
+        self.press = Some((down.into(), up.into()));
+        self
+    }
+}
+
+impl std::hash::Hash for Motion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for s in [self.control, self.overlay, self.disclosure] {
+            (f32_hash_bits(s.duration), f32_hash_bits(s.bounce)).hash(state);
+        }
+        hash_anim_pair(self.hover, state);
+        hash_anim_pair(self.press, state);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -270,7 +398,30 @@ impl Kit {
     /// `c.contrast_pressed` on a contrast fill. `pressed` replaces `hover` while held rather
     /// than stacking on it.
     pub fn interactive_with(&self, e: El, hover: Color, pressed: Color) -> El {
-        e.hover(hover).press(crate::press_over(hover, pressed))
+        self.apply_interaction_motion(e.hover(hover).press(crate::press_over(hover, pressed)))
+    }
+
+    /// Applies [`Motion::hover`] as a token default unless `e` already carries an explicit
+    /// [`El::hover_motion`].
+    pub(crate) fn apply_hover_motion(&self, e: El) -> El {
+        match self.motion.hover {
+            Some((enter, exit)) => e.token_hover_motion(enter, exit),
+            None => e,
+        }
+    }
+
+    /// Applies [`Motion::press`] as a token default unless `e` already carries an explicit
+    /// [`El::press_motion`].
+    pub(crate) fn apply_press_motion(&self, e: El) -> El {
+        match self.motion.press {
+            Some((down, up)) => e.token_press_motion(down, up),
+            None => e,
+        }
+    }
+
+    /// Applies [`Motion::hover`] and [`Motion::press`] as token defaults where not already set on `e`.
+    pub(crate) fn apply_interaction_motion(&self, e: El) -> El {
+        self.apply_press_motion(self.apply_hover_motion(e))
     }
 
     /// Paints `base` or its forced `State::Hover`/`State::Pressed` composite (`crate::over`),
@@ -308,7 +459,7 @@ impl Kit {
         live_hover: bool,
     ) -> El {
         let e = e.fill(if forced_hover { crate::over(hover, base) } else { base });
-        if live_hover { e.hover(hover) } else { e }
+        if live_hover { self.apply_hover_motion(e.hover(hover)) } else { e }
     }
 
     /// Transparent-base interactive state (inline triggers, segments): paints `c.hover` when

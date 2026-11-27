@@ -1,6 +1,6 @@
 //! [`MarkdownStyle`]: how markdown looks, and its builders.
 
-use rune::{Icon, Spring};
+use rune::{Anim, Icon, Spring};
 
 use super::*;
 use crate::tokens::palette::tint;
@@ -49,6 +49,7 @@ pub struct MarkdownStyle {
     pub(super) table_rule: Color,
     pub(super) table_col_rule: Option<Color>,
     pub(super) table_row_hover: Option<Color>,
+    pub(super) hover_motion: Option<(Anim, Anim)>,
     pub(super) table_shrink: TableShrink,
     pub(super) table_head_fill: Color,
     pub(super) table_head_text: Color,
@@ -120,6 +121,7 @@ pub(super) struct TaskPaint {
     pub(super) check: &'static Icon,
     pub(super) radius: f32,
     pub(super) motion: Spring,
+    pub(super) hover_motion: Option<(Anim, Anim)>,
     /// The box's side, its left edge in the list's marker column, and its top below the
     /// item's (`None`: centred on the first line).
     pub(super) size: f32,
@@ -223,6 +225,7 @@ impl MarkdownStyle {
             table_rule: c.border_muted,
             table_col_rule: None,
             table_row_hover: None,
+            hover_motion: k.motion.hover,
             table_shrink: TableShrink::Proportional,
             table_head_fill: c.layer_01,
             table_head_text: c.text_base,
@@ -275,6 +278,7 @@ impl MarkdownStyle {
                 check: k.glyph.check,
                 radius: k.radius.sm,
                 motion: k.motion.control,
+                hover_motion: k.motion.hover,
                 size: 16.0,
                 left: 8.0,
                 top: None,
@@ -727,6 +731,7 @@ impl std::hash::Hash for MarkdownStyle {
             table_rule,
             table_col_rule,
             table_row_hover,
+            hover_motion,
             table_shrink,
             table_head_fill,
             table_head_text,
@@ -801,8 +806,10 @@ impl std::hash::Hash for MarkdownStyle {
             highlight_current_ring.map(|(c, w)| (c, f32_bits(w))),
         )
             .hash(state);
-        let TaskPaint { fill_on, border_on, border_off, fill_off, hover, focus_ring, mark, check, radius, motion, size, left, top } = task;
+        crate::tokens::kit::hash_anim_pair(hover_motion, state);
+        let TaskPaint { fill_on, border_on, border_off, fill_off, hover, focus_ring, mark, check, radius, motion, hover_motion: task_hover_motion, size, left, top } = task;
         (fill_on, border_on, border_off, fill_off, hover, focus_ring, mark, check as *const Icon as usize, f32_bits(radius), f32_bits(motion.duration), f32_bits(motion.bounce)).hash(state);
+        crate::tokens::kit::hash_anim_pair(task_hover_motion, state);
         (f32_bits(size), f32_bits(left), top.map(f32_bits)).hash(state);
         let DiagramPaint {
             text,

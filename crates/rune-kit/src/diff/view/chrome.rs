@@ -37,16 +37,18 @@ impl View {
         let mut buttons = Vec::new();
         if expandable {
             let mut add = |how: Expand, glyph: &'static Icon, label: String| {
-                let btn = row()
-                    .key(format!("{how:?}"))
-                    .size(24.0, 24.0)
-                    .center()
-                    .radius(6.0)
-                    .hover(l.hover)
-                    .cursor(Cursor::Pointer)
-                    .role("button")
-                    .label(label)
-                    .child(icon(glyph, 16.0).color(l.muted));
+                let btn = l.apply_hover_motion(
+                    row()
+                        .key(format!("{how:?}"))
+                        .size(24.0, 24.0)
+                        .center()
+                        .radius(6.0)
+                        .hover(l.hover)
+                        .cursor(Cursor::Pointer)
+                        .role("button")
+                        .label(label)
+                        .child(icon(glyph, 16.0).color(l.muted)),
+                );
                 buttons.push(self.bind.bind_expand(btn, f, gap, how, false));
             };
             let step = hidden.min(EXPAND_STEP);
@@ -69,7 +71,7 @@ impl View {
         if hidden > 0 {
             let count = text(self.label(DiffLabel::UnchangedLines(hidden))).font(l.small).color(l.muted).key("count");
             let count = if expandable && hidden > EXPAND_STEP {
-                let all = row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(self.label(DiffLabel::ShowAllLines(hidden)));
+                let all = l.apply_hover_motion(row().key("all").px(6.0).h(24.0).items_center().radius(6.0).hover(l.hover).cursor(Cursor::Pointer).role("button").label(self.label(DiffLabel::ShowAllLines(hidden))));
                 self.bind.bind_expand(all, f, gap, Expand::All, false).child(count)
             } else {
                 row().key("all").px(6.0).child(count)
@@ -120,16 +122,18 @@ impl View {
             row().key("inner").w_full().grow(1.0).min_w(0.0).min_h(0.0).items_center().child(custom)
         } else {
             let toggle_label = self.label(if collapsed { DiffLabel::ExpandFile } else { DiffLabel::CollapseFile });
-            let toggle = row()
-                .key("toggle")
-                .size(24.0, 24.0)
-                .center()
-                .radius(6.0)
-                .hover(l.hover)
-                .cursor(Cursor::Pointer)
-                .role("button")
-                .label(toggle_label).expanded(!collapsed)
-                .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted));
+            let toggle = l.apply_hover_motion(
+                row()
+                    .key("toggle")
+                    .size(24.0, 24.0)
+                    .center()
+                    .radius(6.0)
+                    .hover(l.hover)
+                    .cursor(Cursor::Pointer)
+                    .role("button")
+                    .label(toggle_label).expanded(!collapsed)
+                    .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted)),
+            );
             let toggle = self.bind.bind_toggle_file(toggle, f, sticky);
             let path = |p: &str, c: Color| text(p.to_owned()).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
             let mut name = row().key("path").items_center().gap(6.0).min_w(0.0).shrink();

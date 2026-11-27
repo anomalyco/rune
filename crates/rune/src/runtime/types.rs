@@ -270,11 +270,15 @@ impl Node {
         }
     }
 
-    /// Its hover track's curves: its own `El::hover_motion`, else the inherited
-    /// `El::hover_motion_within` pair.
+    /// Its hover track's curves: its own explicit `El::hover_motion`, else the inherited
+    /// `El::hover_motion_within` pair, else a theme/token default (`El::token_hover_motion`).
     #[inline]
     pub(super) fn hover_motion(&self) -> Option<(Anim, Anim)> {
-        self.vis.hover_motion.as_deref().or(self.hover_within.as_deref()).copied()
+        if self.vis.hover_motion_default {
+            self.hover_within.as_deref().or(self.vis.hover_motion.as_deref()).copied()
+        } else {
+            self.vis.hover_motion.as_deref().or(self.hover_within.as_deref()).copied()
+        }
     }
 
     #[inline]

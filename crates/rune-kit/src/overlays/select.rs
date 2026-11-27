@@ -444,7 +444,7 @@ impl Select {
                     // select.css:73,100-103: focus inside drops the shadow and the hover tint.
                     t = if self.open { t.no_focus_ring() } else { t.focus_within_ring(1.0, -1.0, c.border_focus).focus_within_flat() };
                     if self.state == State::Rest && !self.open {
-                        t = t.hover(c.hover);
+                        t = k.apply_hover_motion(t.hover(c.hover));
                     }
                 }
                 t

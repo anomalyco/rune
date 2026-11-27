@@ -96,7 +96,7 @@ impl Checkbox {
             .token_motion(k.motion.control)
             .child(mark.key("mark").color(ink).opacity(if on { 1.0 } else { 0.0 }));
         if self.state == State::Rest {
-            control = control.hover(if custom { c.hover } else { c.surface_hover });
+            control = k.apply_hover_motion(control.hover(if custom { c.hover } else { c.surface_hover }));
         }
         let disabled = self.state == State::Disabled;
         let mut root = row().role("checkbox").gap(12.0).center_y()

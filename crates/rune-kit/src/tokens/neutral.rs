@@ -133,6 +133,8 @@ impl Kit {
                 control: tok::motion::SNAPPY,
                 overlay: tok::motion::SNAPPY,
                 disclosure: tok::motion::DEFAULT,
+                hover: None,
+                press: None,
             },
             blend_over: None,
             ring: None,
