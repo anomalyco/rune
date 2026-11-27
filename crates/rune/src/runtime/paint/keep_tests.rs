@@ -510,6 +510,16 @@ fn inh_stays_compact_and_cold_handles_stay_consistent_across_keep_and_scroll() {
     plain.frame(0.0);
     assert_eq!(plain.core().paint.inh_cold.len(), 0, "plain unstyled nodes should not allocate InhCold entries");
 
+    // Filled leaf nodes have no children to inherit `snap_parent`, so they must not push InhCold entries either.
+    let mut filled_leaves = Runtime::new(
+        (),
+        |_: &(), _| col().size(200.0, 100.0).children((0..20).map(|i| el().key(format!("f{i}")).size(20.0, 20.0).fill(Color::WHITE))),
+        (200.0, 100.0),
+        Env::new(true, 1.0),
+    );
+    filled_leaves.frame(0.0);
+    assert_eq!(filled_leaves.core().paint.inh_cold.len(), 0, "filled leaf nodes should not allocate InhCold entries");
+
     // 1. Strict PaintKeep verification across steady frames, sibling commits, and scroll shifts.
     let mut rt = Runtime::new(0u32, view, (320.0, 200.0), Env::new(true, 1.0));
     rt.set_paint_keep_strict(true);

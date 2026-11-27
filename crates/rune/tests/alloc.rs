@@ -170,6 +170,32 @@ fn scroll_edge_fades_allocate_nothing_per_frame() {
 }
 
 #[test]
+fn gliding_scroll_with_cold_parents_twins_inh_cold_and_allocates_nothing_steady() {
+    use rune::{Color, el};
+    // Rows with fills AND children populate `InhCold::snap_parent`. Once the first scroll frame
+    // grows `inh_cold`, `keep_swap` must twin the alternating buffer on the very next frame so
+    // steady-state gliding frames allocate nothing.
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let rows = (0..40).map(|i| {
+            col().key(format!("row{i}")).w_full().h(20.0).fill(Color::WHITE)
+                .child(el().key(format!("dot{i}")).size(8.0, 8.0))
+        });
+        col().w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(col().w_full().children(rows))
+    }
+    let mut rt = Runtime::new((), view, (200.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    rt.fling(100.0, 100.0, -1500.0);
+    for _ in 0..4 { rt.frame(1.0 / 120.0); }
+    let mut steady = 0usize;
+    for f in 0..30 {
+        let f0 = allocs();
+        assert!(rt.frame(1.0 / 120.0), "still gliding");
+        if f >= 2 { steady += allocs() - f0; }
+    }
+    assert_eq!(steady, 0, "gliding scroll with InhCold parents allocates nothing per steady-state frame");
+}
+
+#[test]
 fn a_cached_ink_probe_allocates_nothing() {
     // Initialize fonts before ink records its cache epoch, and keep other test threads'
     // text systems from invalidating that epoch while we measure cache hits.

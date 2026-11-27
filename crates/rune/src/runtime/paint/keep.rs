@@ -255,6 +255,8 @@ impl RuntimeCore {
         twin(&mut self.hit.overlay_hits, &k.overlay);
         twin(&mut self.hit.help_hits, &k.help);
         twin(&mut self.hit.drop_hits, &k.drop);
+        self.paint.inh_cold.clear();
+        twin(&mut self.paint.inh_cold, &k.inh_cold);
         twin(&mut k.pages, &k.prev_pages);
         k.pages.clear();
         k.recs.clear();
