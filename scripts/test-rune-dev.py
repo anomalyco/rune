@@ -460,5 +460,35 @@ class DeskTests(unittest.TestCase):
         self.assertEqual(seen["client"], (True, 10, b"pong"), "the app's frames reach dx unchanged")
 
 
+class BinEntryTouchTests(unittest.TestCase):
+    def test_bin_entry_keys_handles_default_custom_and_named_bins(self):
+        data = {
+            "external/app/Cargo.toml": b'[package]\nname = "app"\ndefault-run = "tool"\n[[bin]]\nname = "custom"\npath = "src/entry.rs"\n',
+            "external/app/src/main.rs": b"fn main() {}",
+            "external/app/src/entry.rs": b"fn main() {}",
+            "external/app/src/bin/tool.rs": b"fn main() {}",
+            "external/app/src/bin/worker/main.rs": b"fn main() {}",
+        }
+        self.assertEqual(dev.bin_entry_keys("external/app", data), ["external/app/src/bin/tool.rs"])
+        self.assertEqual(dev.bin_entry_keys("external/app", data, bin_name="custom"), ["external/app/src/entry.rs"])
+        self.assertEqual(dev.bin_entry_keys("external/app", data, bin_name="worker"), ["external/app/src/bin/worker/main.rs"])
+
+    def test_touch_bin_entries_preserves_bytes_and_advances_mtime(self):
+        with tempfile.TemporaryDirectory() as temp:
+            mirror = Path(temp)
+            entry = mirror / "external/app/src/main.rs"
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_bytes(b"fn main() {}")
+            before_ns = entry.stat().st_mtime_ns
+            data = {
+                "external/app/Cargo.toml": b'[package]\nname = "app"\n',
+                "external/app/src/main.rs": b"fn main() {}",
+            }
+            touched = dev.touch_bin_entries(mirror, "external/app", data)
+            self.assertEqual(touched, [entry])
+            self.assertEqual(entry.read_bytes(), b"fn main() {}")
+            self.assertGreater(entry.stat().st_mtime_ns, before_ns)
+
+
 if __name__ == "__main__":
     unittest.main()

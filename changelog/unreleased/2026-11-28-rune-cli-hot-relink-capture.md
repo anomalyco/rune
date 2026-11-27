@@ -1,0 +1,1 @@
+- `rune-cli` and `scripts/rune-dev`: touch the mirrored target binary's entry source file(s) before launching `dx serve --hot-patch` so Cargo always relinks the app crate on warm target directories and `dx` captures rustc/linker arguments instead of failing with `Missing rustc capture` on repeated runs.

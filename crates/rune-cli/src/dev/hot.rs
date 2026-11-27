@@ -9,6 +9,7 @@ use crate::CliError;
 use crate::config::ResolvedDevConfig;
 use crate::dev::mirror::{
     atomic_write, default_target_dir_for, discover_layout, join_posix, mirror_dir_for, sync_mirror,
+    touch_bin_entries,
 };
 use crate::dev::proc::ChildGuard;
 use crate::glob;
@@ -178,6 +179,13 @@ pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> 
             CliError::new(format!("failed to scan project files: {err}"))
         })?;
         sync_mirror(&mirror_dir, &layout.crate_key, &baseline)?;
+        touch_bin_entries(
+            &mirror_dir,
+            &layout.crate_key,
+            &baseline,
+            Some(&cfg.package),
+            cfg.bin.as_deref(),
+        )?;
 
         let dx_cwd = join_posix(&mirror_dir, &layout.crate_key);
         let dx_args = build_dx_args(cfg);
