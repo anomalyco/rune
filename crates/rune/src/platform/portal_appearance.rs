@@ -11,9 +11,10 @@
 //! atomics without touching disk or D-Bus on the UI thread. The same worker reads and follows the
 //! keys an app asked for (`desktop_settings`).
 
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use crate::platform::preferences::{DEFAULT_DOUBLE_CLICK_MS, clamp_double_click_ms};
+use crate::platform::text_scale::{DEFAULT as DEFAULT_TEXT_SCALE, from_f64 as text_scale_from_f64};
 
 /// Stored state: `UNKNOWN` before the portal answers (or when none is reachable); once the
 /// portal answers, `1` (prefer dark) stores `DARK`, while `0` (no preference), `2` (prefer light)
@@ -174,19 +175,65 @@ fn record_fallback_double_click(slot: &AtomicU32, ms: u32) -> bool {
     }
 }
 
+/// Stored `org.gnome.desktop.interface` `text-scaling-factor` in an `AtomicU64`:
+/// - `0` (`TEXT_SCALE_UNKNOWN`) when neither the portal nor fallback has answered
+/// - lower 32 bits: sanitized `f32::to_bits()` (always non-zero since positive)
+/// - bit 32 (`PORTAL_TEXT_SCALE_BIT`): set once the Settings portal has answered, so the
+///   one-shot fallback cannot overwrite an authoritative portal value
+const TEXT_SCALE_UNKNOWN: u64 = 0;
+const PORTAL_TEXT_SCALE_BIT: u64 = 1 << 32;
+const TEXT_SCALE_BITS_MASK: u64 = 0xFFFF_FFFF;
+
+fn has_portal_text_scale(stored: u64) -> bool {
+    stored & PORTAL_TEXT_SCALE_BIT != 0
+}
+
+fn stored_text_scale(stored: u64) -> Option<f32> {
+    let bits = (stored & TEXT_SCALE_BITS_MASK) as u32;
+    (bits != 0).then(|| f32::from_bits(bits))
+}
+
+fn effective_text_scale(stored: u64) -> f32 {
+    stored_text_scale(stored).unwrap_or(DEFAULT_TEXT_SCALE)
+}
+
+/// Records a portal `text-scaling-factor` answer. Returns whether the effective scale changed.
+fn record_text_scale(slot: &AtomicU64, scale: f64) -> bool {
+    let Some(clamped) = text_scale_from_f64(scale) else { return false };
+    let next = u64::from(clamped.to_bits()) | PORTAL_TEXT_SCALE_BIT;
+    let prev = slot.swap(next, Ordering::Relaxed);
+    effective_text_scale(prev).to_bits() != clamped.to_bits()
+}
+
+/// Records the one-shot fallback `text-scaling-factor` answer (off the UI thread). Does not
+/// overwrite a portal answer. Returns whether the effective scale changed.
+fn record_fallback_text_scale(slot: &AtomicU64, scale: f32) -> bool {
+    let Some(clamped) = crate::platform::text_scale::sanitize(scale) else { return false };
+    let next = u64::from(clamped.to_bits());
+    let mut prev = slot.load(Ordering::Relaxed);
+    loop {
+        if has_portal_text_scale(prev) { return false; }
+        match slot.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return effective_text_scale(prev).to_bits() != clamped.to_bits(),
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
     use futures_lite::{FutureExt, StreamExt};
-    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering}, mpsc}, time::{Duration, Instant}};
+    use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering}, mpsc}, time::{Duration, Instant}};
     use winit::window::Window;
     use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
     use super::{
-        DOUBLE_CLICK_UNKNOWN, UNKNOWN, has_portal_double_click, has_portal_motion,
+        DOUBLE_CLICK_UNKNOWN, TEXT_SCALE_UNKNOWN, UNKNOWN, effective_text_scale,
+        has_portal_double_click, has_portal_motion, has_portal_text_scale,
         record_double_click, record_enable_animations, record_fallback_double_click,
-        record_fallback_reduced_motion, record_reduced_motion, record_scheme,
-        resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
-        stored_double_click_secs,
+        record_fallback_reduced_motion, record_fallback_text_scale, record_reduced_motion,
+        record_scheme, record_text_scale, resolved_reduced_motion, seed_reduced_motion,
+        seed_scheme, stored_dark, stored_double_click_secs,
     };
     use crate::platform::preferences::Appearance;
     use crate::platform::portal::{self, DEST, PATH};
@@ -197,6 +244,7 @@ mod dbus {
     const REDUCED_MOTION_KEY: &str = "reduced-motion";
     const GNOME_INTERFACE_NAMESPACE: &str = "org.gnome.desktop.interface";
     const ENABLE_ANIMATIONS_KEY: &str = "enable-animations";
+    const TEXT_SCALING_FACTOR_KEY: &str = "text-scaling-factor";
     const MOUSE_NAMESPACE: &str = "org.gnome.desktop.peripherals.mouse";
     const DOUBLE_CLICK_KEY: &str = "double-click";
     const WM_NAMESPACE: &str = "org.gnome.desktop.wm.preferences";
@@ -211,6 +259,7 @@ mod dbus {
     static SCHEME: AtomicU8 = AtomicU8::new(UNKNOWN);
     static MOTION: AtomicU8 = AtomicU8::new(0);
     static DOUBLE_CLICK: AtomicU32 = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
+    static TEXT_SCALE: AtomicU64 = AtomicU64::new(TEXT_SCALE_UNKNOWN);
     static WATCH: OnceLock<()> = OnceLock::new();
     /// The worker's first answer on its way, and when the worker started: the first ask takes
     /// it and waits for what is left of `FIRST_ANSWER`; an ask meanwhile waits behind it.
@@ -281,6 +330,14 @@ mod dbus {
     pub(crate) fn double_click_interval() -> Option<f64> {
         first_answer();
         stored_double_click_secs(DOUBLE_CLICK.load(Ordering::Relaxed))
+    }
+
+    /// The desktop's configured text-scaling factor (`org.gnome.desktop.interface`
+    /// `text-scaling-factor`), cached from the Settings portal or a one-shot off-UI-thread
+    /// GSettings fallback, defaulting to `1.0` when neither answered.
+    pub(crate) fn text_scale() -> f32 {
+        first_answer();
+        effective_text_scale(TEXT_SCALE.load(Ordering::Relaxed))
     }
 
     /// Redraws `window` whenever a watched portal preference changes; its redraw rereads
@@ -356,6 +413,27 @@ mod dbus {
         if record_fallback_double_click(&DOUBLE_CLICK, ms) { redraw_windows(); }
     }
 
+    /// Unwraps a floating-point portal value (`org.gnome.desktop.interface`
+    /// `text-scaling-factor`).
+    pub(super) fn f64_value(value: &Value<'_>) -> Option<f64> {
+        match value {
+            Value::F64(x) => Some(*x),
+            Value::I32(x) => Some(f64::from(*x)),
+            Value::U32(x) => Some(f64::from(*x)),
+            Value::Value(inner) => f64_value(inner),
+            _ => None,
+        }
+    }
+
+    fn store_text_scale(value: &Value<'_>) {
+        let Some(scale) = f64_value(value) else { return };
+        if record_text_scale(&TEXT_SCALE, scale) { redraw_windows(); }
+    }
+
+    fn store_fallback_text_scale(scale: f32) {
+        if record_fallback_text_scale(&TEXT_SCALE, scale) { redraw_windows(); }
+    }
+
     /// Unwraps a string portal value (`org.gnome.desktop.wm.preferences` `button-layout`).
     pub(super) fn string_value<'a>(value: &'a Value<'_>) -> Option<&'a str> {
         match value {
@@ -406,6 +484,8 @@ mod dbus {
                 if let Ok(v) = &anim_res { store_enable_animations(v); }
                 let dbl_res = read_setting(&portal, MOUSE_NAMESPACE, DOUBLE_CLICK_KEY).await;
                 if let Ok(v) = &dbl_res { store_double_click(v); }
+                let text_scale_res = read_setting(&portal, GNOME_INTERFACE_NAMESPACE, TEXT_SCALING_FACTOR_KEY).await;
+                if let Ok(v) = &text_scale_res { store_text_scale(v); }
                 // Only a Wayland session's windows can have Rune's own frame, whose caption
                 // buttons this lays out: an X11 session doesn't ask.
                 if crate::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -413,11 +493,12 @@ mod dbus {
                 {
                     store_button_layout(&v);
                 }
-                let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok();
+                let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok() || text_scale_res.is_ok();
                 let unavailable = matches!(scheme_res, Err(true))
                     && matches!(reduced_res, Err(true))
                     && matches!(anim_res, Err(true))
-                    && matches!(dbl_res, Err(true));
+                    && matches!(dbl_res, Err(true))
+                    && matches!(text_scale_res, Err(true));
                 (read_ok, unavailable)
             };
             if !portal::should_watch_settings(read_ok, unavailable) {
@@ -433,6 +514,11 @@ mod dbus {
             && let Some(ms) = crate::platform::preferences::read_double_click_fallback()
         {
             store_fallback_double_click(ms);
+        }
+        if !has_portal_text_scale(TEXT_SCALE.load(Ordering::Relaxed))
+            && let Some(scale) = crate::platform::text_scale::read_linux_fallback()
+        {
+            store_fallback_text_scale(scale);
         }
         keep_now();
         ready.send(()).ok();
@@ -466,6 +552,7 @@ mod dbus {
                 (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => { store_scheme(&value); keep_now(); }
                 (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => { store_reduced_motion(&value); keep_now(); }
                 (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => { store_enable_animations(&value); keep_now(); }
+                (GNOME_INTERFACE_NAMESPACE, TEXT_SCALING_FACTOR_KEY) => store_text_scale(&value),
                 (MOUSE_NAMESPACE, DOUBLE_CLICK_KEY) => store_double_click(&value),
                 (WM_NAMESPACE, BUTTON_LAYOUT_KEY) => store_button_layout(&value),
                 _ => {}
@@ -483,7 +570,7 @@ mod dbus {
 }
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
-pub(crate) use dbus::{begin, dark, double_click_interval, follow, last, reduced_motion};
+pub(crate) use dbus::{begin, dark, double_click_interval, follow, last, reduced_motion, text_scale};
 
 #[cfg(test)]
 #[path = "portal_appearance_tests.rs"]

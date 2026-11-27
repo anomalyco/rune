@@ -59,6 +59,14 @@ fn motion_contrast_languages_and_focus_short_circuit_unchanged_values() {
     assert!(apply_contrast(rt.core_mut(), &json!({ "kind": "contrast", "colors": null })));
     assert!(!apply_contrast(rt.core_mut(), &json!({ "kind": "contrast", "colors": null })));
 
+    // Text scale defaults to 1.0, short-circuits repeats, and sanitizes invalid values.
+    assert!(!apply_text_scale(rt.core_mut(), &json!({ "kind": "text_scale", "scale": 1.0 })));
+    assert!(apply_text_scale(rt.core_mut(), &json!({ "kind": "text_scale", "scale": 1.5 })));
+    assert_eq!(rt.system_text_scale(), 1.5);
+    assert!(!apply_text_scale(rt.core_mut(), &json!({ "kind": "text_scale", "scale": 1.5 })));
+    assert!(apply_text_scale(rt.core_mut(), &json!({ "kind": "text_scale", "scale": 0.0 })));
+    assert_eq!(rt.system_text_scale(), 1.0);
+
     assert!(apply_languages(rt.core_mut(), &json!({ "kind": "languages", "languages": ["fr-FR", "en-US"] })));
     assert!(!apply_languages(rt.core_mut(), &json!({ "kind": "languages", "languages": [" fr-FR ", "", "en-US", "fr-FR"] })));
     assert!(apply_languages(rt.core_mut(), &json!({ "kind": "languages", "languages": ["de-DE"] })));
@@ -151,6 +159,7 @@ fn apply_init_decides_commit_noop_or_hidden_across_startup_states() {
             [0, 0, 0], [255, 255, 255], [0, 120, 215], [255, 255, 255],
             [128, 128, 128], [32, 32, 32], [255, 255, 255], [80, 160, 255]
         ],
+        "textScale": 1.5,
         "focused": true,
         "visible": true
     });
@@ -171,6 +180,7 @@ fn apply_init_decides_commit_noop_or_hidden_across_startup_states() {
     );
     assert!(rt.core().host.system_reduced_motion());
     assert!(rt.core().system_contrast().is_some());
+    assert_eq!(rt.system_text_scale(), 1.5);
     assert_eq!(rt.state.focus_events, vec![true]);
 
     rt.frame(0.0);

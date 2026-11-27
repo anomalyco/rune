@@ -47,13 +47,16 @@ pub(crate) fn follow_fallback(window: &std::sync::Arc<winit::window::Window>) {
     windows.retain(|w| w.strong_count() > 0);
     windows.push(std::sync::Arc::downgrade(window));
     drop(windows);
-    if CACHED_REDUCED_MOTION.late_changed() || CACHED_DOUBLE_CLICK.late_changed() {
+    if CACHED_REDUCED_MOTION.late_changed()
+        || CACHED_DOUBLE_CLICK.late_changed()
+        || crate::platform::text_scale::linux_fallback_late_changed()
+    {
         window.request_redraw();
     }
 }
 
 #[cfg(all(target_os = "linux", not(feature = "dbus")))]
-fn redraw_fallback_windows() {
+pub(super) fn redraw_fallback_windows() {
     let live: Vec<_> = {
         let mut windows = FALLBACK_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
         windows.retain(|w| w.strong_count() > 0);
@@ -118,7 +121,7 @@ enum CacheState<T> {
 /// spawns one short-lived worker thread per process, waits at most `FIRST_ANSWER` so launch does
 /// not stall, and notifies open windows if a non-default answer arrives after that wait expires.
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
-struct CachedPref<T: Copy + Eq + Send + Sync + 'static> {
+pub(super) struct CachedPref<T: Copy + Eq + Send + Sync + 'static> {
     default: T,
     state: std::sync::Mutex<CacheState<T>>,
     ready: std::sync::Condvar,
@@ -126,9 +129,9 @@ struct CachedPref<T: Copy + Eq + Send + Sync + 'static> {
 
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
 impl<T: Copy + Eq + Send + Sync + 'static> CachedPref<T> {
-    const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
+    pub(super) const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
 
-    const fn new(default: T) -> Self {
+    pub(super) const fn new(default: T) -> Self {
         Self {
             default,
             state: std::sync::Mutex::new(CacheState::Unstarted),
@@ -136,7 +139,7 @@ impl<T: Copy + Eq + Send + Sync + 'static> CachedPref<T> {
         }
     }
 
-    fn get_or_init_with(
+    pub(super) fn get_or_init_with(
         &'static self,
         name: &'static str,
         wait: std::time::Duration,
@@ -185,7 +188,7 @@ impl<T: Copy + Eq + Send + Sync + 'static> CachedPref<T> {
         }
     }
 
-    fn late_changed(&self) -> bool {
+    pub(super) fn late_changed(&self) -> bool {
         matches!(
             *self.state.lock().unwrap_or_else(|e| e.into_inner()),
             CacheState::Ready { late_changed: true, .. }
@@ -193,7 +196,7 @@ impl<T: Copy + Eq + Send + Sync + 'static> CachedPref<T> {
     }
 
     #[cfg(test)]
-    fn wait_ready(&self) {
+    pub(super) fn wait_ready(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         while !matches!(*state, CacheState::Ready { .. }) {
             state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
@@ -381,7 +384,7 @@ pub(crate) fn read_double_click_fallback() -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-unsafe fn with_gsettings<T>(
+pub(super) unsafe fn with_gsettings<T>(
     schema_id: &std::ffi::CStr,
     key: &std::ffi::CStr,
     read: impl FnOnce(&libloading::Library, *mut std::ffi::c_void, *const std::ffi::c_char) -> Option<T>,
@@ -594,6 +597,7 @@ pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme:
     crate::platform::portal_appearance::follow(window);
     #[cfg(all(target_os = "linux", not(feature = "dbus")))]
     follow_fallback(window);
+    crate::platform::text_scale::follow(window);
     match theme {
         Some("light") => false,
         Some("dark") => true,

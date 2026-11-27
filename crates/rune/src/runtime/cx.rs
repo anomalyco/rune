@@ -68,6 +68,7 @@ pub(crate) struct CxCore {
     pub(super) system_accent: crate::SystemAccent,
     pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_increased_contrast: bool,
+    pub(super) system_text_scale: f32,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_languages: Option<Rc<[String]>>,
     pub(super) system_reduced_motion: bool,
@@ -163,6 +164,7 @@ impl CxCore {
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
     pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
     pub(crate) fn system_reduced_motion(&self) -> bool { self.system_reduced_motion }
+    pub(crate) fn system_text_scale(&self) -> f32 { self.system_text_scale }
     pub(crate) fn pointer_locked(&self) -> bool { self.pointer_locked }
     pub(crate) fn system_languages(&self) -> &[String] {
         match &self.system_languages {
@@ -604,6 +606,16 @@ impl<S> Cx<S> {
     /// The host's OS accessibility preference, independent of this commit's override.
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core.system_reduced_motion() }
+    /// The system's text-size scale factor (`1.0` by default): Windows Settings > Accessibility >
+    /// Text size (`UISettings.TextScaleFactor`, `1.0..=2.25`), iOS Dynamic Type relative to the
+    /// default `Large` body size, Linux's `org.gnome.desktop.interface` `text-scaling-factor`,
+    /// and the browser's root `font-size` divided by `16px` on the web (`1.0` on macOS).
+    ///
+    /// Re-runs the view and its memos when the preference changes. Headless captures can override
+    /// it with `RUNE_TEXT_SCALE=<factor>`. Apps decide whether to pass this to [`Cx::zoom`] or
+    /// scale only their type ramp.
+    #[inline(always)]
+    pub fn system_text_scale(&self) -> f32 { self.core.system_text_scale() }
     /// Whether an element in this window currently holds pointer lock
     /// ([`El::pointer_lock`](crate::El::pointer_lock)).
     ///

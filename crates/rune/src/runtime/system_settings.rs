@@ -125,6 +125,22 @@ impl window_requests::HostState {
         self.system_reduced_motion
     }
 
+    #[inline]
+    pub(super) fn set_system_text_scale(&mut self, scale: f32) -> bool {
+        let clean = crate::platform::text_scale::sanitize(scale)
+            .unwrap_or(crate::platform::text_scale::DEFAULT);
+        if clean.to_bits() == self.system_text_scale.to_bits() { return false; }
+        self.system_text_scale = clean;
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
+    /// Host system text-size scale factor; `1.0` by default in a headless runtime.
+    #[inline]
+    pub(crate) fn system_text_scale(&self) -> f32 {
+        self.system_text_scale
+    }
+
     pub(super) fn set_languages(&mut self, languages: Vec<String>) -> bool {
         let normalized = crate::platform::languages::normalize(languages);
         if self.system_languages.as_deref() == Some(normalized.as_slice()) {
@@ -357,6 +373,23 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_reduced_motion(&mut self, reduced: bool) -> bool {
         let changed = self.host.set_system_reduced_motion(reduced);
+        if changed { self.commit.dirty = true; }
+        changed
+    }
+
+    /// What [`Cx::system_text_scale`] currently reports (`1.0` by default in a headless runtime).
+    #[inline]
+    pub(crate) fn system_text_scale(&self) -> f32 {
+        self.host.system_text_scale()
+    }
+
+    /// What [`Cx::system_text_scale`] reports. Native and web hosts set it from the OS or
+    /// browser's text-size preference and update it when that setting changes; a change re-runs
+    /// the view and its memos. Non-finite or non-positive values fall back to `1.0`; positive
+    /// values clamp to `0.25..=5.0`. Returns whether the stored scale changed.
+    #[inline]
+    pub fn set_system_text_scale(&mut self, scale: f32) -> bool {
+        let changed = self.host.set_system_text_scale(scale);
         if changed { self.commit.dirty = true; }
         changed
     }

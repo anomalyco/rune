@@ -233,7 +233,14 @@ impl<S: 'static> LayerHost<S> {
     ) -> Result<Self, String> {
         // SAFETY: caller upholds `from_core_animation_layer`'s safety contract (`layer` is a valid `CAMetalLayer` outliving `LayerHost`, on the UI thread).
         let (mut core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
+        #[cfg(target_os = "ios")]
+        let text_scale_wake = wake.clone();
         let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
+        #[cfg(target_os = "ios")]
+        {
+            rt.set_system_text_scale(crate::platform::text_scale::current());
+            crate::platform::text_scale::follow_waker(text_scale_wake);
+        }
         core.configure_runtime(rt.core_mut(), now);
         Ok(Self { core, compositor: None, rt })
     }
@@ -273,6 +280,8 @@ impl<S: 'static> LayerHost<S> {
     /// Steps animations and layout to `Instant::now()` and presents one Metal frame, following
     /// the shared [`crate::frame::host_step`] order.
     pub fn frame(&mut self) -> EmbedFrame {
+        #[cfg(target_os = "ios")]
+        self.rt.set_system_text_scale(crate::platform::text_scale::cached());
         embed_frame::run_embed_frame(self).into()
     }
 }

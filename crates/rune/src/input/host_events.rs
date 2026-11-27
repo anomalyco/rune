@@ -761,6 +761,7 @@ pub(crate) fn refresh_accessibility_preferences(rt: &mut RuntimeCore) {
     let contrast = crate::platform::preferences::contrast();
     rt.set_system_contrast(contrast);
     rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+    rt.set_system_text_scale(crate::platform::text_scale::current());
     rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
 }
 
