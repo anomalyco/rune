@@ -69,6 +69,7 @@ pub(crate) struct CxCore {
     pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_increased_contrast: bool,
     pub(super) system_text_scale: f32,
+    pub(super) system_reduced_transparency: bool,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_languages: Option<Rc<[String]>>,
     pub(super) system_reduced_motion: bool,
@@ -163,6 +164,7 @@ impl CxCore {
     }
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
     pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
+    pub(crate) fn system_reduced_transparency(&self) -> bool { self.system_reduced_transparency }
     pub(crate) fn system_reduced_motion(&self) -> bool { self.system_reduced_motion }
     pub(crate) fn system_text_scale(&self) -> f32 { self.system_text_scale }
     pub(crate) fn pointer_locked(&self) -> bool { self.pointer_locked }
@@ -605,6 +607,13 @@ impl<S> Cx<S> {
     /// draw its stronger edges for it while keeping its own colours. A change re-runs the view.
     #[inline(always)]
     pub fn system_increased_contrast(&self) -> bool { self.core.system_increased_contrast() }
+    /// Whether the system asks apps to reduce transparency: macOS's Reduce Transparency
+    /// (Accessibility > Display), Windows' Transparency effects turned off, or the browser's
+    /// `prefers-reduced-transparency: reduce`. While true, [`El::backdrop_blur`] draws only its
+    /// fill without blurring, and views can pick opaque fills instead of translucent tints. A
+    /// change re-runs the view and its memos.
+    #[inline(always)]
+    pub fn system_reduced_transparency(&self) -> bool { self.core.system_reduced_transparency() }
     /// The host's OS accessibility preference, independent of this commit's override.
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core.system_reduced_motion() }

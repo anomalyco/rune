@@ -778,7 +778,7 @@ pub(crate) mod probe;
 mod real;
 
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-pub(crate) use policy::{current_policy, notify_wm_setting_change, set_policy_waker};
+pub(crate) use policy::{advanced_effects_if_started, current_policy, notify_wm_setting_change, set_policy_waker};
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 pub(crate) use real::Materials;
 

@@ -189,7 +189,7 @@ pub(super) fn layout(s: &Style, root: bool) -> Decls {
 
 /// Fill, gradients, border, corners, shadows, opacity, blurs and soft clips, for an element
 /// `size` points big.
-pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
+pub(super) fn paint(v: &Visual, size: (f32, f32), reduced_transparency: bool, d: &mut Decls) {
     // Rune paints the fill, then gradients, then a wrapped/tiled image on top: CSS lists
     // background layers top first, with the colour last.
     let mut layers: Vec<String> = Vec::new();
@@ -251,7 +251,7 @@ pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
     if v.cold.clip.is_some() || v.cold.clip_radius.is_some() {
         if !d.iter().any(|(p, _)| p.starts_with("overflow")) { d.push(("overflow", "hidden".into())); }
     }
-    if v.cold.backdrop_blur > 0.0 { d.push(("backdrop-filter", format!("blur({})", px(v.cold.backdrop_blur)))); }
+    if v.cold.backdrop_blur > 0.0 && !reduced_transparency { d.push(("backdrop-filter", format!("blur({})", px(v.cold.backdrop_blur)))); }
     if v.blur > 0.0 { d.push(("filter", format!("blur({})", px(v.blur)))); }
 }
 

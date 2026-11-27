@@ -2028,6 +2028,16 @@ thread, falling back once off the UI thread to KDE's duration factor or GNOME's
 false; tests can call `rt.set_system_reduced_motion(value)` and inspect
 `rt.system_reduced_motion()`.
 
+`cx.system_reduced_transparency()` reports whether the OS or browser asks apps to reduce
+transparency: macOS reads `NSWorkspace.accessibilityDisplayShouldReduceTransparency` (updating
+live on `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`), Windows reads
+Transparency effects (`EnableTransparency` / `UISettings::AdvancedEffectsEnabled`, updating live
+on `WM_SETTINGCHANGE` and material policy notifications), and the web watches
+`(prefers-reduced-transparency: reduce)`. Headless captures accept `RUNE_REDUCE_TRANSPARENCY=1`;
+tests can call `rt.set_system_reduced_transparency(value)` and inspect
+`rt.system_reduced_transparency()`. While true, `El::backdrop_blur` skips the blur and draws only
+its fill.
+
 `cx.system_languages()` returns the user's preferred BCP 47 language tags in
 preference order and `cx.locale()` returns the primary tag (`Option<&str>`). Both
 query the platform lazily on first call (`GetUserPreferredUILanguages` on Windows,
@@ -3964,9 +3974,9 @@ follows the element's presented rect, its opacity fades the blur, and its outer 
 blurred interior clear. A still frame doesn't redraw.
 
 Every blurred element in a frame blurs, growing the blur uniform buffer past
-`MAX_BACKDROP_BLURS` (4) when needed, as in CSS `backdrop-filter`. Blurs drawn into a target
-without `COPY_SRC`, or into a caller's own `wgpu::RenderPass` through `Renderer::draw_range`,
-draw only their fill. The web backend asks the canvas for `COPY_SRC`. An element fading on its
+`MAX_BACKDROP_BLURS` (4) when needed, as in CSS `backdrop-filter`. While `cx.system_reduced_transparency()` is true, blurs are skipped and the element draws only
+its fill. Blurs drawn into a target without `COPY_SRC`, or into a caller's own `wgpu::RenderPass`
+through `Renderer::draw_range`, also draw only their fill. The web backend asks the canvas for `COPY_SRC`. An element fading on its
 own still blurs what is behind it, while inside an ancestor drawn as one layer (opacity below 1,
 including a fading wrapper, `El::group_opacity`, `El::blur`, `El::cache`, or a rotation) the
 backdrop is what that layer has drawn so far, matching CSS's Backdrop Root. A frame without a

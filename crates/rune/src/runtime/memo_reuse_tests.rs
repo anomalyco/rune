@@ -341,6 +341,7 @@ fn hover_press_focus_selection_env_blend_and_hot_clear_match_fresh_build() {
         rt.set_system_scroller_overlay(false);
     });
     step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "reduced-motion", |rt| rt.set_system_reduced_motion(true));
+    step_both(&mut rt_m, &mut rt_f, 1.0 / 60.0, "reduced-transparency", |rt| rt.set_system_reduced_transparency(true));
 
     let before_hot = rt_m.commit.memo_builds();
     rt_m.commit.clear_memo();

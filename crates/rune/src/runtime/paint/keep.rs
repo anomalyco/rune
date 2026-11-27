@@ -279,7 +279,7 @@ impl RuntimeCore {
             let mut h = rune_motion::Fx::default();
             bits(&mut h, &[self.env.scale]);
             bits(&mut h, &vp);
-            (self.paint.srgb_blend, self.track_marks, self.reduced_motion, self.env.system_dark, self.text.emit_key(), self.tree.has_sticky, tree_order).hash(&mut h);
+            (self.paint.srgb_blend, self.track_marks, self.reduced_motion, self.host.system_reduced_transparency, self.env.system_dark, self.text.emit_key(), self.tree.has_sticky, tree_order).hash(&mut h);
             (self.kbd.focus.path(), self.kbd.focus.keyboard(), self.kbd.focus.shown()).hash(&mut h);
             default_ring.map(|i| self.tree.nodes[i].id).hash(&mut h);
             let ring = self.default_focus_ring();

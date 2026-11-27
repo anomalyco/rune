@@ -249,6 +249,7 @@ pub(crate) fn enter(
     env: crate::Env,
     accent: crate::SystemAccent,
     reduced_motion: bool,
+    reduced_transparency: bool,
     languages_gen: u64,
     srgb_blend: bool,
     chrome: [u32; 5],
@@ -263,7 +264,7 @@ pub(crate) fn enter(
     // So does a change to what the window's controls take (`Cx::chrome_insets`), to the icon
     // swap (`text::set_icon_swap_size`), and to overridden languages (`Runtime::set_languages`).
     let icons = crate::text::icon::swap_state();
-    let env = hash_of(&(env.system_dark, scale.to_bits(), reduced_motion, languages_gen, accent, crate::platform::scroll_bars::scoped(), srgb_blend, chrome, icons));
+    let env = hash_of(&(env.system_dark, scale.to_bits(), reduced_motion, reduced_transparency, languages_gen, accent, crate::platform::scroll_bars::scoped(), srgb_blend, chrome, icons));
     let scope = Scope {
         cache,
         env,
@@ -318,6 +319,7 @@ pub(crate) fn enter_partial(
     env: crate::Env,
     accent: crate::SystemAccent,
     reduced_motion: bool,
+    reduced_transparency: bool,
     languages_gen: u64,
     srgb_blend: bool,
     chrome: [u32; 5],
@@ -337,7 +339,7 @@ pub(crate) fn enter_partial(
         keep_nested_rows(&mut cache, &mut nested, next);
     }
     cache.nested_scratch = nested;
-    enter(cache, env, accent, reduced_motion, languages_gen, srgb_blend, chrome, caret, layout)
+    enter(cache, env, accent, reduced_motion, reduced_transparency, languages_gen, srgb_blend, chrome, caret, layout)
 }
 
 /// Ends the view build [`enter`] began; dropped without [`Guard::finish`] (a panicking view),

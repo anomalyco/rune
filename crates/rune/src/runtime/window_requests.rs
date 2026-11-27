@@ -30,6 +30,8 @@ pub(crate) struct HostState {
     pub(in crate::runtime) system_increased_contrast: bool,
     /// What [`Cx::system_text_scale`] reports (`1.0` by default).
     pub(in crate::runtime) system_text_scale: f32,
+    /// What [`Cx::system_reduced_transparency`] reports.
+    pub(in crate::runtime) system_reduced_transparency: bool,
     pub(in crate::runtime) scroll_bars: system_settings::ScrollBarHost,
     /// Preferred languages set via `Runtime::set_languages` or browser `languagechange` (`None`: lazy OS query).
     pub(in crate::runtime) system_languages: Option<Rc<[String]>>,
@@ -147,6 +149,7 @@ impl HostState {
             system_contrast: None,
             system_increased_contrast: false,
             system_text_scale: crate::platform::text_scale::DEFAULT,
+            system_reduced_transparency: false,
             scroll_bars: Default::default(),
             system_languages: None,
             languages_gen: 0,

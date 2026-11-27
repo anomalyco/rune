@@ -1,5 +1,5 @@
 //! Parsing and state-change checks for browser platform events (`init`, `viewport`, `motion`,
-//! `languages`, `primary_pointer`, `contrast`, `focus`, `visibility`). Kept out of
+//! `transparency`, `languages`, `primary_pointer`, `contrast`, `focus`, `visibility`). Kept out of
 //! `platform/web/input.rs`, which only compiles on `wasm32`, so the change-detection and startup
 //! snapshot rules run in headless Rust tests.
 #![cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
@@ -65,6 +65,10 @@ pub(crate) fn parse_languages(value: &serde_json::Value) -> Vec<String> {
 
 pub(crate) fn apply_motion(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
     rt.set_system_reduced_motion(event["reduced"].as_bool().unwrap_or(false))
+}
+
+pub(crate) fn apply_transparency(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
+    rt.set_system_reduced_transparency(event["reduced"].as_bool().unwrap_or(false))
 }
 
 pub(crate) fn apply_contrast(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
@@ -178,6 +182,9 @@ pub(crate) fn apply_init(
 ) -> InitOutcome {
     let mut needs_frame = viewport_changed || pointer_changed;
     needs_frame |= apply_motion(rt, event);
+    needs_frame |= rt.set_system_reduced_transparency(
+        event["reducedTransparency"].as_bool().unwrap_or(false),
+    );
     needs_frame |= apply_contrast(rt, event);
     needs_frame |= rt.set_system_text_scale(parse_text_scale(&event["textScale"]));
     let focus = apply_focus(rt, app, event);

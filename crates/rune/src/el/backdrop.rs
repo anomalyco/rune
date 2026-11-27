@@ -141,7 +141,8 @@ impl El {
     /// `Renderer::draw_range`) draw only their fill. Inside an ancestor drawn as one layer (an
     /// ancestor with opacity below 1 — including one playing a fade transition — `El::group_opacity`,
     /// `El::blur`, `El::cache` or a rotation) the backdrop is what that layer has drawn so far,
-    /// matching CSS's Backdrop Root.
+    /// matching CSS's Backdrop Root. While [`Cx::system_reduced_transparency`](crate::Cx::system_reduced_transparency)
+    /// is true, the blur is skipped and the element draws only its fill, border and children.
     pub fn backdrop_blur(mut self, sigma: f32) -> Self {
         let s = if sigma.is_finite() { sigma.max(0.0) } else { 0.0 };
         if s != 0.0 || !self.vis.cold.is_empty() {

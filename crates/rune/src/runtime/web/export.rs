@@ -169,7 +169,7 @@ impl RuntimeCore {
         if n.a11y.hidden || n.role == "list-marker" { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);
         let [x0, y0, x1, y1] = n.target;
-        css::paint(&n.vis, (x1 - x0, y1 - y0), &mut decls);
+        css::paint(&n.vis, (x1 - x0, y1 - y0), self.host.system_reduced_transparency, &mut decls);
         if let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && !n.is_secure()) {
             css::text(spec, &mut decls);
             inner = css::text_html(spec);

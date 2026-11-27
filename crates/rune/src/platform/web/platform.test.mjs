@@ -477,6 +477,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
         value: (query) => {
             const target = Object.assign(new FakeEventTarget(), {
                 matches: query === '(prefers-reduced-motion: reduce)'
+                    || query === '(prefers-reduced-transparency: reduce)'
                     || query === '(hover: none)'
                     || query === '(pointer: coarse)'
                     || query === '(forced-colors: active)',
@@ -522,6 +523,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
         insets: [12, 0, 34, 0],
         visual: [0, 844, 844],
         reduced: true,
+        reducedTransparency: true,
         hover: false,
         coarse: true,
         colors: [
@@ -538,6 +540,8 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
     events.length = 0;
     queries.get('(prefers-reduced-motion: reduce)').matches = false;
     queries.get('(prefers-reduced-motion: reduce)').dispatchEvent({ type: 'change' });
+    queries.get('(prefers-reduced-transparency: reduce)').matches = false;
+    queries.get('(prefers-reduced-transparency: reduce)').dispatchEvent({ type: 'change' });
     queries.get('(forced-colors: active)').matches = false;
     queries.get('(forced-colors: active)').dispatchEvent({ type: 'change' });
     doc.hidden = false;
@@ -546,6 +550,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
     doc.dispatchEvent({ type: 'visibilitychange' });
     assert.deepEqual(events, [
         { kind: 'motion', reduced: false },
+        { kind: 'transparency', reduced: false },
         { kind: 'contrast', colors: null, increased: false },
         { kind: 'focus', focused: true },
         { kind: 'visibility', visible: true, focused: true },

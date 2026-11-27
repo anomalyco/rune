@@ -328,6 +328,7 @@ impl Measurement<'_> {
             self.env,
             self.system_accent,
             self.system_reduced_motion,
+            self.system_reduced_transparency,
             self.languages_gen,
             crate::theme::blends_srgb(),
             self.memo_chrome_bits(),

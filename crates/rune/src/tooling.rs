@@ -161,11 +161,13 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
     rt.on_key = spec.on_key;
     rt.motion.enable_motion_needs_cause();
     rt.host.window_title.start(spec.title);
-    // The capture presets (`RUNE_CONTRAST`, `RUNE_INCREASE_CONTRAST`, `RUNE_TEXT_SCALE`), never
-    // the machine's own settings, so a headless snap shows an app in a contrast theme, under
-    // Increase Contrast, or at a scaled system text size.
+    // The capture presets (`RUNE_CONTRAST`, `RUNE_INCREASE_CONTRAST`,
+    // `RUNE_REDUCE_TRANSPARENCY`, `RUNE_TEXT_SCALE`), never the machine's own settings, so a
+    // headless snap shows an app in a contrast theme, under Increase Contrast / Reduce
+    // Transparency, or at a scaled system text size.
     rt.set_system_contrast(crate::platform::preferences::contrast_preset());
     rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_preset());
+    rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency_preset());
     if let Some(text_scale) = crate::platform::text_scale::preset() {
         rt.set_system_text_scale(text_scale);
     }

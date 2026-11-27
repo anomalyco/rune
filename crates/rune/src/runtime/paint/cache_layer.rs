@@ -166,7 +166,7 @@ impl RuntimeCore {
                 let c = ring.color;
                 [ring.width, ring.offset, c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
             }
-            (self.paint.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
+            (self.paint.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id(), self.host.system_reduced_transparency).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
             self.caret_browse_focus_in(&self.tree.nodes)

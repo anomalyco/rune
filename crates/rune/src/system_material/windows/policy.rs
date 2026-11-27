@@ -104,6 +104,13 @@ pub(crate) fn current_policy() -> EffectsPolicy {
     snapshot()
 }
 
+/// Returns the cached `UISettings::AdvancedEffectsEnabled` value when the effects watcher has
+/// already started, or `None` while it remains lazily unstarted (preserving zero startup cost and
+/// zero WinRT DLL loads for apps without `El::system_material`).
+pub(crate) fn advanced_effects_if_started() -> Option<bool> {
+    STARTED.load(Ordering::Acquire).then(|| ADVANCED_EFFECTS.load(Ordering::Acquire))
+}
+
 /// Refreshes settings that can arrive through Win32 broadcasts (`WM_SETTINGCHANGE`,
 /// `WM_SYSCOLORCHANGE`, `WM_THEMECHANGED`, `WM_WTSSESSION_CHANGE`), including direct
 /// `EnableTransparency` registry updates accompanied by `WM_SETTINGCHANGE`.

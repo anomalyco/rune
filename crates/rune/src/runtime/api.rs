@@ -339,6 +339,10 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn set_system_increased_contrast(&mut self, on: bool) { self.core_mut().set_system_increased_contrast(on); }
     #[inline(always)]
+    pub fn set_system_reduced_transparency(&mut self, reduced: bool) { self.core_mut().set_system_reduced_transparency(reduced); }
+    #[inline(always)]
+    pub fn system_reduced_transparency(&self) -> bool { self.core().host.system_reduced_transparency() }
+    #[inline(always)]
     pub fn set_system_reduced_motion(&mut self, reduced: bool) { self.core_mut().set_system_reduced_motion(reduced); }
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core().host.system_reduced_motion() }

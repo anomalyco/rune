@@ -84,6 +84,7 @@ impl RuntimeCore {
             system_contrast: self.host.system_contrast,
             system_increased_contrast: self.host.system_increased_contrast,
             system_text_scale: self.host.system_text_scale,
+            system_reduced_transparency: self.host.system_reduced_transparency,
             system_scroll_bars: self.host.scroll_bars.state,
             system_languages: self.host.system_languages.clone(),
             languages_gen: self.host.languages_gen,
