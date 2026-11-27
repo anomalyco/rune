@@ -296,3 +296,22 @@ fn slow_double_click_fallback_returns_default_then_publishes_and_notifies_on_lat
     assert_eq!(SAME.get_or_init(|| Some(900)), DEFAULT_DOUBLE_CLICK_SECS);
     assert_eq!(notified2.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn windows_enable_transparency_zero_means_reduced() {
+    assert!(windows_enable_transparency_is_reduced(Some(0)));
+    assert!(!windows_enable_transparency_is_reduced(Some(1)));
+    assert!(!windows_enable_transparency_is_reduced(Some(2)));
+    assert!(!windows_enable_transparency_is_reduced(None));
+}
+
+#[test]
+fn reduced_transparency_test_override_scoped_and_restored() {
+    let _off = test_overrides::set_reduced_transparency(false);
+    assert!(!reduced_transparency());
+    {
+        let _on = test_overrides::set_reduced_transparency(true);
+        assert!(reduced_transparency());
+    }
+    assert!(!reduced_transparency());
+}

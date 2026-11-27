@@ -261,3 +261,37 @@ fn hidden_non_activating_overlay_picks_up_high_contrast_before_show() {
     }
     assert_eq!(seen.borrow().as_slice(), &[(None, false), (Some(hc), true), (None, false)]);
 }
+
+/// Non-activating overlays sample Reduce Transparency at creation and refresh it before reveal.
+#[test]
+fn non_activating_overlay_tracks_reduced_transparency_on_create_and_before_show() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<bool>>>;
+    fn view(seen: &Seen, cx: &mut Cx<Seen>) -> El {
+        seen.borrow_mut().push(cx.system_reduced_transparency());
+        el().size(40.0, 20.0)
+    }
+
+    let seen: Seen = Rc::default();
+    let app = AppSpec::new("rt-overlay", (40.0, 20.0), Seen::default, view);
+    let spec = OverlaySpec::new("rt-overlay", app.size, view)
+        .options(OverlayOptions { keys: KeyPolicy::None, ..Default::default() });
+    let mut overlay = {
+        let _on = crate::platform::preferences::test_overrides::set_reduced_transparency(true);
+        let (mut overlay, _) = Overlay::new(spec, seen.clone(), &app);
+        overlay.rt.frame(0.0);
+        overlay
+    };
+    assert_eq!(seen.borrow().as_slice(), &[true]);
+    overlay.dirty = false;
+
+    {
+        let _off = crate::platform::preferences::test_overrides::set_reduced_transparency(false);
+        overlay.core.refresh_preferences_for_show(overlay.rt.core_mut());
+        assert!(overlay.dirty, "reduced transparency change before show must mark overlay dirty");
+        overlay.rt.frame(0.0);
+    }
+    assert_eq!(seen.borrow().as_slice(), &[true, false]);
+}

@@ -113,6 +113,19 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(super) fn set_system_reduced_transparency(&mut self, reduced: bool) -> bool {
+        if self.system_reduced_transparency == reduced { return false; }
+        self.system_reduced_transparency = reduced;
+        true
+    }
+
+    /// Host Reduce Transparency preference; false by default in a headless runtime.
+    #[inline]
+    pub(crate) fn system_reduced_transparency(&self) -> bool {
+        self.system_reduced_transparency
+    }
+
+    #[inline]
     pub(super) fn set_system_reduced_motion(&mut self, reduced: bool) -> bool {
         if self.system_reduced_motion == reduced { return false; }
         self.system_reduced_motion = reduced;
@@ -376,6 +389,15 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_increased_contrast(&mut self, on: bool) -> bool {
         let changed = self.host.set_system_increased_contrast(on);
+        if changed { self.commit.dirty = true; }
+        changed
+    }
+    /// What [`Cx::system_reduced_transparency`] reports. Native windows and the web set it from
+    /// the system as they open, gain focus, and when display options change; headless runs keep
+    /// false. Returns whether the stored preference changed.
+    #[inline]
+    pub fn set_system_reduced_transparency(&mut self, reduced: bool) -> bool {
+        let changed = self.host.set_system_reduced_transparency(reduced);
         if changed { self.commit.dirty = true; }
         changed
     }

@@ -70,7 +70,7 @@ fn an_unchanged_version_reuses_the_subtree_and_a_new_version_or_theme_builds() {
 #[test]
 fn a_view_panicking_inside_a_memo_leaves_no_scope_for_the_next_build() {
     let panicked = std::panic::catch_unwind(|| {
-        let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, 0, true, [0; 5], None, LayoutRects::default());
+        let _scope = enter(MemoCache::default(), Env::new(true, 1.0), crate::SystemAccent::DEFAULT, false, false, 0, true, [0; 5], None, LayoutRects::default());
         memo("outer", 0, || memo("inner", 0, || panic!("view panicked")))
     });
     assert!(panicked.is_err());

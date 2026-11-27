@@ -43,11 +43,16 @@ fn test_runtime() -> (Runtime<State>, Arc<SharedCore>, Arc<AtomicUsize>) {
 fn motion_contrast_languages_and_focus_short_circuit_unchanged_values() {
     let (mut rt, _, _) = test_runtime();
 
-    // Defaults: reduced_motion = false, contrast = None.
+    // Defaults: reduced_motion = false, reduced_transparency = false, contrast = None.
     assert!(!apply_motion(rt.core_mut(), &json!({ "kind": "motion", "reduced": false })));
     assert!(apply_motion(rt.core_mut(), &json!({ "kind": "motion", "reduced": true })));
     assert!(!apply_motion(rt.core_mut(), &json!({ "kind": "motion", "reduced": true })));
     assert!(apply_motion(rt.core_mut(), &json!({ "kind": "motion", "reduced": false })));
+
+    assert!(!apply_transparency(rt.core_mut(), &json!({ "kind": "transparency", "reduced": false })));
+    assert!(apply_transparency(rt.core_mut(), &json!({ "kind": "transparency", "reduced": true })));
+    assert!(!apply_transparency(rt.core_mut(), &json!({ "kind": "transparency", "reduced": true })));
+    assert!(apply_transparency(rt.core_mut(), &json!({ "kind": "transparency", "reduced": false })));
 
     let colors = json!([
         [0, 0, 0], [255, 255, 255], [0, 120, 215], [255, 255, 255],
@@ -170,6 +175,7 @@ fn apply_init_decides_commit_noop_or_hidden_across_startup_states() {
         "insets": [0, 0, 0, 0],
         "visual": [0, 844, 844],
         "reduced": true,
+        "reducedTransparency": true,
         "hover": false,
         "coarse": true,
         "colors": [
@@ -196,6 +202,7 @@ fn apply_init_decides_commit_noop_or_hidden_across_startup_states() {
         }
     );
     assert!(rt.core().host.system_reduced_motion());
+    assert!(rt.core().host.system_reduced_transparency());
     assert!(rt.core().system_contrast().is_some());
     assert!(rt.core().system_increased_contrast());
     assert_eq!(rt.system_text_scale(), 1.5);

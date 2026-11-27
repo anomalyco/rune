@@ -163,6 +163,7 @@ impl Host {
             rt.set_system_contrast(contrast);
             rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
             rt.set_system_text_scale(crate::platform::text_scale::current());
+            rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency());
         }
         if let Some(l) = self.win.as_mut() {
             let native = &mut l.native;

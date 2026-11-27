@@ -519,6 +519,8 @@ export function viewport(canvas, callback, embedded) {
     const update = () => callback(JSON.stringify({ kind: 'viewport', ...readViewport() }));
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));
+    const transparency = matchMedia('(prefers-reduced-transparency: reduce)');
+    const reducedTransparency = () => callback(JSON.stringify({ kind: 'transparency', reduced: transparency.matches }));
     // A primary pointer that can't hover (a touch screen): `Cx::hover_none`.
     const hoverNone = matchMedia('(hover: none)');
     const coarse = matchMedia('(pointer: coarse)');
@@ -588,6 +590,7 @@ export function viewport(canvas, callback, embedded) {
     const textScaleObserver = new ResizeObserver(textScale);
     textScaleObserver.observe(textScaleProbe, { box: 'border-box' });
     motion.addEventListener('change', reduced);
+    transparency.addEventListener('change', reducedTransparency);
     hoverNone.addEventListener('change', pointer);
     coarse.addEventListener('change', pointer);
     forced.addEventListener('change', contrast);
@@ -606,6 +609,7 @@ export function viewport(canvas, callback, embedded) {
             kind: 'init',
             ...readViewport(),
             reduced: motion.matches,
+            reducedTransparency: transparency.matches,
             hover: !hoverNone.matches,
             coarse: coarse.matches,
             colors: readContrast(),
@@ -624,6 +628,7 @@ export function viewport(canvas, callback, embedded) {
         insets.disconnect();
         textScaleObserver.disconnect();
         motion.removeEventListener('change', reduced);
+        transparency.removeEventListener('change', reducedTransparency);
         hoverNone.removeEventListener('change', pointer);
         coarse.removeEventListener('change', pointer);
         forced.removeEventListener('change', contrast);

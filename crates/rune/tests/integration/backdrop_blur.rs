@@ -357,3 +357,94 @@ fn fading_ancestor_scopes_blur_to_its_layer() {
     // Empty fading ancestor has nothing in its layer to blur, so the background stripes stay crisp.
     assert!(spread(&px, 200, 60, 60, 140) > 200, "fading ancestor isolates backdrop from behind it");
 }
+
+/// While `Cx::system_reduced_transparency` is true, the view and its memos re-run, `backdrop_blur`
+/// emits no `KIND_BACKDROP_BLUR` record (so both GPU and CPU paths draw only the fill without
+/// blurring), and turning it back off restores the blur.
+#[test]
+fn reduced_transparency_skips_backdrop_blur_rebuilds_view_and_keeps_fill() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct State {
+        views: Rc<Cell<u32>>,
+        memo_builds: Rc<Cell<u32>>,
+        seen: Rc<Cell<bool>>,
+    }
+
+    fn view(s: &State, cx: &mut Cx<State>) -> El {
+        s.views.set(s.views.get() + 1);
+        let reduced = cx.system_reduced_transparency();
+        s.seen.set(reduced);
+        let stripes = row().size(200.0, 120.0).absolute(0.0, 0.0)
+            .children((0..50).map(|i| el().size(4.0, 120.0).fill(if i % 2 == 0 { Color::BLACK } else { Color::WHITE })));
+        let badge = rune::memo("rt-badge", 0u32, || {
+            s.memo_builds.set(s.memo_builds.get() + 1);
+            el().size(10.0, 10.0).fill(if reduced { RED } else { BLUE })
+        });
+        el().size(200.0, 120.0)
+            .child(stripes)
+            .child(
+                el().absolute(40.0, 30.0).size(120.0, 60.0)
+                    .radius(16.0)
+                    .backdrop_blur(8.0)
+                    .fill(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })
+                    .child(badge),
+            )
+    }
+
+    let views = Rc::new(Cell::new(0));
+    let memo_builds = Rc::new(Cell::new(0));
+    let seen = Rc::new(Cell::new(false));
+    let mut rt = Runtime::new(
+        State { views: views.clone(), memo_builds: memo_builds.clone(), seen: seen.clone() },
+        view,
+        (200.0, 120.0),
+        Env::new(false, 1.0),
+    );
+    rt.frame(0.0);
+    assert!(!rt.system_reduced_transparency());
+    assert!(!seen.get());
+    assert_eq!(views.get(), 1);
+    assert_eq!(memo_builds.get(), 1);
+    assert!(
+        rt.instances.iter().any(|i| i.params[1] == KIND_BACKDROP_BLUR),
+        "backdrop_blur emits a blur record when Reduce Transparency is off",
+    );
+    if let Some(gpu) = Gpu::test_headless() {
+        let px = pixels(&gpu, &mut rt, (200, 120));
+        assert!(spread(&px, 200, 60, 60, 140) < 120, "stripes are blurred when Reduce Transparency is off");
+    }
+
+    // Turning Reduce Transparency on re-runs the view and its memos, and omits the blur record.
+    rt.set_system_reduced_transparency(true);
+    rt.frame(0.0);
+    assert!(rt.system_reduced_transparency());
+    assert!(seen.get());
+    assert_eq!(views.get(), 2, "toggling reduced transparency must re-run the view");
+    assert_eq!(memo_builds.get(), 2, "toggling reduced transparency must rebuild memos");
+    assert!(
+        !rt.instances.iter().any(|i| i.params[1] == KIND_BACKDROP_BLUR),
+        "backdrop_blur must emit no blur record while Reduce Transparency is on",
+    );
+    if let Some(gpu) = Gpu::test_headless() {
+        let px = pixels(&gpu, &mut rt, (200, 120));
+        assert!(spread(&px, 200, 60, 60, 140) > 200, "stripes stay crisp without blur when Reduce Transparency is on");
+    }
+
+    // No-op write does not re-run the view.
+    rt.set_system_reduced_transparency(true);
+    rt.frame(0.0);
+    assert_eq!(views.get(), 2);
+
+    // Turning Reduce Transparency back off restores the blur.
+    rt.set_system_reduced_transparency(false);
+    rt.frame(0.0);
+    assert!(!rt.system_reduced_transparency());
+    assert!(!seen.get());
+    assert_eq!(views.get(), 3);
+    assert!(
+        rt.instances.iter().any(|i| i.params[1] == KIND_BACKDROP_BLUR),
+        "backdrop_blur resumes blurring once Reduce Transparency turns off",
+    );
+}

@@ -460,6 +460,7 @@ impl Running {
                 self.resize_surface(window, size, scale);
             }
             Some("motion") => if !pe::apply_motion(self.app.rt_mut(), event) { return false; },
+            Some("transparency") => if !pe::apply_transparency(self.app.rt_mut(), event) { return false; },
             Some("languages") => if !pe::apply_languages(self.app.rt_mut(), event) { return false; },
             // The primary pointer can or can't hover (a mouse or a touch screen), read by views
             // through `Cx::hover_none`.

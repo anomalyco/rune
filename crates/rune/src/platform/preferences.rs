@@ -527,6 +527,59 @@ pub(crate) fn increased_contrast_with(has_contrast: bool) -> bool {
     }
 }
 
+/// `RUNE_REDUCE_TRANSPARENCY=1`: [`reduced_transparency`] on, for captures and checks.
+pub(crate) fn reduced_transparency_preset() -> bool {
+    std::env::var_os("RUNE_REDUCE_TRANSPARENCY").is_some_and(|v| v == "1")
+}
+
+/// Decodes Windows' `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
+/// `EnableTransparency` DWORD: `0` means transparency effects are off (reduce transparency);
+/// `1` or a missing value means transparency effects are on.
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn windows_enable_transparency_is_reduced(value: Option<u32>) -> bool {
+    value == Some(0)
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_reduced_transparency() -> bool {
+    #[cfg(feature = "windows-system-material")]
+    if let Some(enabled) = crate::system_material::windows::advanced_effects_if_started() {
+        return !enabled;
+    }
+    let val = windows_registry::CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        .and_then(|key| key.get_u32("EnableTransparency"))
+        .ok();
+    windows_enable_transparency_is_reduced(val)
+}
+
+/// Whether the system asks apps to reduce transparency: macOS's Reduce Transparency
+/// (Accessibility > Display), or Windows' Transparency effects turned off (Personalization >
+/// Colors / Accessibility > Visual effects). `RUNE_REDUCE_TRANSPARENCY=1` reports it on, for
+/// captures and checks, without turning it on for the whole machine. Read at window/overlay
+/// creation, on focus changes, and on live system-setting notifications (`a11y/macos.rs`,
+/// `a11y/windows.rs`, and Windows' material policy watcher).
+pub(crate) fn reduced_transparency() -> bool {
+    #[cfg(test)]
+    if let Some(v) = test_overrides::reduced_transparency() { return v; }
+    if reduced_transparency_preset() { return true; }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send};
+        // SAFETY: NSWorkspace's shared instance lives for the process; the selector returns an
+        // Objective-C BOOL. Native hosts call on the UI thread.
+        unsafe {
+            let workspace: *mut objc2::runtime::AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let reduced: objc2::runtime::Bool = msg_send![workspace, accessibilityDisplayShouldReduceTransparency];
+            reduced.as_bool()
+        }
+    }
+    #[cfg(target_os = "windows")]
+    { read_windows_reduced_transparency() }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { false }
+}
+
 /// The colours a system contrast theme asks every app to paint with (Windows' Contrast themes,
 /// CSS `forced-colors`' system colours), in linear sRGB as Rune's colours are.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -675,10 +728,12 @@ pub(crate) mod test_overrides {
     thread_local! {
         static CONTRAST: Cell<Option<Option<SystemContrast>>> = const { Cell::new(None) };
         static INCREASED_CONTRAST: Cell<Option<bool>> = const { Cell::new(None) };
+        static REDUCED_TRANSPARENCY: Cell<Option<bool>> = const { Cell::new(None) };
     }
 
     pub(super) fn contrast() -> Option<Option<SystemContrast>> { CONTRAST.with(Cell::get) }
     pub(super) fn increased_contrast() -> Option<bool> { INCREASED_CONTRAST.with(Cell::get) }
+    pub(super) fn reduced_transparency() -> Option<bool> { REDUCED_TRANSPARENCY.with(Cell::get) }
 
     pub(crate) struct Guard {
         prev_contrast: Option<Option<SystemContrast>>,
@@ -696,6 +751,21 @@ pub(crate) mod test_overrides {
         let prev_contrast = CONTRAST.with(|c| c.replace(Some(contrast)));
         let prev_increased = INCREASED_CONTRAST.with(|c| c.replace(Some(increased_contrast)));
         Guard { prev_contrast, prev_increased }
+    }
+
+    pub(crate) struct ReducedTransparencyGuard {
+        prev: Option<bool>,
+    }
+
+    impl Drop for ReducedTransparencyGuard {
+        fn drop(&mut self) {
+            REDUCED_TRANSPARENCY.with(|c| c.set(self.prev));
+        }
+    }
+
+    pub(crate) fn set_reduced_transparency(reduced: bool) -> ReducedTransparencyGuard {
+        let prev = REDUCED_TRANSPARENCY.with(|c| c.replace(Some(reduced)));
+        ReducedTransparencyGuard { prev }
     }
 }
 

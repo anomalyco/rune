@@ -445,6 +445,7 @@ pub(super) struct Measurement<'a> {
     pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_increased_contrast: bool,
     pub(super) system_text_scale: f32,
+    pub(super) system_reduced_transparency: bool,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_languages: Option<Rc<[String]>>,
     pub(super) languages_gen: u64,
