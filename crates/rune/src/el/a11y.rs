@@ -112,6 +112,47 @@ impl AutoComplete {
     }
 }
 
+/// Which item an element currently represents within a set ([`El::current`]), as ARIA's
+/// `aria-current`.
+///
+/// Leave unset when the element is not current (ARIA's implicit `false` default).
+///
+/// ```
+/// # use rune::{Current, col, el, text};
+/// let nav = col()
+///     .role("navigation")
+///     .label("Sections")
+///     .child(el().key("home").href("/").current(Current::Page).child(text("Home")));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Current {
+    /// Current page within a set of pages (`aria-current="page"`).
+    Page,
+    /// Current step within a process (`aria-current="step"`).
+    Step,
+    /// Current location within a navigation context, such as a breadcrumb (`aria-current="location"`).
+    Location,
+    /// Current date within a collection of dates (`aria-current="date"`).
+    Date,
+    /// Current time within a set of times (`aria-current="time"`).
+    Time,
+    /// Current item within a set when none of the more specific tokens apply (`aria-current="true"`).
+    True,
+}
+
+impl Current {
+    pub(crate) fn as_aria(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Step => "step",
+            Self::Location => "location",
+            Self::Date => "date",
+            Self::Time => "time",
+            Self::True => "true",
+        }
+    }
+}
+
 /// A checkbox's, switch's or toggle button's state for accessibility ([`El::checked`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Checked {
@@ -188,6 +229,8 @@ pub(crate) struct A11yMore {
     pub orientation: Option<Orientation>,
     /// How typing suggests or completes values (`El::auto_complete`).
     pub auto_complete: Option<AutoComplete>,
+    /// Which item this element currently represents in a set (`El::current`, ARIA `aria-current`).
+    pub current: Option<Current>,
     /// `El::controls`'s key (ARIA `aria-controls`).
     pub controls: Option<String>,
     /// `El::owns`'s key (ARIA `aria-owns`).
@@ -535,6 +578,22 @@ impl El {
     /// ```
     pub fn auto_complete(mut self, mode: AutoComplete) -> Self {
         self.cold_mut().a11y.more().auto_complete = Some(mode);
+        self
+    }
+    /// Marks this element as the current item within a set (ARIA `aria-current`), such as the
+    /// active page in a navigation landmark, the active step in a wizard, or today's cell in a
+    /// calendar. Leave unset when the element is not current.
+    ///
+    /// ```
+    /// # use rune::{Current, col, el, text};
+    /// let nav = col()
+    ///     .role("navigation")
+    ///     .label("Sections")
+    ///     .child(el().key("home").href("/").current(Current::Page).child(text("Home")))
+    ///     .child(el().key("settings").href("/settings").child(text("Settings")));
+    /// ```
+    pub fn current(mut self, current: Current) -> Self {
+        self.cold_mut().a11y.more().current = Some(current);
         self
     }
     /// The element whose contents or presence this element controls (ARIA `aria-controls`),

@@ -124,6 +124,7 @@ pub(crate) struct MirrorAria {
     pub has_popup: Option<&'static str>,
     pub orientation: Option<&'static str>,
     pub auto_complete: Option<&'static str>,
+    pub current: Option<&'static str>,
     pub controls: Option<String>,
     pub owns: Option<String>,
     pub row_count: Option<usize>,
@@ -734,7 +735,7 @@ impl RuntimeCore {
                 let mut item = A11yItem::new("image", &n.path, rect);
                 item.text = label;
                 item.busy = busy;
-                item.aria.role_description = self.a11y_role_description(i).map(str::to_owned);
+                item.aria = self.mirror_aria(i);
                 push(&mut out, item);
                 i = end;
                 last_flow_parent = None;
@@ -832,8 +833,8 @@ impl RuntimeCore {
                 if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
                     let text_disabled = self.node_disabled(i);
-                    let role_description = self.a11y_role_description(i).map(str::to_owned);
-                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled && role_description.is_none();
+                    let item_aria = self.mirror_aria(i);
+                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled && item_aria.role_description.is_none() && item_aria.current.is_none();
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -850,7 +851,7 @@ impl RuntimeCore {
                     });
                     if plain_text && flow_group.is_some() && flow_group == last_flow_parent
                         && last_item_flow == Some(node_flow)
-                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
+                        && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy && it.aria.current.is_none())
                     {
                         merge_flow(prev, rect, runs);
                         i += 1;
@@ -867,7 +868,7 @@ impl RuntimeCore {
                     if plain_text && !caret_browsable && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable, node_flow)
-                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
+                        && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy && it.aria.current.is_none())
                     {
                         join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
                         inline = Some(Inline { right: n.target[2], ..prev });
@@ -888,7 +889,7 @@ impl RuntimeCore {
                     item.live = live;
                     item.disabled = text_disabled;
                     item.busy = busy;
-                    item.aria.role_description = role_description;
+                    item.aria = item_aria;
                     item.text = plain;
                     item.runs = rich_runs;
                     item.id = if is_heading { anchor_id(n.key.as_deref()) } else { None };
@@ -926,7 +927,7 @@ impl RuntimeCore {
                 item.level = Some(n.a11y.level.unwrap_or(2).clamp(1, 6));
                 item.live = live;
                 item.busy = busy;
-                item.aria.role_description = self.a11y_role_description(i).map(str::to_owned);
+                item.aria = self.mirror_aria(i);
                 item.text = lbl;
                 item.id = anchor_id(n.key.as_deref());
                 push(&mut out, item);
@@ -999,6 +1000,7 @@ impl RuntimeCore {
             aria.read_only = m.read_only;
             aria.invalid = m.invalid;
             aria.role_description = self.a11y_role_description(i).map(str::to_owned);
+            aria.current = m.current.map(crate::Current::as_aria);
             // Password inputs are exposed strictly as secure textboxes, never as comboboxes with
             // popup/autocomplete/controls relations (matching HTML <input type="password">).
             if !secure {
@@ -1321,6 +1323,7 @@ impl RuntimeCore {
         if let Some(hp) = aria.has_popup { o.insert("hp".into(), json!(hp)); }
         if let Some(or) = aria.orientation { o.insert("or".into(), json!(or)); }
         if let Some(ac) = aria.auto_complete { o.insert("ac".into(), json!(ac)); }
+        if let Some(cu) = aria.current { o.insert("cu".into(), json!(cu)); }
         if let Some(ct) = aria.controls.as_deref() { o.insert("ct".into(), json!(ct)); }
         if let Some(ow) = aria.owns.as_deref() { o.insert("ow".into(), json!(ow)); }
         if let Some(rc) = aria.row_count { o.insert("rc".into(), json!(rc)); }

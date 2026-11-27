@@ -110,6 +110,7 @@ pub use el::Align;
 pub use el::Anchor;
 pub use el::AutoComplete;
 pub use el::Autofill;
+pub use el::Current;
 pub use el::Cursor;
 pub use el::CursorImage;
 pub use el::Cycle;

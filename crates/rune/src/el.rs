@@ -54,7 +54,7 @@ pub(crate) mod virtual_rows;
 mod visual;
 mod visuals;
 
-pub use a11y::{AutoComplete, HasPopup, LiveRegion, Orientation};
+pub use a11y::{AutoComplete, Current, HasPopup, LiveRegion, Orientation};
 pub(crate) use a11y::{A11y, Checked};
 pub use anchor::{Anchor, Side, anchor_rect, anchor_rect_in};
 pub(crate) use crate::clipboard::tx::{ClipboardRead, CopyImageCallback, CopyImageFn, ReadFn};

@@ -4395,3 +4395,47 @@ test('legacy writeClipboard fallback does not emit spurious field_blur or hijack
         bridge.destroy(h);
     }
 });
+
+test('syncA11y and focusA11y mirror, patch, and clear aria-current on mirror nodes, proxy, and inputs', () => {
+    const { h } = setup();
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'group', g: 'nav', p: '#0/nav', r: [0, 0, 200, 100], t: 'Sections' },
+            { k: 'link', p: '#0/nav/home', a: 0, r: [0, 0, 200, 32], t: 'Home', h: '/', cu: 'page' },
+            { k: 'button', p: '#0/nav/step', a: 0, r: [0, 36, 200, 32], t: 'Step 2', cu: 'step' },
+            { k: 'link', p: '#0/nav/other', a: 0, r: [0, 72, 200, 28], t: 'Settings', h: '/settings' },
+        ]));
+        const home = h.a11yNodes.get('a:#0/nav/home');
+        const step = h.a11yNodes.get('button:#0/nav/step');
+        const other = h.a11yNodes.get('a:#0/nav/other');
+        assert.equal(home.getAttribute('aria-current'), 'page');
+        assert.equal(step.getAttribute('aria-current'), 'step');
+        assert.equal(other.getAttribute('aria-current'), null);
+
+        bridge.syncA11y(h, JSON.stringify({
+            p: 1,
+            u: [
+                { k: 'link', p: '#0/nav/home', r: [0, 0, 200, 32], t: 'Home', h: '/', cu: 'location' },
+                { k: 'button', p: '#0/nav/step', r: [0, 36, 200, 32], t: 'Step 2' },
+            ],
+        }));
+        assert.equal(home.getAttribute('aria-current'), 'location');
+        assert.equal(step.getAttribute('aria-current'), null);
+
+        bridge.focusA11y(h, JSON.stringify({ o: 'link', t: 'Home', cu: 'page' }));
+        let proxy = h.focusProxies[h.focusTurn];
+        assert.equal(proxy.getAttribute('role'), 'link');
+        assert.equal(proxy.getAttribute('aria-current'), 'page');
+
+        bridge.focusA11y(h, JSON.stringify({ o: 'link', t: 'Settings' }));
+        proxy = h.focusProxies[h.focusTurn];
+        assert.equal(proxy.getAttribute('aria-current'), null);
+
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Today', cu: 'date' }));
+        assert.equal(h.textarea.getAttribute('aria-current'), 'date');
+        bridge.focusA11y(h, '');
+        assert.equal(h.textarea.getAttribute('aria-current'), null);
+    } finally {
+        bridge.destroy(h);
+    }
+});

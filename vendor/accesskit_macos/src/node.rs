@@ -11,7 +11,8 @@
 #![allow(non_upper_case_globals)]
 
 use accesskit::{
-    Action, ActionData, ActionRequest, Orientation, Role, TextAlign, TextSelection, Toggled,
+    Action, ActionData, ActionRequest, AriaCurrent, Orientation, Role, TextAlign, TextSelection,
+    Toggled,
 };
 use accesskit_consumer::{FilterResult, FullNodeId, NodeRef, Tree};
 use objc2::{
@@ -57,6 +58,19 @@ fn long_char(text: Text, index: usize, key: u64) -> NSRange {
 }
 
 const SCROLL_TO_VISIBLE_ACTION: &str = "AXScrollToVisible";
+
+// Rune (vendor/accesskit_macos.patch): WebKit/Chromium `AXARIACurrent` token for VoiceOver.
+fn aria_current_str(node: &NodeRef) -> Option<&'static str> {
+    match node.aria_current()? {
+        AriaCurrent::False => None,
+        AriaCurrent::True => Some("true"),
+        AriaCurrent::Page => Some("page"),
+        AriaCurrent::Step => Some("step"),
+        AriaCurrent::Location => Some("location"),
+        AriaCurrent::Date => Some("date"),
+        AriaCurrent::Time => Some("time"),
+    }
+}
 
 fn ns_role(node: &NodeRef) -> &'static NSAccessibilityRole {
     let role = node.role();
@@ -1205,6 +1219,8 @@ declare_class!(
                     return Some(NSString::from_str(node.braille_role_description().unwrap()))
                 } else if attr == ns_string!("AXDOMIdentifier") && node.has_html_id() {
                     return Some(NSString::from_str(node.html_id().unwrap()))
+                } else if attr == ns_string!("AXARIACurrent") {
+                    return aria_current_str(node).map(NSString::from_str);
                 }
 
                 None
@@ -1402,6 +1418,7 @@ declare_class!(
                     return node.has_braille_label()
                         || node.has_braille_role_description()
                         || node.has_html_id()
+                        || aria_current_str(node).is_some()
                 }
                 if selector == sel!(accessibilityURL) {
                     return node.supports_url();

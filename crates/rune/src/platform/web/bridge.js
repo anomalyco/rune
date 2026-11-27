@@ -2058,6 +2058,7 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
         ['aria-autocomplete', item.ac],
+        ['aria-current', item.cu],
         ['aria-controls', item.ct],
         ['aria-owns', item.ow],
         ['aria-rowcount', item.rc !== undefined ? String(item.rc) : undefined],
@@ -2346,6 +2347,7 @@ function syncFieldA11y(field, f, defaultLabel) {
         ['aria-required', f?.rq ? 'true' : undefined],
         ['aria-placeholder', f?.ph || undefined],
         ['aria-autocomplete', f?.ac || undefined],
+        ['aria-current', f?.cu || undefined],
         ['aria-multiline', field.tagName === 'TEXTAREA' && f ? (f.ml ? 'true' : 'false') : undefined],
     ];
     for (const [name, value] of attrs) {
@@ -2427,6 +2429,7 @@ export function focusA11y(h, json) {
     if (f.hp) el.setAttribute('aria-haspopup', f.hp);
     if (f.or) el.setAttribute('aria-orientation', f.or);
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
+    if (f.cu) el.setAttribute('aria-current', f.cu);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
     if (f.rc !== undefined) el.setAttribute('aria-rowcount', String(f.rc));
