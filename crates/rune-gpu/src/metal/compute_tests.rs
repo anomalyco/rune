@@ -497,3 +497,208 @@ fn precompiled_field_pipeline_binds_workgroup_memory() {
         assert_eq!(&got[row.clone()], &want[row], "field row {y} differs from wgpu");
     }
 }
+
+const INDIRECT_PRODUCER: &str = r#"
+@group(0) @binding(0) var<storage, read_write> args: array<u32>;
+
+@compute @workgroup_size(1)
+fn emit_args() {
+    // Non-zero offset 16 bytes (u32 index 4): [4, 2, 1] workgroups.
+    args[4] = 4u;
+    args[5] = 2u;
+    args[6] = 1u;
+    // Offset 32 bytes (u32 index 8): [0, 2, 1] workgroups (valid no-op).
+    args[8] = 0u;
+    args[9] = 2u;
+    args[10] = 1u;
+}
+"#;
+
+const INDIRECT_CONSUMER: &str = r#"
+@group(0) @binding(0) var<storage, read> weights: array<u32>;
+@group(0) @binding(1) var<storage, read_write> out: array<atomic<u32>>;
+
+@compute @workgroup_size(8, 4, 1)
+fn consume(@builtin(global_invocation_id) id: vec3<u32>) {
+    let n = arrayLength(&weights);
+    let idx = id.y * 32u + id.x;
+    atomicAdd(&out[idx], weights[idx % n]);
+}
+"#;
+
+/// Exercises GPU-written indirect dispatch args at a non-zero offset, a zero-workgroup indirect
+/// dispatch, and back-to-back CPU-updated indirect submissions.
+fn run_indirect(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u32> {
+    use wgpu::{BufferUsages as B, ShaderStages as S};
+    let prod_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("indirect producer"),
+        source: wgpu::ShaderSource::Wgsl(INDIRECT_PRODUCER.into()),
+    });
+    let cons_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("indirect consumer"),
+        source: wgpu::ShaderSource::Wgsl(INDIRECT_CONSUMER.into()),
+    });
+    let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: S::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let prod_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[storage(0, false)],
+    });
+    let prod_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&prod_bgl)],
+        immediate_size: 0,
+    });
+    let producer = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("emit_args"),
+        layout: Some(&prod_layout),
+        module: &prod_module,
+        entry_point: Some("emit_args"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let cons_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[storage(0, true), storage(1, false)],
+    });
+    let cons_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&cons_bgl)],
+        immediate_size: 0,
+    });
+    let consumer = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("consume"),
+        layout: Some(&cons_layout),
+        module: &cons_module,
+        entry_point: Some("consume"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
+    let gpu_indirect = buffer(device, 48, B::STORAGE | B::INDIRECT | B::COPY_DST);
+    queue.write_buffer(&gpu_indirect, 0, bytemuck::cast_slice(&[99u32, 99, 99, 99]));
+    let cpu_indirect = buffer(device, 16, B::INDIRECT | B::COPY_DST);
+    let weights = buffer(device, 16, B::STORAGE | B::COPY_DST);
+    queue.write_buffer(&weights, 0, bytemuck::cast_slice(&[3u32, 5, 7, 11]));
+    let out = buffer(device, 256 * 4, B::STORAGE | B::COPY_SRC);
+    let readback = buffer(device, 256 * 4, B::COPY_DST | B::MAP_READ);
+
+    let prod_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &prod_bgl,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: gpu_indirect.as_entire_binding() }],
+    });
+    let cons_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &cons_bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: weights.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: out.as_entire_binding() },
+        ],
+    });
+
+    // Submit 1: GPU writes indirect args at offsets 16 ([4, 2, 1]) and 32 ([0, 2, 1]), then
+    // dispatches both indirectly inside the same compute pass.
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&producer);
+        pass.set_bind_group(0, &prod_bg, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+        pass.set_pipeline(&consumer);
+        pass.set_bind_group(0, &cons_bg, &[]);
+        pass.dispatch_workgroups_indirect(&gpu_indirect, 16);
+        pass.dispatch_workgroups_indirect(&gpu_indirect, 32);
+    }
+    queue.submit([encoder.finish()]);
+
+    // Submit 2 and 3: back-to-back CPU updates on a non-pinned indirect buffer (exercises swap).
+    queue.write_buffer(&cpu_indirect, 0, bytemuck::cast_slice(&[2u32, 1, 1]));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&consumer);
+        pass.set_bind_group(0, &cons_bg, &[]);
+        pass.dispatch_workgroups_indirect(&cpu_indirect, 0);
+    }
+    queue.submit([encoder.finish()]);
+
+    queue.write_buffer(&cpu_indirect, 0, bytemuck::cast_slice(&[1u32, 2, 1]));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&consumer);
+        pass.set_bind_group(0, &cons_bg, &[]);
+        pass.dispatch_workgroups_indirect(&cpu_indirect, 0);
+    }
+    encoder.copy_buffer_to_buffer(&out, 0, &readback, 0, 256 * 4);
+    queue.submit([encoder.finish()]);
+
+    bytemuck::cast_slice(&read(device, &readback)).to_vec()
+}
+
+#[test]
+fn indirect_dispatch_matches_wgpus_bit_for_bit() {
+    let (device, queue) = gpu();
+    let got = run_indirect(&device, &queue);
+    let (wgpu_device, wgpu_queue) = wgpu_metal();
+    let want = run_indirect(&wgpu_device, &wgpu_queue);
+    let weights = [3u32, 5, 7, 11];
+    for y in 0..8usize {
+        for x in 0..32usize {
+            let idx = y * 32 + x;
+            let hits = 1u32 + u32::from(x < 16 && y < 4) + u32::from(x < 8);
+            assert_eq!(got[idx], hits * weights[idx % 4], "cell ({x}, {y})");
+        }
+    }
+    assert_eq!(got, want, "indirect dispatch output differs from wgpu");
+}
+
+#[test]
+fn indirect_dispatch_validation_captures_errors() {
+    use wgpu::BufferUsages as B;
+    let (device, _queue) = gpu();
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl("@compute @workgroup_size(1) fn noop() {}".into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[],
+        immediate_size: 0,
+    });
+    let noop = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&layout),
+        module: &module,
+        entry_point: Some("noop"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let no_indirect = buffer(&device, 16, B::STORAGE | B::COPY_DST);
+    let indirect = buffer(&device, 16, B::INDIRECT);
+
+    for (label, buf, offset) in [
+        ("missing INDIRECT", &no_indirect, 0u64),
+        ("misaligned offset", &indirect, 2u64),
+        ("out-of-bounds range", &indirect, 8u64),
+    ] {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&noop);
+            pass.dispatch_workgroups_indirect(buf, offset);
+        }
+        let err = pollster::block_on(scope.pop());
+        assert!(matches!(err, Some(wgpu::Error::Validation { .. })), "{label}: got {err:?}");
+    }
+}

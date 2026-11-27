@@ -12,6 +12,8 @@ pub mod d3d11_interop;
 pub mod fallback;
 pub mod health;
 #[cfg(any(test, all(target_vendor = "apple", feature = "metal-backend")))]
+mod indirect;
+#[cfg(any(test, all(target_vendor = "apple", feature = "metal-backend")))]
 mod lazy_init;
 pub mod memory;
 #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]

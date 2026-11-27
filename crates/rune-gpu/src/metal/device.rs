@@ -216,7 +216,7 @@ impl DeviceInterface for MetalDevice {
     }
     unsafe fn create_pipeline_cache(&self, _: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache { DispatchPipelineCache::custom(Inert) }
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> DispatchBuffer {
-        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.label))
+        DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.usage, desc.label))
     }
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> DispatchTexture {
         let texture = MetalTexture::new(&self.shared, desc, Live::new(&self.shared.textures));
