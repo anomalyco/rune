@@ -340,6 +340,36 @@ pub(crate) mod keyboard {
         }
     }
 
+    /// Computes `PhysicalInput::Key::text` for an XKB key event, matching the window host
+    /// (`winit`'s Wayland XKB path and `window/keys.rs::platform_text`):
+    /// - Releases, open compose sequences, and cancelled compose sequences produce `None`.
+    /// - A completed compose sequence produces its non-empty composed string.
+    /// - Otherwise prefers `state_utf8` (`xkb_state_key_get_utf8`) when non-empty and free of
+    ///   control characters, falling back to `sym_utf8` (`xkb_keysym_to_utf8`) so `Ctrl+c` /
+    ///   `Ctrl+Shift+c` keep `"c"` / `"C"` and `Enter` / `Escape` / `Tab` / `Backspace` / `Delete`
+    ///   keep their control text while `Shift+Tab` (`ISO_Left_Tab`) stays `None`.
+    pub(crate) fn physical_text(
+        pressed: bool,
+        compose: &ComposeOutcome,
+        state_utf8: &str,
+        sym_utf8: &str,
+    ) -> Option<String> {
+        if !pressed {
+            return None;
+        }
+        match compose {
+            ComposeOutcome::Composing | ComposeOutcome::Cancelled => None,
+            ComposeOutcome::Composed(composed) => {
+                composed.as_deref().filter(|t| !t.is_empty()).map(str::to_owned)
+            }
+            ComposeOutcome::Nothing => {
+                let with_all_mods = (!state_utf8.is_empty()).then_some(state_utf8);
+                let sym = (!sym_utf8.is_empty()).then_some(sym_utf8);
+                crate::window::pick_typed_text(with_all_mods, sym).map(str::to_owned)
+            }
+        }
+    }
+
     /// The `zwlr_layer_surface_v1` keyboard interactivity mode to request from the compositor.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub(crate) enum Interactivity {
