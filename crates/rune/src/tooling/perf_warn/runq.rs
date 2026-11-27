@@ -22,7 +22,7 @@ pub(super) fn take_probe_calls() -> usize {
 pub(crate) fn overloaded() -> bool {
     #[cfg(all(test, debug_assertions))]
     PROBE_CALLS.with(|c| c.set(c.get() + 1));
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "android")))]
     {
         use std::{sync::Mutex, time::{Duration, Instant}};
         static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
@@ -36,7 +36,7 @@ pub(crate) fn overloaded() -> bool {
         *cache = Some((crate::time::now(), busy));
         busy
     }
-    #[cfg(not(unix))]
+    #[cfg(not(all(unix, not(target_os = "android"))))]
     { false }
 }
 
@@ -79,5 +79,11 @@ mod tests {
     #[test]
     fn the_wait_never_exceeds_the_wall() {
         assert_eq!(blocked_ms(20.0, 0.0, Some(99.0), false), None);
+    }
+
+    #[cfg(not(all(unix, not(target_os = "android"))))]
+    #[test]
+    fn overloaded_is_false_without_load_average() {
+        assert!(!overloaded());
     }
 }
