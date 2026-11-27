@@ -12,7 +12,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Proxy};
 
 use super::machine::{SurfaceId, WindowToken};
-use super::pipe::{DoneFlag, SignalOnDrop, StopSignal, THREAD_JOIN_BOUND, join_bounded};
+use crate::platform::wayland::pipe::unix::{DoneFlag, SignalOnDrop, StopSignal, THREAD_JOIN_BOUND, join_bounded};
 use crate::platform::layer_shell_machine::watch_loop;
 use crate::runtime::Waker;
 

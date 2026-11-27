@@ -928,7 +928,7 @@ mod unix_pipe_tests {
 
     use wayland_client::protocol::wl_data_device_manager::DndAction;
     use super::super::machine::{ReadOutcome, SelectedAction};
-    use super::super::pipe::{CancelToken, DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded, read_fd_bounded};
+    use crate::platform::wayland::pipe::unix::{CancelToken, DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded, read_fd_bounded};
 
     fn nonblocking_pair() -> (OwnedFd, UnixStream) {
         let (rx, tx) = UnixStream::pair().expect("UnixStream::pair");

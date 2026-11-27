@@ -156,6 +156,7 @@ impl Host {
         {
             self.wayland_drop_ready();
             self.wayland_backdrop_ready();
+            self.wayland_primary_selection_ready();
         }
         #[cfg(not(target_arch = "wasm32"))]
         crate::platform::ready_signal::ready();
@@ -241,6 +242,16 @@ impl Host {
             .is_some_and(|b| b.poll_capability_change());
         if changed {
             self.sync_window_backdrop(false);
+        }
+    }
+
+    /// Wayland: lazily binds `zwp_primary_selection_device_manager_v1` on winit's `wl_display`
+    /// once after frame 1 (zero work before frame 1).
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn wayland_primary_selection_ready(&mut self) {
+        if !self.wayland { return; }
+        if let Some(w) = &self.win {
+            crate::platform::wayland::primary_selection::wire::ensure_for_window(&w.window);
         }
     }
 

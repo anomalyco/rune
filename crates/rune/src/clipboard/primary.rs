@@ -1,10 +1,13 @@
-//! Linux's primary selection on the OS (X11 `PRIMARY`, Wayland's primary selection through
-//! data control): its own worker over arboard, beside the clipboard's, so a primary read never
-//! waits behind a clipboard read and a secret's hold never sees it. What goes on it and where a
-//! middle click pastes it is the runtime's (`runtime/input/primary_selection.rs`).
+//! Linux's primary selection on the OS: native `zwp_primary_selection_v1` on Wayland when the
+//! compositor advertises it (GNOME/Mutter, Flatpak, KDE, Sway, Hyprland), falling back to a
+//! dedicated arboard worker (`rune-primary`) on X11 or Wayland compositors without
+//! `zwp_primary_selection_device_manager_v1` (data-control). Kept separate from the clipboard
+//! worker so primary reads never wait behind clipboard reads and secret holds never see it.
+//! What goes on it and where middle-click pastes live in `runtime/input/primary_selection.rs`.
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 
 use super::*;
+use crate::platform::wayland::primary_selection::wire::{ReadDispatch, WriteDispatch};
 
 enum Request {
     Write(String),
@@ -42,11 +45,32 @@ fn run(requests: mpsc::Receiver<Request>) {
 }
 
 impl Client {
-    /// Hands the worker what the runtime asked of the primary selection.
+    /// Hands the Wayland `zwp_primary_selection_v1` backend (or arboard fallback worker) what
+    /// the runtime asked of the primary selection.
     pub(super) fn flush_primary(&self, rt: &mut crate::runtime::RuntimeCore) {
-        if let Some(text) = rt.edit.primary.write.take() { worker().send(Request::Write(text)).ok(); }
+        if let Some(text) = rt.edit.primary.write.take() {
+            match crate::platform::wayland::primary_selection::wire::try_write(&text) {
+                WriteDispatch::Handled => {}
+                WriteDispatch::Fallback => { worker().send(Request::Write(text)).ok(); }
+            }
+        }
         if let Some(target) = rt.edit.primary.paste.take() {
-            worker().send(Request::Read { target, reply: self.sender.clone(), wake: self.wake.clone() }).ok();
+            let reply_tx = self.sender.clone();
+            let wake_reply = self.wake.clone();
+            let deliver = Box::new(move |target: String, text: String, wake_needed: bool| {
+                if text.is_empty() { return; }
+                let answer = Purpose::Paste(Some(target), Forms::Text)
+                    .reply(Some(ClipboardContent::from(Zeroizing::new(text))));
+                if let Some(answer) = answer && reply_tx.send(answer).is_ok() && wake_needed {
+                    wake_reply();
+                }
+            });
+            match crate::platform::wayland::primary_selection::wire::try_read(target, self.wake.clone(), deliver) {
+                ReadDispatch::Handled => {}
+                ReadDispatch::Fallback(target) => {
+                    worker().send(Request::Read { target, reply: self.sender.clone(), wake: self.wake.clone() }).ok();
+                }
+            }
         }
     }
 }

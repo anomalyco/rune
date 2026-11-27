@@ -7,8 +7,7 @@
 pub(crate) mod binding;
 pub(crate) mod machine;
 pub(crate) mod uri;
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-pub(in crate::platform::wayland) mod pipe;
+
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(in crate::platform::wayland) mod watch;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

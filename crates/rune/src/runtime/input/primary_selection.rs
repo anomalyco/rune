@@ -1,9 +1,10 @@
-//! Linux's primary selection, as Chromium keeps it on X11 and Wayland: the text a pointer
-//! selects (a drag, a double or triple click, Shift+click), in selectable text or a text field,
-//! goes on the primary selection when the button comes up; a middle click in a text field puts
-//! the caret where it landed and pastes the primary selection there. A secure field's text
-//! never goes on it. The clipboard's worker beside it writes and reads it
-//! (`clipboard/primary.rs`), so Cmd/Ctrl+C and Cmd/Ctrl+V never see it.
+//! Linux's primary selection, as Chromium keeps it on X11 and Wayland: text selected by the
+//! pointer (drag, double/triple click, Shift+click) or keyboard (Shift+Arrows, Ctrl+A), in
+//! selectable text, caret browsing, or a text field, goes on the primary selection once per
+//! frame; a middle click in a text field places the caret there and pastes the primary
+//! selection. A secure field's text never goes on it, and collapsing or blurring never clears
+//! it. The Wayland `zwp_primary_selection_v1` backend and arboard fallback worker live in
+//! `platform/wayland/primary_selection` and `clipboard/primary.rs`.
 use std::hash::BuildHasher;
 
 use super::*;
@@ -11,10 +12,11 @@ use super::*;
 /// What the runtime asks of the primary selection, for the clipboard's flush to take.
 #[derive(Default)]
 pub(crate) struct PrimarySelection {
-    /// A primary button came up: after this frame's handlers, what's selected goes on it.
+    /// A pointer release or keyboard selection changed what's selected: coalesced once per frame.
     pending: bool,
     /// A hash of the text last put on it, so a click that leaves the selection as it was
-    /// writes nothing.
+    /// writes nothing. Cleared by [`RuntimeCore::primary_selection_lost`] when another app
+    /// takes primary selection.
     written: Option<u64>,
     /// Text to put on it.
     pub(crate) write: Option<String>,
@@ -28,17 +30,44 @@ impl RuntimeCore {
         self.edit.primary.pending = true;
     }
 
-    /// After a frame's handlers, once the release's caret and selection landed: puts what's
-    /// selected on the primary selection, if it changed.
-    pub(in crate::runtime) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
+    /// A keyboard selection (Shift+Arrows, Ctrl+A) changed what is selected.
+    pub(in crate::runtime) fn primary_selection_changed(&mut self) {
+        self.edit.primary.pending = true;
+    }
+
+    /// Called when the compositor cancels our owned primary-selection source so re-selecting
+    /// identical text publishes it again.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(crate) fn primary_selection_lost(&mut self) {
+        self.edit.primary.written = None;
+    }
+
+    /// Once per frame, after pointer releases and keyboard selection updates have landed: puts
+    /// what's selected on the primary selection, if non-empty and changed.
+    pub(in crate::runtime) fn note_primary_selection(&mut self, app: &mut dyn AppDriver) {
         if !std::mem::take(&mut self.edit.primary.pending) { return; }
         let focused_secure = self.focused_index().is_some_and(|i| {
             std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).any(|k| self.tree.nodes[k].is_secure())
         });
-        let text = match self.focused_input() {
-            Some(input) if focused_secure || input.edit.is_secure() => None,
-            Some(input) => {
-                let text = match &input.pill_copy_text {
+        let focused = self.focused_input().map(|i| (i.edit.is_secure(), i.access.clone(), i.pill_copy_text.clone()));
+        let text = match focused {
+            Some((true, _, _)) => None,
+            Some((_, _, _)) if focused_secure => None,
+            Some((_, Some(access), pill_copy_text)) => {
+                let edit = access(app.states());
+                if edit.is_secure() {
+                    None
+                } else {
+                    let text = match &pill_copy_text {
+                        Some(f) => edit.selected_with_pills(|id| f(id)),
+                        None => edit.selected().to_owned(),
+                    };
+                    (!text.is_empty()).then_some(text)
+                }
+            }
+            Some((_, None, pill_copy_text)) => {
+                let input = self.focused_input().unwrap();
+                let text = match &pill_copy_text {
                     Some(f) => input.edit.selected_with_pills(|id| f(id)),
                     None => input.edit.selected().to_owned(),
                 };

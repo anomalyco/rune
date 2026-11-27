@@ -24,7 +24,7 @@ use crate::platform::wayland::pipe_write::{MAX_PIPE_WRITE_BYTES, PIPE_WRITE_TIME
 use crate::platform::wayland::pipe_write::unix::{WriteCancel, write_fd_bounded};
 use crate::drag_out::DragOutcome;
 use crate::platform::wayland::drop::machine::SurfaceId;
-use crate::platform::wayland::drop::pipe::{DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded};
+use crate::platform::wayland::pipe::unix::{DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded};
 use crate::platform::wayland::drop::watch::WakePool;
 
 pub(in crate::platform::wayland) type Done = Box<dyn FnOnce(DragOutcome)>;

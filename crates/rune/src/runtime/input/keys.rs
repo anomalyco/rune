@@ -95,12 +95,20 @@ impl RuntimeCore {
                     }
                     let layout = self.focused_layout();
                     if self.with_focused(app, |e| e.key_in_read_only(ev, layout.as_ref().map(TextLayout::view)), one) {
+                        #[cfg(any(target_os = "linux", test))]
+                        if ev.edit_command() == Some('a') {
+                            self.primary_selection_changed();
+                        }
                         return true;
                     }
                 }
             } else {
                 let layout = self.focused_layout();
                 if self.with_focused(app, |e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
+                    #[cfg(any(target_os = "linux", test))]
+                    if ev.edit_command() == Some('a') {
+                        self.primary_selection_changed();
+                    }
                     return true;
                 }
             }
@@ -372,10 +380,10 @@ impl RuntimeCore {
             if let Some(line_home_end) = line_home_end_override { edit.set_line_home_end(line_home_end); }
         }
         let before = change.as_ref().map(|_| zeroize::Zeroizing::new(access(app.states()).text.clone()));
-        let before_sel = selection_change.as_ref().map(|_| {
+        let before_sel = {
             let e = access(app.states());
             (e.anchor, e.focus)
-        });
+        };
         let mut out = f(app.states(), &access, tx);
         // Submit and Escape's blur act once per press; held keys still type, move and delete.
         if tx.key_repeat { out.submit = false; out.blur = false; }
@@ -388,13 +396,17 @@ impl RuntimeCore {
             change(app.states(), tx);
             access(app.states()).mark_edited();
         }
-        if let Some(selection_change) = selection_change {
-            let after_sel = {
-                let e = access(app.states());
-                (e.anchor, e.focus)
-            };
-            if before_sel != Some(after_sel) {
+        let after_sel = {
+            let e = access(app.states());
+            (e.anchor, e.focus)
+        };
+        if before_sel != after_sel {
+            if let Some(selection_change) = selection_change {
                 selection_change(app.states(), tx);
+            }
+            #[cfg(any(target_os = "linux", test))]
+            if !secure && after_sel.0 != after_sel.1 {
+                self.primary_selection_changed();
             }
         }
         if let Some(c) = out.copy {

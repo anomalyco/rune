@@ -711,6 +711,10 @@ impl RuntimeCore {
         if target.shift && let Some(anchor_end) = self.selection_holder_end() {
             let far = (EndRef::Mounted(dest_node) != anchor_end).then(|| phase::Far::new(dest_path, dest_content));
             self.select_step(phase::Event::SetFocus { focus: dest_byte, far });
+            #[cfg(any(target_os = "linux", test))]
+            if self.has_nonempty_selection() {
+                self.primary_selection_changed();
+            }
         } else {
             self.select_step(phase::Event::Select(phase::Selection::new(
                 dest_path,

@@ -47,18 +47,7 @@ impl ReadPhase {
     }
 }
 
-/// Result of one background pipe read for `text/uri-list`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReadOutcome {
-    /// Pipe reached EOF within `MAX_URI_LIST_BYTES`.
-    Bytes(Vec<u8>),
-    /// Peer wrote more than `MAX_URI_LIST_BYTES`; the pipe was closed early.
-    TooLarge,
-    /// Peer did not finish writing before the phase deadline.
-    TimedOut,
-    /// Pipe creation, worker spawn, or read failed.
-    Error,
-}
+pub(crate) use crate::platform::wayland::pipe::ReadOutcome;
 
 /// Bit values of `wl_data_device_manager.dnd_action` from the Wayland core protocol.
 #[cfg(test)]
@@ -652,100 +641,5 @@ impl WindowMap {
 }
 
 pub(crate) use super::uri::parse_uri_list;
-
-/// Bounded, cancellable, deadline-enforced pipe read loop, kept cross-platform so timeouts,
-/// size bounds, cancellation, and `EINTR`/`WouldBlock` retries run unit tests on every host.
-pub(crate) mod pipe_read {
-    use std::time::Duration;
-
-    use super::ReadOutcome;
-    use crate::time::Instant;
-
-    /// Converts a non-zero remaining duration into a positive millisecond timeout for `poll(2)`,
-    /// rounding sub-millisecond remainders up to 1 ms and clamping to `i32::MAX`.
-    pub(crate) fn timeout_ms(remaining: Duration) -> i32 {
-        let millis = remaining.as_millis();
-        let rounded = if remaining.subsec_nanos() % 1_000_000 != 0 {
-            millis.saturating_add(1)
-        } else {
-            millis
-        };
-        rounded.clamp(1, i32::MAX as u128) as i32
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum Poll {
-        Readable,
-        Cancelled,
-        TimedOut,
-        Interrupted,
-        Error,
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum Read {
-        Bytes(usize),
-        Eof,
-        WouldBlock,
-        Interrupted,
-        Error,
-    }
-
-    pub(crate) trait Driver {
-        fn now(&mut self) -> Instant;
-        fn cancelled(&self) -> bool;
-        fn poll(&mut self, timeout_ms: i32) -> Poll;
-        fn read(&mut self, buf: &mut [u8]) -> Read;
-    }
-
-    /// Reads up to `max_bytes` from `driver` within `timeout`. Returns `None` when cancelled,
-    /// `Some(ReadOutcome::TooLarge)` as soon as the peer sends byte `max_bytes + 1`, and
-    /// `Some(ReadOutcome::TimedOut)` when `timeout` elapses before EOF.
-    pub(crate) fn read_bounded<D: Driver>(
-        driver: &mut D,
-        max_bytes: usize,
-        timeout: Duration,
-    ) -> Option<ReadOutcome> {
-        let deadline = driver.now() + timeout;
-        let mut out = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            if driver.cancelled() {
-                return None;
-            }
-            let remaining = deadline.saturating_duration_since(driver.now());
-            if remaining.is_zero() {
-                return Some(ReadOutcome::TimedOut);
-            }
-            match driver.poll(timeout_ms(remaining)) {
-                Poll::Cancelled => return None,
-                Poll::Interrupted => continue,
-                Poll::TimedOut => {
-                    if driver.now() >= deadline {
-                        return Some(ReadOutcome::TimedOut);
-                    }
-                    continue;
-                }
-                Poll::Error => return Some(ReadOutcome::Error),
-                Poll::Readable => loop {
-                    if driver.cancelled() {
-                        return None;
-                    }
-                    let cap = (max_bytes - out.len()).saturating_add(1).min(chunk.len());
-                    match driver.read(&mut chunk[..cap]) {
-                        Read::Bytes(0) | Read::Eof => return Some(ReadOutcome::Bytes(out)),
-                        Read::Bytes(n) => {
-                            if out.len() + n > max_bytes {
-                                return Some(ReadOutcome::TooLarge);
-                            }
-                            out.extend_from_slice(&chunk[..n]);
-                        }
-                        Read::WouldBlock => break,
-                        Read::Interrupted => continue,
-                        Read::Error => return Some(ReadOutcome::Error),
-                    }
-                },
-            }
-        }
-    }
-}
+#[cfg(test)]
+pub(crate) use crate::platform::wayland::pipe as pipe_read;
