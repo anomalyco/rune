@@ -264,6 +264,30 @@ impl GestureOwners {
     }
 }
 
+/// Basis for caching [`crate::el::HoverSnapshot`] on [`PointerState`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::runtime) struct HoverBasis {
+    pub(in crate::runtime) commits: u64,
+    pub(in crate::runtime) commit_gen: u64,
+    pub(in crate::runtime) build_gen: u64,
+    pub(in crate::runtime) built: bool,
+    pub(in crate::runtime) pos: Option<(u32, u32)>,
+    pub(in crate::runtime) pressing: bool,
+    pub(in crate::runtime) press_inside: bool,
+    pub(in crate::runtime) secondary_held: bool,
+    pub(in crate::runtime) captured: Option<String>,
+    pub(in crate::runtime) held: bool,
+    pub(in crate::runtime) modal: Option<usize>,
+}
+
+/// Cached [`crate::el::HoverSnapshot`] plus the last snapshot computed on built frame geometry.
+#[derive(Default)]
+pub(in crate::runtime) struct HoverCache {
+    pub(in crate::runtime) basis: Option<HoverBasis>,
+    pub(in crate::runtime) snapshot: Option<std::rc::Rc<crate::el::HoverSnapshot>>,
+    pub(in crate::runtime) last_built: Option<(Option<(u32, u32)>, std::rc::Rc<crate::el::HoverSnapshot>)>,
+}
+
 /// Currently hovered link reported to a text node's [`crate::El::on_link_hover`] handler.
 #[derive(Clone)]
 pub(in crate::runtime) struct HoveredLink {
@@ -333,6 +357,10 @@ pub(in crate::runtime) struct PointerState {
     pub(super) pointer_lock: super::pointer_lock::PointerLock,
     /// Locked owners for phased magnify, rotate, and touch-wheel gestures (`runtime/input/gesture.rs`).
     pub(super) gesture_owners: GestureOwners,
+    /// Path of the topmost live hover hit (`top_hover_hit`), held across `HoverHold`.
+    pub(in crate::runtime) hover_hit: Option<String>,
+    /// Cached `Tx::hovered` / `Tx::is_hovered` snapshot keyed by pointer, capture, modal and build.
+    pub(in crate::runtime) hover_cache: std::cell::RefCell<HoverCache>,
 }
 
 impl PointerState {
@@ -369,7 +397,20 @@ impl PointerState {
             other_buttons_down: Vec::new(),
             pointer_lock: super::pointer_lock::PointerLock::new(),
             gesture_owners: GestureOwners::default(),
+            hover_hit: None,
+            hover_cache: std::cell::RefCell::new(HoverCache::default()),
         }
+    }
+
+    /// Drops any cached hover snapshot (called when the pointer leaves or a modal cancels hover).
+    #[inline]
+    pub(in crate::runtime) fn clear_hover_cache(&self) {
+        *self.hover_cache.borrow_mut() = HoverCache::default();
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn hover_held(&self) -> bool {
+        self.hover_hold.held()
     }
 
     const BTN_PRIMARY: u8 = 1 << 0;
@@ -437,7 +478,7 @@ impl PointerState {
     }
 
     #[inline]
-    pub(super) fn captured_path(&self) -> Option<&str> {
+    pub(in crate::runtime) fn captured_path(&self) -> Option<&str> {
         self.press.path().or(self.secondary.path())
     }
 
@@ -560,7 +601,7 @@ impl PointerState {
     }
 
     #[inline]
-    pub(super) fn secondary_held(&self) -> bool { self.secondary.is_held() }
+    pub(in crate::runtime) fn secondary_held(&self) -> bool { self.secondary.is_held() }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     #[inline]

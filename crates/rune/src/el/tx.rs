@@ -7,11 +7,14 @@ use rune_motion::{Anim, Spring};
 use crate::el::*;
 
 mod elements;
+mod hover;
 mod keys;
 mod pick;
 mod press;
 mod rects;
 mod scroll;
+
+pub(crate) use hover::{HoverSnapshot, innermost_key as innermost_hover_key};
 
 #[cfg(test)]
 mod tests;
@@ -38,6 +41,8 @@ pub struct Tx {
     pub(crate) focused_path: Option<String>,
     /// Focused inline link id (when focus sits on a [`Link`](crate::Link)), for [`Tx::focus_within`].
     pub(crate) focused_link: Option<String>,
+    /// Hovered element(s) and link snapshot, for [`Tx::hovered`] and [`Tx::is_hovered`].
+    pub(crate) hover: Option<Rc<HoverSnapshot>>,
     /// What this change does with motion ([`Tx::instant`], [`Tx::animated`], [`Tx::settle`]).
     pub(crate) commit: Commit,
     /// The motion this change's layout moves on ([`Tx::motion`], [`Tx::motion_curve`]).

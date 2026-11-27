@@ -215,6 +215,8 @@ impl RuntimeCore {
                     if !self.cancel_drag() { self.drop_press(); }
                     self.pointer.clear_secondary();
                     self.pointer.hovered = None;
+                    self.pointer.hover_hit = None;
+                    self.pointer.clear_hover_cache();
                 }
                 ModalEffect::FocusInitial => {
                     if let Some(target) = self.modal_initial_focus() {

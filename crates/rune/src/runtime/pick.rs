@@ -320,3 +320,179 @@ impl RuntimeCore {
         data
     }
 }
+
+impl RuntimeCore {
+    /// Snapshot of what the pointer hovers for [`Tx::hovered`] and [`Tx::is_hovered`], cached
+    /// until pointer, capture, modal, layout or commit state changes.
+    pub(in crate::runtime) fn hover_snapshot(&self) -> Option<Rc<crate::el::HoverSnapshot>> {
+        if self.pointer.left() || self.pointer.is_touch_input() { return None; }
+        let (x, y) = self.pointer.pos.filter(|&(x, y)| self.in_viewport(x, y))?;
+        let held = self.pointer.hover_held() && !self.pointer.captured();
+        let pos = Some((x.to_bits(), y.to_bits()));
+        let basis = crate::runtime::input::capture::HoverBasis {
+            commits: self.commit.commits,
+            commit_gen: self.commit.commit_gen(),
+            build_gen: self.tree.build_gen,
+            built: self.tree.built,
+            pos,
+            pressing: self.pointer.pressing(),
+            press_inside: self.pointer.press_inside(),
+            secondary_held: self.pointer.secondary_held(),
+            captured: self.pointer.captured_path().map(str::to_owned),
+            held,
+            modal: self.active_modal(),
+        };
+        {
+            let cache = self.pointer.hover_cache.borrow();
+            if cache.basis.as_ref() == Some(&basis) {
+                return cache.snapshot.clone();
+            }
+        }
+        let snapshot = if held || !self.tree.built {
+            let last = self.pointer.hover_cache.borrow().last_built.clone()
+                .filter(|(p, _)| *p == pos)
+                .map(|(_, s)| s);
+            self.live_hover_snapshot(last.as_deref(), !self.tree.built && !held)
+        } else {
+            self.compute_hover_snapshot(x, y)
+        }.map(Rc::new);
+        let mut cache = self.pointer.hover_cache.borrow_mut();
+        if self.tree.built && !held {
+            cache.last_built = snapshot.clone().map(|s| (pos, s));
+        }
+        cache.basis = Some(basis);
+        cache.snapshot = snapshot.clone();
+        snapshot
+    }
+
+    fn node_visually_contains(&self, i: usize, x: f32, y: f32) -> bool {
+        !self.subtree_exiting(i)
+            && !self.subtree_unmounted(i)
+            && self.allowed(i)
+            && !self.tree.nodes[i].focus.hover_below
+            && self.paint.drawn.get(i).is_some()
+            && self.paint.inh_scratch.get(i).is_some_and(|h| h.opacity > 0.001)
+            && self.node_contains(i, x, y)
+    }
+
+    fn hovered_link_at(&self, i: usize, x: f32, y: f32) -> Option<(String, String)> {
+        if self.node_disabled(i) { return None; }
+        let k = self.link_at(i, x, y)?;
+        let id = self.tree.nodes[i].text.as_deref()?.cold.links.get(k)?.id.clone();
+        Some((self.tree.nodes[i].path.clone(), id))
+    }
+
+    fn push_hover_leaf(paths: &mut Vec<String>, path: &str) {
+        if paths.iter().any(|p| super::hover::holds(path, p)) { return; }
+        paths.retain(|p| !super::hover::holds(p, path));
+        paths.push(path.to_owned());
+    }
+
+    fn collect_keyed_descendants(&self, root: usize, x: f32, y: f32, paths: &mut Vec<String>) {
+        let end = (root + 1..self.tree.nodes.len())
+            .take_while(|&j| self.tree.is_descendant(j, root))
+            .last();
+        let Some(end) = end else { return };
+        let mut found: Vec<usize> = (root + 1..=end)
+            .rev()
+            .filter(|&j| self.tree.nodes[j].key.is_some() && self.node_visually_contains(j, x, y))
+            .collect();
+        let order = self.paint.layer_paint_order();
+        if found.len() > 1 && !order.is_empty() {
+            found.sort_by_key(|&j| std::cmp::Reverse(order.iter().position(|&o| o == j).unwrap_or(0)));
+        }
+        for j in found {
+            Self::push_hover_leaf(paths, &self.tree.nodes[j].path);
+        }
+    }
+
+    fn compute_hover_snapshot(&self, x: f32, y: f32) -> Option<crate::el::HoverSnapshot> {
+        let mut paths = Vec::new();
+        let mut link = None;
+        let mut hit = false;
+        if let Some(cap) = self.pointer.captured_path() {
+            let cap_i = self.hover_live(cap)?;
+            let cap_on = if self.pointer.pressing() {
+                self.pointer.press_inside()
+            } else {
+                self.node_visually_contains(cap_i, x, y)
+            };
+            if cap_on {
+                hit = true;
+                link = self.hovered_link_at(cap_i, x, y);
+                self.collect_keyed_descendants(cap_i, x, y, &mut paths);
+                if paths.is_empty() {
+                    paths.push(self.tree.nodes[cap_i].path.clone());
+                }
+            } else if let Some(a) = std::iter::successors(self.tree.nodes[cap_i].parent, |&p| self.tree.nodes[p].parent)
+                .find(|&a| self.node_visually_contains(a, x, y))
+                && crate::el::innermost_hover_key(&self.tree.nodes[a].path).is_some()
+            {
+                paths.push(self.tree.nodes[a].path.clone());
+            }
+        } else if let Some(t) = self.top_hover_hit(x, y) {
+            hit = true;
+            link = self.hovered_link_at(t, x, y);
+            self.collect_keyed_descendants(t, x, y, &mut paths);
+            if paths.is_empty() {
+                paths.push(self.tree.nodes[t].path.clone());
+            }
+        } else {
+            let order = self.paint.layer_paint_order();
+            let count = if order.is_empty() { self.tree.nodes.len() } else { order.len() };
+            for rev in (0..count).rev() {
+                let i = if order.is_empty() { rev } else { order[rev] };
+                if self.tree.nodes[i].key.is_some() && self.node_visually_contains(i, x, y) {
+                    Self::push_hover_leaf(&mut paths, &self.tree.nodes[i].path);
+                }
+            }
+        }
+        if paths.is_empty() && link.is_none() { return None; }
+        let key = link.as_ref().map(|(_, id)| id.clone())
+            .or_else(|| paths.iter().find_map(|p| crate::el::innermost_hover_key(p)))
+            .or_else(|| hit.then(|| paths.first().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned())).flatten());
+        Some(crate::el::HoverSnapshot { key, paths, link })
+    }
+
+    fn live_hover_snapshot(&self, prev: Option<&crate::el::HoverSnapshot>, allow_ancestors: bool) -> Option<crate::el::HoverSnapshot> {
+        let mut paths = Vec::new();
+        let mut keep = |p: &str| {
+            if self.hover_live(p).is_some() {
+                Self::push_hover_leaf(&mut paths, p);
+            } else if allow_ancestors {
+                let mut cur = p;
+                while let Some((above, _)) = cur.rsplit_once('/') {
+                    if self.hover_live(above).is_some() && crate::el::innermost_hover_key(above).is_some() {
+                        Self::push_hover_leaf(&mut paths, above);
+                        break;
+                    }
+                    cur = above;
+                }
+            }
+        };
+        let mut link = None;
+        if let Some(prev) = prev {
+            for p in &prev.paths { keep(p); }
+            if let Some((p, id)) = prev.link.as_ref()
+                && self.hover_live(p).is_some_and(|i| !self.node_disabled(i))
+            {
+                link = Some((p.clone(), id.clone()));
+            }
+        } else {
+            if let Some(p) = self.pointer.hover_hit.as_deref() { keep(p); }
+            if let Some(p) = self.pointer.hovered.as_deref() { keep(p); }
+            for p in &self.pointer.hover_within { keep(p); }
+            if let Some(l) = self.pointer.link_hover.as_deref()
+                && self.hover_live(&l.path).is_some_and(|i| !self.node_disabled(i))
+            {
+                link = Some((l.path.clone(), l.link_id.clone()));
+            }
+        }
+        if paths.is_empty() && link.is_none() { return None; }
+        let unkeyed_hit = self.pointer.hover_hit.as_deref().is_some_and(|p| self.hover_live(p).is_some());
+        let key = link.as_ref().map(|(_, id)| id.clone())
+            .or_else(|| paths.iter().find_map(|p| crate::el::innermost_hover_key(p)))
+            .or_else(|| unkeyed_hit.then(|| paths.first().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned())).flatten());
+        Some(crate::el::HoverSnapshot { key, paths, link })
+    }
+}

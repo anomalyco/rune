@@ -693,6 +693,7 @@ impl RuntimeCore {
         if asked.is_none() && let Some(owed) = waits { self.kbd.focus_owed = Some(owed); }
         let old_path = self.kbd.focus.owned();
         let moved = old_path.as_deref() != next.as_deref();
+        let was_built = std::mem::replace(&mut self.tree.built, false);
         std::mem::swap(&mut self.tree.nodes, nodes);
         self.nodes_replaced();
         let mut changed = self.set_focus_entry(app, next, keyboard, keep_entry, true);
@@ -709,6 +710,7 @@ impl RuntimeCore {
         }
         let cb = if moved { self.notify_focus_change(app, old_path.as_deref(), Some(nodes)) } else { None };
         std::mem::swap(&mut self.tree.nodes, nodes);
+        self.tree.built = was_built;
         self.nodes_replaced();
         if let Some((dirty, mut cb_tx)) = cb {
             changed |= dirty;
