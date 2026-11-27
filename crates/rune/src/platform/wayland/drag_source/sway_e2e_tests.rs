@@ -43,7 +43,7 @@ use super::machine::DragId;
 use super::mime::{DND_ACTION_COPY, DND_ACTION_MOVE, assemble_offers};
 use super::wire::DragSourceWire;
 use crate::drag_out::{DragImage, DragOutcome};
-use crate::platform::wayland::drop::pipe::make_pipe;
+use crate::platform::wayland::pipe::unix::make_pipe;
 use crate::platform::wayland::drop::watch::WakePool;
 use crate::platform::wayland::serial;
 

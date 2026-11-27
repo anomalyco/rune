@@ -264,6 +264,10 @@ pub(crate) trait AnyHost {
     /// Whether this host has unread platform events already queued in memory (for example a
     /// Wayland layer surface whose queue filled during a mid-turn read).
     fn has_pending_platform_events(&self) -> bool { false }
+    /// Called when the Wayland compositor cancels our owned primary-selection source so the
+    /// runtime clears its last-written dedup hash.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn primary_selection_lost(&mut self) {}
     /// The turn ends: the next frame it wants is asked for, or a paint put off runs (`redraw`).
     fn turn_ends(&mut self, _event_loop: &ActiveEventLoop, _now: Instant) {}
     fn finished(&self) -> bool { false }
@@ -678,6 +682,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
                     return;
                 }
             };
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if matches!(event, WakeEvent::App(_)) {
+                crate::platform::wayland::primary_selection::wire::drain_completed_reads(false);
+            }
             if let Some(Some(host)) = this.hosts.get_mut(slot) {
                 host.user_event(event_loop, event);
             }
@@ -745,6 +753,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let wayland = is_wayland(event_loop);
             if wayland && !event_loop.exiting() {
                 display_queue::dispatch_pending();
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if crate::platform::wayland::primary_selection::wire::dispatch_pending() {
+                    for host in this.hosts.iter_mut().flatten() {
+                        host.primary_selection_lost();
+                    }
+                }
             }
             // A window or overlay that closed, or an overlay queued via `AppHandle::overlay`,
             // is reconciled before the loop sleeps.
@@ -755,11 +769,22 @@ impl ApplicationHandler<WakeEvent> for Windows {
             // putting off behind another window's.
             let now = crate::time::now();
             for host in this.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            let primary_watch = wayland
+                && !event_loop.exiting()
+                && crate::platform::wayland::primary_selection::wire::needs_wake_on_read();
+            #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+            let primary_watch = false;
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            let primary_pending = primary_watch
+                && crate::platform::wayland::primary_selection::wire::has_pending_events();
+            #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+            let primary_pending = false;
             let has_display_watch = wayland
                 && !event_loop.exiting()
-                && (display_queue::has_watches() || this.display_watch.needs_wayland_wake());
+                && (display_queue::has_watches() || this.display_watch.needs_wayland_wake() || primary_watch);
             let has_pending_display = has_display_watch
-                && (display_queue::has_pending() || this.display_watch.has_pending_wayland_events());
+                && (display_queue::has_pending() || this.display_watch.has_pending_wayland_events() || primary_pending);
             let effects = wayland_wake::about_to_wait(&mut this.wayland_wake, &this.hosts, has_display_watch, has_pending_display);
             this.apply_wayland_wake(event_loop, effects);
             // Layer surfaces have no redraw events: keep turning while one animates (its vsync
@@ -828,9 +853,11 @@ impl ApplicationHandler<WakeEvent> for Windows {
             || {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 {
+                    crate::platform::wayland::primary_selection::wire::shutdown();
                     crate::platform::wayland::drop::shutdown();
                     crate::platform::wayland::backdrop::shutdown();
                     crate::platform::wayland::presentation::shutdown();
+                    crate::platform::wayland::serial::wire::shutdown();
                 }
                 crate::marks::mark("windows.dropped");
                 crate::clipboard::shutdown();

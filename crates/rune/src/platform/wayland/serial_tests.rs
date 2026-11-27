@@ -102,3 +102,25 @@ fn buffered_press_in_private_queue_supersedes_previous_press_when_drained_before
     let used = s.drain_pending_and_read(55, buffered_private_queue);
     assert_eq!(used, Some(CapturedSerial { seat: 1, serial: 20, kind: InputKind::Pointer }));
 }
+
+#[test]
+fn buffered_keyboard_and_pointer_release_update_selection_serial_without_overwriting_drag_press() {
+    let mut s = SerialState::default();
+    step(&mut s, SerialEvent::Capabilities { seat: 1, pointer: true, touch: false, keyboard: true });
+    step(&mut s, SerialEvent::PointerEnter { seat: 1, surface: 70 });
+    step(&mut s, SerialEvent::PointerButton { seat: 1, serial: 100, pressed: true });
+    assert_eq!(s.latest_for_surface(70), Some(CapturedSerial { seat: 1, serial: 100, kind: InputKind::Pointer }));
+    assert_eq!(s.latest_input(), Some(CapturedSerial { seat: 1, serial: 100, kind: InputKind::Pointer }));
+
+    // Pointer release updates latest_input for primary selection while keeping drag press serial 100.
+    step(&mut s, SerialEvent::PointerButton { seat: 1, serial: 101, pressed: false });
+    assert_eq!(s.latest_input(), Some(CapturedSerial { seat: 1, serial: 101, kind: InputKind::Pointer }));
+    assert_eq!(s.latest_for_surface(70), Some(CapturedSerial { seat: 1, serial: 100, kind: InputKind::Pointer }));
+
+    // Keyboard press and release (Shift+Arrow / Ctrl+A) advance latest_input without touching drag press.
+    step(&mut s, SerialEvent::KeyboardKey { seat: 1, serial: 200, pressed: true });
+    assert_eq!(s.latest_input(), Some(CapturedSerial { seat: 1, serial: 200, kind: InputKind::Keyboard }));
+    step(&mut s, SerialEvent::KeyboardKey { seat: 1, serial: 201, pressed: false });
+    assert_eq!(s.latest_input(), Some(CapturedSerial { seat: 1, serial: 201, kind: InputKind::Keyboard }));
+    assert_eq!(s.latest_for_surface(70), Some(CapturedSerial { seat: 1, serial: 100, kind: InputKind::Pointer }));
+}

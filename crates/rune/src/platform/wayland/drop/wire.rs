@@ -31,7 +31,7 @@ use super::machine::{
     self, Effect, Event, MAX_URI_LIST_BYTES, OfferId, OfferSet, ReadOutcome, ReadPhase,
     SelectedAction, State, SurfaceId, URI_LIST_MIME, WindowMap, WindowToken,
 };
-use super::pipe::{CancelToken, DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded, make_pipe, read_fd_bounded};
+use crate::platform::wayland::pipe::unix::{CancelToken, DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded, make_pipe, read_fd_bounded};
 use super::watch::{WakePool, WaylandWatch, destroy_globals, wayland_ids, wayland_surface_id};
 use crate::drag_out::DragOutcome;
 use crate::machine::{Attempt, Seq};

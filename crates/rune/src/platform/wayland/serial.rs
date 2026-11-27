@@ -130,7 +130,7 @@ impl SerialState {
 
     /// Returns the most recent input serial across all seats (pointer press/release, keyboard
     /// press/release, or touch down), for selection requests such as `set_selection`.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(crate) fn latest_input(&self) -> Option<CapturedSerial> {
         let mut best: Option<(u64, CapturedSerial)> = None;
         for (&seat, info) in &self.seats {
@@ -333,10 +333,24 @@ pub(crate) mod wire {
         })
     }
 
+    /// Returns `true` when at least one unwatched serial listener is attached on this thread.
+    pub(crate) fn has_listeners() -> bool {
+        LISTENERS.try_with(|map| !map.borrow().is_empty()).unwrap_or(false)
+    }
+
     /// Non-blocking drain of the unwatched serial event queue for `window`'s display.
     pub(crate) fn drain_window(window: &winit::window::Window) {
         let Some((display_ptr, _)) = wayland_ids(window) else { return };
         drain_display(display_ptr);
+    }
+
+    /// Non-blocking drain of all active unwatched serial event queues on this thread.
+    pub(crate) fn drain_all() {
+        LISTENERS.try_with(|map| {
+            for listener in map.borrow_mut().values_mut() {
+                listener.drain_pending();
+            }
+        }).ok();
     }
 
     /// Non-blocking drain of the unwatched serial event queue for `display_ptr`.
@@ -363,7 +377,7 @@ pub(crate) mod wire {
 
     /// Dispatches already-read events sitting in the private serial queue (non-blocking
     /// `dispatch_pending`) and returns the latest pointer, keyboard, or touch serial.
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn latest_input(display_ptr: usize) -> Option<CapturedSerial> {
         LISTENERS.try_with(|map| {
             let mut map = map.borrow_mut();

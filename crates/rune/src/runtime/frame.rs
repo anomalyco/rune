@@ -453,8 +453,6 @@ impl RuntimeCore {
                 &mut ran_other,
             );
         }
-        #[cfg(target_os = "linux")]
-        self.note_primary_selection(app);
         let mut end_of_frame = EndOfFrameRequests::take_from(&mut tx);
         self.latch_requests(app, &mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
@@ -558,6 +556,8 @@ impl RuntimeCore {
         if self.edit.selectable.pending_move.is_seeking() {
             self.drive_pending_caret(app);
         }
+        #[cfg(target_os = "linux")]
+        self.note_primary_selection(app);
         if defer_shift && self.commit.commits == commits_before_scroll && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
         }

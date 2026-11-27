@@ -51,6 +51,15 @@ impl RuntimeCore {
 
     /// Cmd+A when nothing else took it: selects all of `select_all_target`.
     pub(in crate::runtime) fn select_all_key(&mut self, app: &dyn ViewDriver) -> bool {
+        let selected = self.select_all_inner(app);
+        #[cfg(any(target_os = "linux", test))]
+        if selected && self.has_nonempty_selection() {
+            self.primary_selection_changed();
+        }
+        selected
+    }
+
+    fn select_all_inner(&mut self, app: &dyn ViewDriver) -> bool {
         if let Some(h @ selectable::virtual_selection::EndRef::Offscreen(vi, _)) = self.selection_holder_end() {
             match self.end_group_path(h).map(str::to_owned) {
                 None => {

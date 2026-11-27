@@ -221,9 +221,11 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     let warm_shutdown = crate::render::shutdown_prewarm();
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
+        crate::platform::wayland::primary_selection::wire::shutdown();
         crate::platform::wayland::drop::shutdown();
         crate::platform::wayland::backdrop::shutdown();
         crate::platform::wayland::presentation::shutdown();
+        crate::platform::wayland::serial::wire::shutdown();
     }
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();

@@ -40,6 +40,11 @@ impl AnyHost for Host {
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn primary_selection_lost(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.app.rt_mut().primary_selection_lost();
+    }
     fn finished(&self) -> bool { self.life.finished() }
     fn has_pending_overlays(&self) -> bool { self.shared.has_overlays() }
     fn take_pending_overlays(&mut self) -> Vec<Box<dyn crate::overlay::PendingOverlay>> {

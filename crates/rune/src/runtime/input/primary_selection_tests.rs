@@ -174,8 +174,8 @@ fn secure_textbox_wrapper_never_takes_or_gives_primary_selection() {
     // Selecting text inside any secure field never publishes it to the primary selection.
     let note_release = |rt: &mut Runtime<State>| {
         rt.core_mut().primary_released();
-        let (core, app) = rt.split_mut();
-        core.note_primary_selection(&app);
+        let (core, mut app) = rt.split_mut();
+        core.note_primary_selection(&mut app);
     };
     for (box_key, select_fn) in [
         ("masked-box", (|s: &mut State| s.masked.set_selection(0, s.masked.text.len())) as fn(&mut State)),
@@ -338,4 +338,183 @@ fn middle_click_on_nested_button_or_ambiguous_textbox_does_not_paste() {
     linux_middle_click(&mut rt, amb[0] + 4.0, amb[1] + 4.0);
     assert!(!rt.state.first.focused && !rt.state.second.focused);
     assert!(rt.core().edit.primary.paste.is_none());
+}
+
+
+fn key_ev(key: crate::Key, mods: crate::edit::Mods) -> crate::KeyEvent {
+    crate::KeyEvent { key, mods }
+}
+
+fn run_note_primary<S: 'static>(rt: &mut Runtime<S>) {
+    let (core, mut app) = rt.split_mut();
+    core.note_primary_selection(&mut app);
+}
+
+#[test]
+fn keyboard_shift_arrows_and_ctrl_a_in_inputs_and_readonly_publish_and_coalesce() {
+    struct State {
+        editable: TextEdit,
+        read_only: TextEdit,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().w_full().h_full().gap(8.0).padding(8.0)
+            .child(text_input(&s.editable, style()).single_line().key("ed").w(200.0).on_edit(|s: &mut State| &mut s.editable))
+            .child(text_input(&s.read_only, style()).single_line().read_only(true).key("ro").w(200.0).on_edit(|s: &mut State| &mut s.read_only))
+    }
+
+    let mut rt = Runtime::new(
+        State { editable: TextEdit::new("hello world"), read_only: TextEdit::new("readonly text") },
+        view,
+        (300.0, 160.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // Focus editable input at start.
+    let ed_r = rect_of(&rt, "ed");
+    rt.pointer_down(ed_r[0] + 1.0, ed_r[1] + ed_r[3] * 0.5);
+    rt.pointer_up(ed_r[0] + 1.0, ed_r[1] + ed_r[3] * 0.5);
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    // Multiple Shift+Right presses in one frame coalesce into a single primary write ("hel").
+    let shift = crate::edit::Mods { shift: true, ..Default::default() };
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("hel"));
+
+    // Collapsing selection with plain Right must NOT overwrite or clear primary selection.
+    rt.key(key_ev(crate::Key::Right, crate::edit::Mods::default()));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    // Ctrl+A selects all and publishes to primary selection.
+    let cmd = crate::edit::Mods { cmd: true, ..Default::default() };
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("hello world"));
+
+    // Pressing Ctrl+A again while still owning the same text deduplicates (no write).
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    // External app takes primary selection -> primary_selection_lost() clears written hash so
+    // re-selecting identical text via Ctrl+A publishes it again.
+    rt.core_mut().primary_selection_lost();
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("hello world"));
+
+    // Read-only input: click to focus, Shift+Right and Ctrl+A also publish to primary selection.
+    let ro_r = rect_of(&rt, "ro");
+    rt.pointer_down(ro_r[0] + 1.0, ro_r[1] + ro_r[3] * 0.5);
+    rt.pointer_up(ro_r[0] + 1.0, ro_r[1] + ro_r[3] * 0.5);
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none(), "blur/focus click must not overwrite primary selection");
+
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("re"));
+
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("readonly text"));
+}
+
+#[test]
+fn keyboard_selection_in_secure_field_never_writes_primary_selection() {
+    struct State {
+        secret: TextEdit,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().w_full().h_full().padding(8.0)
+            .child(text_input(&s.secret, style()).single_line().secure().key("sec").w(200.0).on_edit(|s: &mut State| &mut s.secret))
+    }
+
+    let mut rt = Runtime::new(State { secret: TextEdit::new("hunter2") }, view, (260.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let sec_r = rect_of(&rt, "sec");
+    rt.pointer_down(sec_r[0] + 1.0, sec_r[1] + sec_r[3] * 0.5);
+    rt.pointer_up(sec_r[0] + 1.0, sec_r[1] + sec_r[3] * 0.5);
+    rt.frame(1.0 / 60.0);
+
+    let shift = crate::edit::Mods { shift: true, ..Default::default() };
+    let cmd = crate::edit::Mods { cmd: true, ..Default::default() };
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+}
+
+#[test]
+fn keyboard_selection_in_caret_browsing_and_selectable_text_publishes_to_primary() {
+    struct State;
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        col().w_full().h_full().gap(12.0).padding(8.0)
+            .child(crate::text("caret doc").selectable(true).caret_browsing(true).key("cb"))
+            .child(crate::text("plain selectable").selectable(true).key("plain"))
+    }
+
+    let mut rt = Runtime::new(State, view, (320.0, 140.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Click caret-browsing host at start, then Shift+Right twice -> publishes "ca".
+    let cb_r = rect_of(&rt, "cb");
+    rt.pointer_down(cb_r[0] + 1.0, cb_r[1] + cb_r[3] * 0.5);
+    rt.pointer_up(cb_r[0] + 1.0, cb_r[1] + cb_r[3] * 0.5);
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    let shift = crate::edit::Mods { shift: true, ..Default::default() };
+    let cmd = crate::edit::Mods { cmd: true, ..Default::default() };
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.key(key_ev(crate::Key::Right, shift));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("ca"));
+
+    // Ctrl+A in caret-browsing host publishes full text.
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("caret doc"));
+
+    // Click plain selectable text to pick it, Ctrl+A selects all and publishes to primary.
+    let pl_r = rect_of(&rt, "plain");
+    rt.pointer_down(pl_r[0] + 1.0, pl_r[1] + pl_r[3] * 0.5);
+    rt.pointer_up(pl_r[0] + 1.0, pl_r[1] + pl_r[3] * 0.5);
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert!(rt.core().edit.primary.write.is_none());
+
+    rt.key(key_ev(crate::Key::Command('a'), cmd));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("plain selectable"));
+
+    // Plain Shift+Left shrinks the active selectable text selection and updates primary selection.
+    rt.key(key_ev(crate::Key::Left, shift));
+    rt.frame(1.0 / 60.0);
+    run_note_primary(&mut rt);
+    assert_eq!(rt.core_mut().edit.primary.write.take().as_deref(), Some("plain selectabl"));
 }

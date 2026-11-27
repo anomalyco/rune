@@ -705,6 +705,10 @@ impl Host {
                 if rt.stale() { l.request_redraw(); }
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 let pressed = event.state == ElementState::Pressed;
                 self.observability.report_key(
                     pressed,
@@ -762,7 +766,7 @@ impl Host {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                if l.native.drag_serial.is_some() {
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
                     crate::platform::wayland::serial::wire::drain_window(&l.window);
                 }
                 let input_scale = app.rt().input_scale();
@@ -794,7 +798,7 @@ impl Host {
             }
             WindowEvent::Touch(touch) => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                if l.native.drag_serial.is_some() {
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
                     crate::platform::wayland::serial::wire::drain_window(&l.window);
                 }
                 #[cfg(target_os = "macos")]
@@ -815,7 +819,7 @@ impl Host {
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                if l.native.drag_serial.is_some() {
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
                     crate::platform::wayland::serial::wire::drain_window(&l.window);
                 }
                 if state == ElementState::Pressed {
@@ -847,6 +851,10 @@ impl Host {
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 if let Some((x, y)) = button_at(app, &l.window) {
                     match state {
                         ElementState::Pressed => app.rt_mut().secondary_down(x, y),
@@ -860,6 +868,10 @@ impl Host {
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if self.wayland && crate::platform::wayland::serial::wire::has_listeners() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 if let Some((x, y)) = button_at(app, &l.window) {
                     match state {
                         ElementState::Pressed => app.button_down(x, y, pointer_button(button)),

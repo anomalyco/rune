@@ -460,6 +460,10 @@ impl AnyHost for OverlayHost {
                 core.dirty = true;
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys.takes_keys() => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if crate::platform::wayland::serial::wire::has_listeners() {
+                    crate::platform::wayland::serial::wire::drain_all();
+                }
                 let queued = if event.state == winit::event::ElementState::Pressed
                     && let Some(window) = core.live_window().cloned()
                     && let Some(text) = crate::platform::ime::take_direct_commit(&window)
@@ -485,6 +489,10 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if crate::platform::wayland::serial::wire::has_listeners() {
+                    crate::platform::wayland::serial::wire::drain_all();
+                }
                 let pressed = state.is_pressed();
                 if pressed {
                     core.control_click = cfg!(target_os = "macos") && core.mods.control_key();
@@ -590,6 +598,10 @@ impl AnyHost for OverlayHost {
         let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
         #[cfg(not(target_os = "windows"))]
         let more = core.draw(app, Some(_event_loop));
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if core.presence.shown() && crate::window::is_wayland(_event_loop) {
+            crate::platform::wayland::primary_selection::wire::ensure_for_event_loop(_event_loop);
+        }
         core.poll_activation_tokens(crate::time::now());
         core.apply_cursor(app.rt());
         core.a11y_turn(app.rt_mut()) || more
@@ -615,6 +627,12 @@ impl AnyHost for OverlayHost {
             || self.core.has_pending_wayland_activation_token_events();
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn primary_selection_lost(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.app.rt_mut().primary_selection_lost();
     }
 
     fn keeps_loop(&self) -> bool {

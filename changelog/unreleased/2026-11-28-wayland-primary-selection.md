@@ -1,0 +1,1 @@
+- Linux Wayland primary selection now speaks `zwp_primary_selection_v1` directly on winit's `wl_display` (falling back to arboard data-control only when the compositor lacks the global, and keeping X11 unchanged), and keyboard selections (`Shift`+Arrows, `Ctrl+A`) publish to the primary selection alongside pointer releases.
