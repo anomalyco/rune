@@ -715,3 +715,102 @@ fn live_range_value_updates_a11y_tree_without_commit_and_survives_a_commit() {
     assert_eq!(mirror.by_key("bar").unwrap().1.label(), Some("Moving"));
     assert_eq!(bar(&mirror), Some(0.25));
 }
+
+#[test]
+fn virtual_articles_in_log_region_and_feed_report_set_size_and_update_incrementally() {
+    struct State {
+        role: &'static str,
+        count: usize,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(400.0, 240.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+            col().key("rows").role(s.role).label("Activity").growth(crate::GrowthSpec::default())
+                .virtual_rows(s.count, 40.0, |_: &State, i| format!("row-{i}").into(), |_: &State, i| {
+                    crate::el().role("article").label(format!("Row {i}")).focusable(true).h(40.0)
+                }),
+        )
+    }
+
+    let mut rt = Runtime::new(State { role: "log", count: 400 }, view, (400.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    let mut mirror = AdapterMirror::default();
+    mirror.init(link.service(&mut rt, "Window").expect("initial tree"));
+
+    // 1. Virtual log: log is not an ordered-set container, so each article carries setSize = 400.
+    let json = rt.accessibility_json();
+    let rows = find_json(&json, "rows").unwrap();
+    assert_eq!(rows["role"], "log");
+    assert!(rows["setSize"].is_null(), "log must not carry container setSize: {rows}");
+    let r0 = find_json(&json, "row-0").unwrap();
+    assert_eq!((&r0["role"], r0["position"].as_u64(), r0["setSize"].as_u64()), (&serde_json::json!("article"), Some(1), Some(400)));
+    assert_eq!(mirror.by_key("row-0").unwrap().1.size_of_set(), Some(400));
+    assert_eq!(mirror.by_key("row-0").unwrap().1.position_in_set(), Some(0));
+
+    // 2. Growing the virtual log refreshes item size_of_set incrementally via fingerprint.
+    rt.update(|s, _| s.count = 405);
+    rt.frame(2.0 / 60.0);
+    mirror.apply(link.service(&mut rt, "Window").expect("count growth updates items"));
+    assert_eq!(mirror.by_key("row-0").unwrap().1.size_of_set(), Some(405));
+
+    // 3. Switching to role("region") keeps setSize on each article.
+    rt.update(|s, _| s.role = "region");
+    rt.frame(3.0 / 60.0);
+    mirror.apply(link.service(&mut rt, "Window").expect("role switch to region"));
+    let region_json = rt.accessibility_json();
+    assert_eq!(find_json(&region_json, "rows").unwrap()["role"], "region");
+    assert!(find_json(&region_json, "rows").unwrap()["setSize"].is_null());
+    assert_eq!(find_json(&region_json, "row-0").unwrap()["setSize"], 405);
+
+    // 4. Switching to role("feed") promotes the container to an ordered set carrying setSize = 405.
+    rt.update(|s, _| s.role = "feed");
+    rt.frame(4.0 / 60.0);
+    mirror.apply(link.service(&mut rt, "Window").expect("role switch to feed"));
+    let feed_json = rt.accessibility_json();
+    let feed = find_json(&feed_json, "rows").unwrap();
+    assert_eq!(feed["role"], "feed");
+    assert_eq!(feed["setSize"], 405);
+    assert_eq!(find_json(&feed_json, "row-0").unwrap()["position"], 1);
+    assert!(find_json(&feed_json, "row-0").unwrap()["setSize"].is_null(), "feed owns setSize for unlevelled articles");
+    assert_eq!(mirror.by_key("rows").unwrap().1.role(), Role::Feed);
+    assert_eq!(mirror.by_key("rows").unwrap().1.size_of_set(), Some(405));
+    assert_eq!(mirror.by_key("row-0").unwrap().1.size_of_set(), None);
+
+    // 5. Explicit position_in_set overrides virtual_rows count in a log; headings stay uncounted.
+    fn mixed_log(_: &(), _: &mut Cx<()>) -> El {
+        col().size(300.0, 400.0).scroll(crate::ScrollSpec { stick_bottom: false }).child(
+            col().key("mixed").role("log").label("Events").growth(crate::GrowthSpec::default())
+                .virtual_rows(10, 30.0, |_: &(), i| format!("m{i}").into(), |_: &(), i| {
+                    if i == 0 {
+                        text("Today").role("heading").h(30.0)
+                    } else {
+                        crate::el().role("article").label(format!("Event {i}")).position_in_set(i, 9).h(30.0)
+                    }
+                }),
+        )
+    }
+    let mut rt2 = Runtime::new((), mixed_log, (300.0, 400.0), Env::new(true, 1.0));
+    rt2.frame(0.0);
+    rt2.frame(1.0 / 60.0);
+    let mj = rt2.accessibility_json();
+    assert!(find_json(&mj, "m0").unwrap()["position"].is_null());
+    assert!(find_json(&mj, "m0").unwrap()["setSize"].is_null());
+    assert_eq!(find_json(&mj, "m1").unwrap()["position"], 1);
+    assert_eq!(find_json(&mj, "m1").unwrap()["setSize"], 9);
+
+    // 6. Non-virtual article with explicit position_in_set inside a log keeps its setSize.
+    fn static_log(_: &(), _: &mut Cx<()>) -> El {
+        col().size(300.0, 200.0).child(
+            col().key("slog").role("log").label("Static")
+                .child(crate::el().key("a3").role("article").label("Third").position_in_set(3, 10).h(24.0)),
+        )
+    }
+    let mut rt3 = Runtime::new((), static_log, (300.0, 200.0), Env::new(true, 1.0));
+    rt3.frame(0.0);
+    let sj = rt3.accessibility_json();
+    assert!(find_json(&sj, "slog").unwrap()["setSize"].is_null());
+    assert_eq!(find_json(&sj, "a3").unwrap()["position"], 3);
+    assert_eq!(find_json(&sj, "a3").unwrap()["setSize"], 10);
+}

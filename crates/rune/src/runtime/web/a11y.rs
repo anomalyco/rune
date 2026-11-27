@@ -694,6 +694,7 @@ impl RuntimeCore {
                 item.id = anchor_id(n.key.as_deref());
                 item.text = self.mirror_name(i).unwrap_or_default();
                 item.description = self.mirror_description(i);
+                item.set = self.mirror_set_pos(i);
                 item.aria = self.mirror_aria(i);
                 if app_scroll {
                     let [sx, sy] = self.scroll.scrolls.get(&n.id).map_or([0.0, 0.0], |st| {
@@ -798,7 +799,7 @@ impl RuntimeCore {
                     if let Some(role) = control_role {
                         item.role = Some(role);
                         if self.a11y_role(i).is_some_and(roles::selectable_item) { item.selected = Some(n.focus.selected); }
-                        item.set = n.a11y.more.as_ref().and_then(|m| m.set);
+                        item.set = self.mirror_set_pos(i);
                     }
                     let checked = n.a11y.checked
                         .or_else(|| (n.role == "radio").then_some(if n.focus.selected { crate::el::Checked::True } else { crate::el::Checked::False }));
@@ -962,6 +963,23 @@ impl RuntimeCore {
     fn mirror_related_id(&self, i: usize, key: Option<&str>) -> Option<String> {
         let j = self.a11y_related_target(i, key?)?;
         anchor_id(self.tree.nodes[j].key.as_deref())
+    }
+
+    /// 1-based `(position, size)` for a mirrored ordered-set item or focus proxy: explicit
+    /// `El::position_in_set` wins over the enclosing `virtual_rows` list's index and total.
+    fn mirror_set_pos(&self, i: usize) -> Option<(usize, usize)> {
+        let n = &self.tree.nodes[i];
+        let role = self.a11y_role(i)?;
+        let parent_role = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent)
+            .find_map(|p| self.a11y_role(p))
+            .unwrap_or(accesskit::Role::Window);
+        if !roles::ordered_set_item_in(role, parent_role) {
+            return None;
+        }
+        n.a11y.more.as_ref().and_then(|m| m.set).or_else(|| {
+            let (index, total) = self.a11y_virtual_list_pos(i)?;
+            Some((index + 1, total))
+        })
     }
 
     fn mirror_aria(&self, i: usize) -> MirrorAria {
@@ -1278,7 +1296,7 @@ impl RuntimeCore {
             .any(|j| self.tree.nodes[j].is_secure());
         if let Some(s) = selected { o.insert("s".into(), json!(s)); }
         if !in_secure && let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
-        if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
+        if let Some((pos, size)) = self.mirror_set_pos(i) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
         if n.a11y.disabled || n.inert { o.insert("dis".into(), json!(true)); }
         if n.a11y.more.as_deref().is_some_and(|m| m.busy) { o.insert("b".into(), json!(true)); }

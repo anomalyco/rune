@@ -2061,6 +2061,8 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-colcount', item.cc !== undefined ? String(item.cc) : undefined],
         ['aria-rowindex', item.ri !== undefined ? String(item.ri) : undefined],
         ['aria-colindex', item.ci !== undefined ? String(item.ci) : undefined],
+        ['aria-posinset', item.n ? String(item.n[0]) : undefined],
+        ['aria-setsize', item.n ? String(item.n[1]) : undefined],
     ];
     for (const [name, value] of rangeAttrs) {
         if (value === undefined) {
@@ -2101,8 +2103,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     if (tag === 'button') {
         // A control's role and states (a palette's option, a tab, a switch, a toggle button, a range control).
         const states = [['role', item.o], ['aria-selected', item.se === undefined ? undefined : String(item.se)],
-            ['aria-checked', item.c], ['aria-pressed', item.pr],
-            ['aria-posinset', item.n ? String(item.n[0]) : undefined], ['aria-setsize', item.n ? String(item.n[1]) : undefined]];
+            ['aria-checked', item.c], ['aria-pressed', item.pr]];
         for (const [name, value] of states) {
             if (value === undefined) el.removeAttribute(name);
             else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
