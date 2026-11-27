@@ -1,0 +1,1 @@
+- Isolated layers: a target that a growing or shrinking layer no longer fits is handed to a later offscreen layer in the same frame that needs it, or dropped before the replacement is allocated instead of being parked in the spare pool. Closed and flattened layers still park their targets so menus and overlays reopen without allocating.

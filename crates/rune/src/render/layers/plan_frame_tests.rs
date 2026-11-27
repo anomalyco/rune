@@ -172,3 +172,61 @@ fn a_frame_never_holds_more_layer_textures_than_dev() {
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (2048, 2048));
     assert_eq!(renderer.layers.peak_bytes(), 64 << 20, "two textures, with the scratch already gone");
 }
+
+/// A growing isolated layer drops every intermediate target it outgrows instead of parking them as
+/// spares, and drops the old target before making the larger one. Closing the settled layer still
+/// parks its target so reopening it allocates nothing.
+#[test]
+fn a_growing_layer_parks_no_outgrown_targets() {
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let width = 400.0;
+    let bucket_w = 448u64;
+    let bpp = u64::from(FORMAT.block_copy_size(None).unwrap());
+    for height in (60..=700).step_by(64) {
+        let bucket_h = ((height + 1) as u32).div_ceil(64) * 64;
+        let instances = group([0.0, 0.0, width, height as f32], 0.0);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances, (512, 768));
+        assert_eq!(renderer.spare_layers(), 0, "outgrown target parked at height {height}");
+        assert_eq!(renderer.layer_stats().targets, 1, "only the active target stays live at height {height}");
+        assert_eq!(
+            renderer.layers.peak_bytes(),
+            bucket_w * u64::from(bucket_h) * bpp,
+            "old target drops before the larger one is allocated at height {height}",
+        );
+    }
+
+    // Closing the layer still parks its settled target for the next opening.
+    let settled = group([0.0, 0.0, width, 700.0], 0.0);
+    let allocations = renderer.layer_stats().allocations;
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &[], (512, 768));
+    assert_eq!(renderer.spare_layers(), 1, "closing the layer parks its final target");
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &settled, (512, 768));
+    assert_eq!(renderer.layer_stats().allocations, allocations, "reopening reuses the parked target");
+    assert_eq!(renderer.spare_layers(), 0);
+}
+
+/// When a smaller layer is inserted before a larger one in the same frame, the displaced target
+/// hands off to the later layer instead of being dropped or parked.
+#[test]
+fn a_shifted_layer_hands_its_target_to_a_later_layer() {
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let large = group([0.0, 64.0, 400.0, 300.0], 0.0);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &large, (512, 512));
+    let large_id = renderer.layers.targets[0].as_ref().unwrap().identity;
+    let allocations = renderer.layer_stats().allocations;
+    let spare_visits = renderer.layers.planner.parked.visits;
+
+    let mut both = group([0.0, 0.0, 40.0, 40.0], 0.0);
+    both.extend(&large);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &both, (512, 512));
+    assert!(renderer.layers.planner.moves.contains(&Move::Swap(0, 1)), "displaced target hands off directly: {:?}", renderer.layers.planner.moves);
+    assert!(!renderer.layers.planner.moves.iter().any(|m| matches!(m, Move::Park(_) | Move::DropSlot(_))), "handoff neither parks nor drops: {:?}", renderer.layers.planner.moves);
+    assert_eq!(renderer.layers.planner.parked.visits, spare_visits, "handoff does not route through the spare pool");
+    assert_eq!(renderer.spare_layers(), 0, "handoff leaves no spare behind");
+    assert_eq!(renderer.layer_stats().allocations, allocations + 1, "only the new small layer allocates");
+    assert_eq!(renderer.layers.targets[1].as_ref().unwrap().identity, large_id, "the shifted layer kept its target");
+}

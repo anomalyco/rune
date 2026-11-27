@@ -589,6 +589,8 @@ impl Renderer {
                     // The plan's `Drop`s trim the spares; nothing trims here.
                     if let Some(mut t) = self.layers.targets[slot].take() { t.cache = None; self.layers.spare.push(t); }
                 }
+                Move::DropSlot(slot) => { self.layers.targets[slot] = None; }
+                Move::Swap(a, b) => self.layers.targets.swap(a, b),
                 Move::Set { slot, from } => {
                     let mut t = match from {
                         Kept::Retained(at) => self.layers.retained.swap_remove(at),

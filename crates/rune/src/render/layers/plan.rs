@@ -108,6 +108,10 @@ pub(super) enum Kept {
 pub(super) enum Move {
     /// Parks a slot's target for a later layer of its size.
     Park(usize),
+    /// Drops a slot's target: it no longer fits this layer and no later layer in the frame can take it.
+    DropSlot(usize),
+    /// Swaps two slots' targets so a later layer in this frame takes one that no longer fits here.
+    Swap(usize, usize),
     /// Puts a kept target in a slot, dropping whatever it held.
     Set { slot: usize, from: Kept },
     /// Makes a target of `size` for a slot.
@@ -134,6 +138,14 @@ pub(super) fn rect_of(edges: [f32; 4]) -> [f32; 4] {
 fn bucket_of(bounds: [f32; 4]) -> ([u32; 2], u32, u32) {
     let (width, height) = (bounds[2] as u32, bounds[3] as u32);
     ([width.div_ceil(64) * 64, height.div_ceil(64) * 64], width, height)
+}
+
+/// Whether a target of `size` fits a layer drawing `width`×`height` (bucket `bucket`).
+/// The minimum bucket is unavoidable for tiny controls: do not recreate that same bucket
+/// every frame when rounding alone exceeds the 2x area limit.
+fn size_fits(size: [u32; 2], width: u32, height: u32, bucket: [u32; 2]) -> bool {
+    size[0] >= width && size[1] >= height && (size == bucket
+        || u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width) * u64::from(height))
 }
 
 /// What a texel of a layer target costs.
@@ -292,8 +304,9 @@ impl Default for Planner {
 
 impl Planner {
     /// Decides what every layer of `plan` does this frame, and every change to the target pools it
-    /// takes. It reads each target where `pools` holds it, and only where dev's passes read one: a
-    /// layer whose slot fits reads no spare. It moves nothing and needs no device, so a walk of
+    /// takes. It reads each target where `pools` holds it: a layer whose slot fits reads no spare,
+    /// and when a slot does not fit it also checks later layers' slots (`later_taker`) before
+    /// dropping the target or reading a spare. It moves nothing and needs no device, so a walk of
     /// frames drives it.
     pub(super) fn decide<T: Describe>(&mut self, plan: &[Layer], pools: &Pools<'_, T>, budget: u64, isolate: bool, max_dim: u32) {
         let bpp = bpp();
@@ -321,6 +334,8 @@ impl Planner {
             self.slots[index] = Some(self.kept.swap_remove(at));
             self.moves.push(Move::Set { slot: index, from: Kept::Retained(at) });
         }
+        // Settle every remaining layer's disposition and retained cache claims before assigning
+        // targets, so an outgrown slot knows which later layers render offscreen and can take it.
         for (index, layer) in plan.iter().enumerate() {
             if matches!(self.dispositions[index], Disposition::Cached { .. }) { continue; }
             let rect = rect_of(layer.edges);
@@ -330,17 +345,15 @@ impl Planner {
             if layer.planned == Planned::Hidden || rect[2] == 0.0 || rect[3] == 0.0
                 || matches!(parent, Some(Disposition::Skip | Disposition::Cached { .. })) {
                 self.dispositions[index] = Disposition::Skip;
-                self.park_slot(index, pools);
                 continue;
             }
             if !isolate {
                 // Without isolation (`breaker`), every group draws straight into its parent.
                 self.dispositions[index] = Disposition::Inline;
-                self.park_slot(index, pools);
                 continue;
             }
             let mut bounds = rect;
-            let (mut bucket, mut width, mut height) = bucket_of(bounds);
+            let bucket = bucket_of(bounds).0;
             let mut cache = None;
             if let Some((node, sig)) = layer.cache {
                 let previous = self.kept.position(pools, |t| t.cache.is_some_and(|(n, _)| n == node));
@@ -364,7 +377,6 @@ impl Planner {
                     }
                     // Drawn like an uncached group, it only needs the part that shows.
                     bounds = rect_of(layer.vis);
-                    (bucket, width, height) = bucket_of(bounds);
                 }
             }
             let additive_parent = layer.parent.is_some_and(|p| plan[p].blend == Blend::PlusLighter);
@@ -376,19 +388,38 @@ impl Planner {
                 && layer.blur == 0.0 && layer.fade[3] == 0 && scissor_clip
                 && layer.turn.is_none() && layer.hole[3] == 0.0 {
                 self.dispositions[index] = Disposition::Inline;
-                self.park_slot(index, pools);
                 continue;
             }
             self.dispositions[index] = Disposition::Render { rect: bounds, cache };
-            let fits = self.slots[index].is_some_and(|source| {
+        }
+        self.trim(active, budget, pools);
+        // Reconcile slots against the settled dispositions. Closed or flattened layers park their
+        // targets so a menu reopens without allocating; a target that no longer fits hands off to
+        // a later offscreen layer that needs it, or drops before the replacement is created.
+        for (index, layer) in plan.iter().enumerate() {
+            let bounds = match self.dispositions[index] {
+                Disposition::Cached { .. } => continue,
+                Disposition::Skip | Disposition::Inline => {
+                    self.park_slot(index, pools);
+                    continue;
+                }
+                Disposition::Render { rect, .. } => rect,
+            };
+            let (bucket, width, height) = bucket_of(bounds);
+            while let Some(source) = self.slots[index] {
                 let size = pools.held(source).size;
-                // The minimum bucket is unavoidable for tiny controls. Do not recreate that
-                // same bucket every frame when rounding alone exceeds the 2x area limit.
-                size[0] >= width && size[1] >= height && (size == bucket
-                    || u64::from(size[0]) * u64::from(size[1]) <= 2 * u64::from(width) * u64::from(height))
-            });
-            if !fits {
-                self.park_slot(index, pools);
+                if size_fits(size, width, height, bucket) { break; }
+                if let Some(later) = self.later_taker(index, size, pools) {
+                    self.slots.swap(index, later);
+                    self.moves.push(Move::Swap(index, later));
+                    if plan[later].blur == 0.0 { self.moves.push(Move::Unblur(later)); }
+                } else {
+                    self.slots[index] = None;
+                    self.moves.push(Move::DropSlot(index));
+                    break;
+                }
+            }
+            if self.slots[index].is_none() {
                 let spare = self.parked.position(pools, |t| {
                     let size = t.size;
                     size[0] >= width && size[1] >= height
@@ -408,7 +439,21 @@ impl Planner {
             // The scratch a blur left behind goes before the next layer makes its own texture.
             if layer.blur == 0.0 { self.moves.push(Move::Unblur(index)); }
         }
-        self.trim(active, budget, pools);
+    }
+
+    /// Whether slot `index` currently holds a target that fits `width`×`height` (bucket `bucket`).
+    fn slot_fits<T: Describe>(&self, index: usize, width: u32, height: u32, bucket: [u32; 2], pools: &Pools<'_, T>) -> bool {
+        self.slots[index].is_some_and(|source| size_fits(pools.held(source).size, width, height, bucket))
+    }
+
+    /// The first later layer in this frame that renders offscreen, does not already hold a fitting
+    /// target, and can use one of `size`.
+    fn later_taker<T: Describe>(&self, after: usize, size: [u32; 2], pools: &Pools<'_, T>) -> Option<usize> {
+        ((after + 1)..self.dispositions.len()).find(|&later| {
+            let Disposition::Render { rect, .. } = self.dispositions[later] else { return false };
+            let (bucket, width, height) = bucket_of(rect);
+            !self.slot_fits(later, width, height, bucket, pools) && size_fits(size, width, height, bucket)
+        })
     }
 
     /// After a frame whose layers fell to `len`: forgets the plan when no layer is left, and gives
