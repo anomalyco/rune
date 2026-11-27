@@ -8,6 +8,8 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod gpu_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod importer_tests;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(test)]
@@ -21,6 +23,8 @@ mod pipeline;
 mod transfer_tests;
 #[cfg(target_os = "windows")]
 pub mod windows;
+pub use pipeline::ImportedSurface;
+pub use pipeline::SurfaceImporter;
 pub use pipeline::SurfaceRenderer;
 #[doc(hidden)]
 pub use pipeline::Building;
@@ -55,7 +59,7 @@ pub enum Format {
     Nv12Video,
     Nv12Full,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ColorInfo {
     pub matrix: Matrix,
     pub transfer: Transfer,
@@ -101,7 +105,6 @@ pub struct Frame {
 /// How a frame's buffer turns into its upright picture: a quarter-turn rotation and/or flip,
 /// applied while sampling. The matrix maps centred upright coordinates to centred buffer
 /// coordinates: `buffer = [m0 m1; m2 m3] * upright`.
-#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Orient(pub [i8; 4]);
 
@@ -386,6 +389,13 @@ impl NativeSurface {
     fn latest_mirrored(&self) -> Option<(Arc<Frame>, bool)> {
         let s = self.0.lock().unwrap();
         s.latest.clone().map(|f| (f, s.mirrored))
+    }
+    pub(crate) fn latest_snapshot(&self) -> Option<(Arc<Frame>, bool, u64)> {
+        let s = self.0.lock().unwrap();
+        s.latest.clone().map(|f| (f, s.mirrored, s.revision))
+    }
+    pub(crate) fn set_error(&self, error: Option<String>) {
+        self.0.lock().unwrap().error = error;
     }
     #[doc(hidden)]
     pub fn key(&self) -> usize {

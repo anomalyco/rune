@@ -473,6 +473,9 @@ impl Renderer {
         if self.surfaces.is_none() && self.surfaces_building.is_some() { return; }
         if (!draws.is_empty() || built.is_some()) && self.surfaces.is_none() {
             let mut surfaces = built.unwrap_or_else(|| crate::native_surface::SurfaceRenderer::new(device, self.format));
+            if let Some(importer) = self.surface_importer.take() {
+                surfaces.adopt_importer(importer);
+            }
             surfaces.set_srgb_blend(self.srgb_blend);
             surfaces.set_staging(self.uploads.staging(device, queue));
             for (format, _) in &self.extra { surfaces.add_format(device, *format); }
@@ -482,8 +485,35 @@ impl Renderer {
             s.set_srgb_blend(self.srgb_blend);
             if self.layers.additive.is_some() { s.add_plus_lighter(device, layers::FORMAT); }
             s.prepare(device,queue,draws,viewport);
+        } else if let Some(importer) = &mut self.surface_importer {
+            importer.prune_stale();
         }
         if self.layer_stats().targets > 0 { self.position_layer_surfaces(queue); }
+    }
+
+    /// Imports `surface`'s current frame onto `device` as `wgpu::Texture` plane(s), reusing this
+    /// renderer's per-device importer and texture cache across frames (and sharing it with
+    /// `El::native_surface` draws when present).
+    ///
+    /// Returns `Ok(None)` when `surface` holds no frame, `Ok(Some(_))` with the imported plane
+    /// texture(s) and colour/orientation metadata, or `Err` if importing failed (also stored on
+    /// [`NativeSurface::last_error`](crate::NativeSurface::last_error)).
+    ///
+    /// Samples the surface's already-pushed frame mailbox; it does not drive a
+    /// [`Player`](crate::Player)-backed surface unless that surface is also drawn in the view tree.
+    pub fn surface_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface: &crate::NativeSurface,
+    ) -> Result<Option<crate::native_surface::ImportedSurface>, String> {
+        if let Some(s) = &mut self.surfaces {
+            s.surface_texture(queue, surface)
+        } else {
+            self.surface_importer
+                .get_or_insert_with(|| crate::native_surface::SurfaceImporter::new(device))
+                .import(queue, surface)
+        }
     }
 
     /// One uniform write per presentation-only frame; use the display's target time.

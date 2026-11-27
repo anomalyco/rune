@@ -279,6 +279,62 @@ impl<S: 'static> Frame<'_, S> {
         self.rt.effect_slot(mark)
     }
 
+    /// Imports `surface`'s current frame onto this frame's GPU device as `wgpu::Texture` plane(s),
+    /// reusing Rune's per-device importer and texture cache across frames (zero-copy
+    /// `CVMetalTextureCache` on macOS on both [`GpuBackend::Metal`](crate::GpuBackend::Metal) and
+    /// [`GpuBackend::Wgpu`](crate::GpuBackend::Wgpu), pooled copy on Windows shared textures and
+    /// Linux dmabufs, in-place NV12 planes for Windows hardware-decoded video, and texture upload
+    /// for [`ByteFrame`](crate::native_surface::ByteFrame)).
+    ///
+    /// Returns `Ok(None)` when `surface` holds no frame, `Ok(Some(imported))` with the plane
+    /// texture(s) and colour/orientation metadata when a frame is present, or `Err` if importing
+    /// failed (the same error is recorded on
+    /// [`NativeSurface::last_error`](crate::NativeSurface::last_error)).
+    ///
+    /// Repeated calls for an unchanged frame return the cached texture(s) without re-importing or
+    /// re-copying. Importer state belongs to this frame's device (`self.device_key()`) and drops
+    /// automatically on device loss. When `surface` lives inside `self.rt.state`, either clone the
+    /// cheap `NativeSurface` handle or call `f.ui.surface_texture(f.device, f.queue, &f.rt.state.surface)`.
+    ///
+    /// Samples the surface's already-pushed frame mailbox; it does not pull a
+    /// [`Player`](crate::Player)-backed surface unless that surface is also drawn in the view tree.
+    ///
+    /// ```no_run
+    /// # use rune::compose::{Compositor, DeviceKey, Frame};
+    /// # use rune::NativeSurface;
+    /// struct Scene {
+    ///     surface: NativeSurface,
+    ///     device_key: Option<DeviceKey>,
+    ///     revision: Option<u64>,
+    ///     view: Option<wgpu::TextureView>,
+    /// }
+    ///
+    /// impl Compositor<()> for Scene {
+    ///     fn render(&mut self, f: &mut Frame<'_, ()>) {
+    ///         if let Ok(Some(imported)) = f.surface_texture(&self.surface) {
+    ///             if self.device_key != Some(f.device_key()) || self.revision != Some(imported.revision()) {
+    ///                 self.view = Some(imported.texture().create_view(&Default::default()));
+    ///                 self.device_key = Some(f.device_key());
+    ///                 self.revision = Some(imported.revision());
+    ///             }
+    ///         }
+    ///         f.draw_ui();
+    ///     }
+    ///
+    ///     fn release_gpu(&mut self) {
+    ///         self.view = None;
+    ///         self.device_key = None;
+    ///         self.revision = None;
+    ///     }
+    /// }
+    /// ```
+    pub fn surface_texture(
+        &mut self,
+        surface: &crate::NativeSurface,
+    ) -> Result<Option<crate::native_surface::ImportedSurface>, String> {
+        self.ui.surface_texture(self.device, self.queue, surface)
+    }
+
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();

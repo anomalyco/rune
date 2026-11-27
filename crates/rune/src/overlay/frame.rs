@@ -334,6 +334,7 @@ pub(super) fn try_submit_on_macos_worker(
         if let Some(worker) = &mut live.present {
             let mut encoder = encoder;
             renderer.before_submit(&mut encoder);
+            renderer.note_plain_submit();
             let queue = gpu.queue.clone();
             worker.run(move || {
                 queue.submit([encoder.finish()]);
