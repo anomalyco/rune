@@ -215,3 +215,27 @@ fn reorder_tx_preserves_listitem_role_set_position_and_keyboard_navigation() {
     assert_eq!(node(&tree, "Alpha")["position"], 2);
     assert!(has(node(&tree, "Alpha"), "selected"));
 }
+
+#[test]
+fn focusable_split_grip_advertises_focus_custom_step_and_localized_labels() {
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        SplitView::new(col().key("body").child(Button::new("Run").build(&k)))
+            .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, Sidebar::new().label("Nav").build(&k))
+            .grip_tab_stop(true)
+            .grip_step(16.0, 64.0)
+            .grip_labels("调整侧边栏", "调整检查器")
+            .build(&k)
+    }
+
+    let mut rt = mount(App { sidebar: PaneState::new(240.0).range(180.0, 420.0), ..App::default() }, view);
+    let tree = rt.accessibility_json();
+    let grip = node(&tree, "sidebar-grip");
+    assert_eq!(said(grip), ("splitter", "调整侧边栏"));
+    assert_eq!(grip["range"], serde_json::json!([240.0, 180.0, 420.0, 16.0]));
+    assert!(can(grip, "focus") && can(grip, "increment") && can(grip, "set-value"));
+    no_echo(&tree);
+
+    assert!(act(&mut rt, "sidebar-grip", Action::Increment));
+    assert_eq!(rt.state.sidebar.width(), 256.0, "Increment uses configured fine grip_step");
+}
