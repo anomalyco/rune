@@ -65,6 +65,7 @@ mod tests;
 pub(crate) use built::Built;
 #[cfg(test)]
 pub(crate) use built::Shared;
+pub(crate) use built::el_has_pixels;
 pub(crate) use built::has_focused_input;
 pub(crate) use reads::Reads;
 pub(crate) use reads::Replayed;
@@ -128,6 +129,10 @@ impl MemoCache {
         self.entries.clear();
         self.flattened.clear();
         self.present_len = 0;
+    }
+
+    pub(crate) fn has_pixels(&self) -> bool {
+        self.entries.values().any(|e| e.built.has_pixels)
     }
 
     pub(crate) fn rest(&mut self) {

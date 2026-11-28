@@ -443,6 +443,9 @@ impl RuntimeCore {
             merge(&mut one, stage);
         }
         self.commit.dirty |= changed;
+        if changed && !self.live_visible() {
+            self.drop_images();
+        }
         self.frame.pending.polled_change |= changed;
         let asks_frame = one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.kbd.focus.path().is_some());
         self.latch_requests(app, &mut one);

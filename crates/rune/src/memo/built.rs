@@ -24,6 +24,9 @@ pub(crate) struct Shared {
     /// Whether any descendant carries a path-bound hook (`El::bind_path`), so moving the memo
     /// to a different parent path must re-flatten rather than rebasing stale handlers.
     pub(crate) has_path_bind: bool,
+    /// Whether any descendant holds a `Pixels` / `Image` handle (`El::pixels`, `El::image_menu`,
+    /// inline/pill image, or `El::pill_image`).
+    pub(crate) has_pixels: bool,
 }
 
 impl El {
@@ -105,6 +108,20 @@ fn has_path_bind(el: &El) -> bool {
         || el.children.iter().any(has_path_bind)
 }
 
+/// Whether `el` itself (excluding children) holds a `Pixels` / `Image` handle.
+fn own_has_pixels(el: &El) -> bool {
+    el.vis.cold.get().is_some_and(|v| v.pixels.is_some() || v.image_menu.is_some())
+        || el.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
+        || el.cold.get().is_some_and(|c| c.input.as_ref().is_some_and(|i| i.pill_image.is_some()))
+}
+
+/// Whether `el` or anything under it holds a `Pixels` / `Image` handle.
+pub(crate) fn el_has_pixels(el: &El) -> bool {
+    own_has_pixels(el)
+        || el.memo_children().is_some_and(|m| m.has_pixels)
+        || el.children.iter().any(el_has_pixels)
+}
+
 /// Whether `el` or anything under it is a focused field.
 pub(crate) fn has_focused_input(el: &El) -> bool {
     el.cold.input.as_ref().is_some_and(|i| i.edit.focused)
@@ -119,6 +136,8 @@ pub(crate) struct Built {
     pub(crate) reusable: bool,
     /// Whether the root or any descendant carries `El::bind_path`.
     pub(crate) has_path_bind: bool,
+    /// Whether the root or any descendant holds a `Pixels` / `Image` handle.
+    pub(crate) has_pixels: bool,
     /// Built by a [`region`](super::region): what it shows is what it read, so its virtual lists'
     /// rows can be kept with it while their reads hold.
     pub(crate) region: bool,
@@ -144,13 +163,15 @@ impl Built {
             let has_virtual = children.iter().any(|c| c.flags.has(ElFlags::HAS_VIRTUAL));
             let reusable = !duplicate_keys && children.iter().all(el_flatten_reusable);
             let has_path_bind = children.iter().any(has_path_bind);
-            Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable, has_path_bind })
+            let has_pixels = children.iter().any(el_has_pixels);
+            Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable, has_path_bind, has_pixels })
         };
         el.flags.set(ElFlags::HAS_VIRTUAL, el.cold.virtual_estimate.is_some());
         let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
         let has_path_bind = shared.has_path_bind || el.cold.get().is_some_and(|c| c.on_path.is_some());
+        let has_pixels = shared.has_pixels || own_has_pixels(&el);
         let id = NEXT_BUILT_ID.fetch_add(1, Ordering::Relaxed);
-        (Rc::new(Built { id, reusable, has_path_bind, region, root: el, children: shared }), key)
+        (Rc::new(Built { id, reusable, has_path_bind, has_pixels, region, root: el, children: shared }), key)
     }
 
     /// The root, with its children shared rather than copied.

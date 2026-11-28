@@ -405,8 +405,11 @@ impl OverlayCore {
         self.quiet.step(frame::QuietEvent::Forget);
         if self.release == Release::Now {
             self.rest = crate::window::Rest::Rested;
+            app.rt_mut().drop_images();
+            app.rt_mut().rest();
         } else {
             self.rest_step(app, crate::window::RestEvent::Unseen, crate::time::now());
+            app.rt_mut().drop_images();
         }
     }
 
@@ -430,6 +433,9 @@ impl OverlayCore {
     }
 
     fn give_back(&mut self, app: &mut dyn OverlayApp, all: bool, now: Instant) {
+        if all {
+            app.rt_mut().drop_images();
+        }
         app.rt_mut().rest();
         let gpu = self.gpu.clone();
         if let (Some(gpu), Some(renderer)) = (gpu, &mut self.renderer) {
