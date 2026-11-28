@@ -4,13 +4,17 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{Anim, Color, Curve, Cursor, Drag, Easing, El, Phase, Spring, Transition, Tx, col, el, row};
+use rune::{Anim, Color, Curve, Cursor, Direction, Drag, Easing, El, Key, KeyEvent, Phase, Spring, Transition, Tx, col, el, row};
 
 use super::pane::{PaneMotion, PaneState, Peek, SidebarPeek};
 use super::toolbar::{TOOLBAR_HEIGHT, Toolbar};
 use crate::{ControlSize, IconButton, IconButtonVariant, Kit};
 
+mod page;
+pub use page::Page;
+
 type Apply = Box<dyn FnOnce(El) -> El>;
+type GripBind = Box<dyn FnOnce(El, GripStep) -> El>;
 /// Delayed hover on an element: opens a peek on rest, or holds a peek open across its surfaces
 /// (the raised pane, the raised toggle, and the margin strip beside them).
 type Hover = Rc<dyn Fn(El, Duration, Duration, PeekHover) -> El>;
@@ -21,13 +25,23 @@ enum PeekHover {
     Hold(u8),
 }
 
+/// Resolved keyboard and range stepping settings for a pane's resize grip.
+#[derive(Clone, Copy)]
+struct GripStep {
+    tab_stop: bool,
+    fine: f32,
+    coarse: f32,
+}
+
 /// The resize grip's width, straddling nothing: it sits inside the pane's edge.
 const GRIP: f32 = 6.0;
+const DEFAULT_SIDEBAR_GRIP_LABEL: &str = "Resize sidebar";
+const DEFAULT_INSPECTOR_GRIP_LABEL: &str = "Resize inspector";
 
 struct Pane {
     state: PaneState,
     content: El,
-    handlers: Vec<Apply>,
+    grip: GripBind,
     toggle: Option<Apply>,
     clear: Option<Apply>,
     hover: Option<Hover>,
@@ -165,6 +179,10 @@ pub struct SplitView {
     motion: PaneMotion,
     peek: Option<SidebarPeek>,
     reduced: bool,
+    grip_tab_stop: bool,
+    grip_step: [f32; 2],
+    sidebar_grip_label: Option<String>,
+    inspector_grip_label: Option<String>,
 }
 
 impl SplitView {
@@ -184,6 +202,10 @@ impl SplitView {
             motion: PaneMotion::new(),
             peek: None,
             reduced: false,
+            grip_tab_stop: false,
+            grip_step: [GRIP_STEP, GRIP_COARSE_STEP],
+            sidebar_grip_label: None,
+            inspector_grip_label: None,
         }
     }
     /// The leading pane. `access` finds its state in the app's; the grip and the toggle button
@@ -281,6 +303,36 @@ impl SplitView {
         self.reduced = reduced;
         self
     }
+    /// Makes the sidebar and inspector resize grips keyboard Tab stops with a visible focus
+    /// indicator. While focused, plain Left/Right resize by the fine step, Shift+Left/Right by
+    /// the coarse step (inverting for the trailing pane and RTL so the separator moves in the
+    /// arrow's direction), Home/Enter/Space reset to the default width, and End jumps to the
+    /// maximum width. Default `false` (assistive technology still resizes grips via range
+    /// actions).
+    pub fn grip_tab_stop(mut self, on: bool) -> Self {
+        self.grip_tab_stop = on;
+        self
+    }
+    /// Points a focused grip resizes a pane by on plain (`fine`) and Shift-modified (`coarse`)
+    /// Left/Right arrows, and the step reported for assistive technology (`fine`). Non-finite or
+    /// non-positive `fine` falls back to `8.0`; non-finite or non-positive `coarse` falls back
+    /// to `fine`. Default `(8.0, 32.0)`.
+    pub fn grip_step(mut self, fine: f32, coarse: f32) -> Self {
+        let fine = if fine.is_finite() && fine > 0.0 { fine } else { GRIP_STEP };
+        let coarse = if coarse.is_finite() && coarse > 0.0 { coarse } else { fine };
+        self.grip_step = [fine, coarse];
+        self
+    }
+    /// Accessible names for the sidebar and inspector resize grips, replacing
+    /// `"Resize sidebar"` and `"Resize inspector"`. Empty or blank strings keep the default for
+    /// that grip.
+    pub fn grip_labels(mut self, sidebar: impl Into<String>, inspector: impl Into<String>) -> Self {
+        let sidebar = sidebar.into();
+        let inspector = inspector.into();
+        self.sidebar_grip_label = (!sidebar.trim().is_empty()).then_some(sidebar);
+        self.inspector_grip_label = (!inspector.trim().is_empty()).then_some(inspector);
+        self
+    }
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
@@ -297,7 +349,15 @@ impl SplitView {
         let toggle = self.show_toggle && self.sidebar.is_some();
         let past_toggle = if toggle { lights + side + t.gap } else { lights };
         let peek = self.peek;
-        let d = Dock { k, spring, motion: self.motion, reduced: self.reduced };
+        let d = Dock {
+            k,
+            spring,
+            motion: self.motion,
+            reduced: self.reduced,
+            grip: GripStep { tab_stop: self.grip_tab_stop, fine: self.grip_step[0], coarse: self.grip_step[1] },
+            sidebar_grip_label: self.sidebar_grip_label.as_deref(),
+            inspector_grip_label: self.inspector_grip_label.as_deref(),
+        };
 
         let mut overlay = None;
         let mut zones = Vec::new();
@@ -444,143 +504,72 @@ impl SplitView {
     }
 }
 
-/// A full-window screen without side panes — a settings page, lock screen or onboarding view
-/// in the same window as a [`SplitView`]. Shares [`SplitView`]'s title bar height, traffic-light
-/// clearance, window-drag band and framed content card so switching screens matches pixel for
-/// pixel: `Page::new(content).title("Settings").leading(back).trailing(done).titlebar_inset(cx.titlebar_inset()).build(&kit)`.
-pub struct Page {
-    main: El,
-    toolbar: Toolbar,
-    inset: f32,
-    toggle: SidebarToggle,
-    frame: Option<f32>,
-    flat: bool,
-    in_panel: bool,
-}
-
-impl Page {
-    pub fn new(main: El) -> Page {
-        Page {
-            main,
-            toolbar: Toolbar::new(),
-            inset: 0.0,
-            toggle: SidebarToggle::new(),
-            frame: None,
-            flat: false,
-            in_panel: false,
-        }
-    }
-    /// A centred title in the toolbar band.
-    pub fn title(mut self, t: impl Into<String>) -> Self {
-        self.toolbar = self.toolbar.title(t);
-        self
-    }
-    /// The toolbar's centre slot (replaces [`Self::title`]).
-    pub fn center(mut self, e: El) -> Self {
-        self.toolbar = self.toolbar.center(e);
-        self
-    }
-    /// Adds a leading control to the toolbar (a Back button, say), placed past the traffic lights.
-    pub fn leading(mut self, e: El) -> Self {
-        self.toolbar = self.toolbar.leading(e);
-        self
-    }
-    /// Adds a trailing control to the toolbar.
-    pub fn trailing(mut self, e: El) -> Self {
-        self.toolbar = self.toolbar.trailing(e);
-        self
-    }
-    /// Replaces the toolbar with a pre-built [`Toolbar`].
-    pub fn toolbar(mut self, t: Toolbar) -> Self {
-        self.toolbar = t;
-        self
-    }
-    /// Points the traffic lights take at the window's leading edge: `Cx::titlebar_inset`.
-    pub fn titlebar_inset(mut self, points: f32) -> Self {
-        self.inset = points.max(0.0);
-        self
-    }
-    /// Points past the traffic lights (or the window's edge in full screen) where the toolbar's
-    /// leading slot starts, matching [`SplitView::sidebar_toggle`].
-    pub fn past_lights(mut self, past_lights: f32, edge: f32) -> Self {
-        self.toggle = self.toggle.past_lights(past_lights).edge(edge);
-        self
-    }
-    /// The window background showing around the content pane (default 8 points, or 0 points
-    /// when [`Self::flat_main`] is enabled, matching [`SplitView::frame_inset`]).
-    pub fn frame_inset(mut self, points: f32) -> Self {
-        self.frame = Some(points.max(0.0));
-        self
-    }
-    /// Draws the content pane flat instead of as a rounded card, matching
-    /// [`SplitView::flat_main`].
-    ///
-    /// ```
-    /// # use rune::el;
-    /// # use rune_kit::{Kit, shell::Page};
-    /// # let body = el();
-    /// # let kit = Kit::neutral(true);
-    /// # let _ =
-    /// Page::new(body).title("Settings").flat_main(true).build(&kit)
-    /// # ;
-    /// ```
-    pub fn flat_main(mut self, on: bool) -> Self {
-        self.flat = on;
-        self
-    }
-    /// Puts the toolbar inside the framed content pane at its top, matching
-    /// [`SplitView::toolbar_in_panel`].
-    pub fn toolbar_in_panel(mut self) -> Self {
-        self.in_panel = true;
-        self
-    }
-
-    pub fn build(self, k: &Kit) -> El {
-        let mut split = SplitView::new(self.main)
-            .toolbar(self.toolbar)
-            .titlebar_inset(self.inset)
-            .sidebar_toggle(self.toggle)
-            .flat_main(self.flat)
-            .hide_sidebar_toggle();
-        if let Some(frame) = self.frame {
-            split = split.frame_inset(frame);
-        }
-        if self.in_panel {
-            split = split.toolbar_in_panel();
-        }
-        split.build(k)
-    }
-}
-
 type PaneAccess<S> = Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut PaneState>;
 
 /// Handlers for a pane's grip and toggle, typed by the app's state.
 fn pane<S: 'static>(state: PaneState, access: PaneAccess<S>, content: El, sign: f32, toggle: bool) -> Pane {
     let drag_access = access.clone();
-    let drag: Apply = Box::new(move |e: El| {
-        let (a1, a2, a3, a4) = (drag_access.clone(), drag_access.clone(), drag_access.clone(), drag_access);
-        e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
-            let p = a1(s);
-            match d.phase {
-                Phase::Down => p.press_grip(d.window_point()),
-                Phase::Move => {
-                    if p.drag_grip(d.window_point(), sign * d.dx) {
-                        tx.instant();
-                    } else {
-                        tx.live_only();
+    let grip: GripBind = Box::new(move |e: El, step: GripStep| {
+        let (a1, a2, a3, a4) = (drag_access.clone(), drag_access.clone(), drag_access.clone(), drag_access.clone());
+        let mut e = e
+            .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
+                let p = a1(s);
+                match d.phase {
+                    Phase::Down => p.press_grip(d.window_point()),
+                    Phase::Move => {
+                        if p.drag_grip(d.window_point(), sign * d.dx) {
+                            tx.instant();
+                        } else {
+                            tx.live_only();
+                        }
                     }
+                    Phase::Up => p.release_grip(d.cancelled()),
                 }
-                Phase::Up => p.release_grip(d.cancelled()),
-            }
-        })
-        .on_double_press(move |s: &mut S| a2(s).reset_width())
-        .on_step(move |s: &mut S, steps, _| {
-            let p = a3(s);
-            p.set_width(p.width() + steps as f32 * GRIP_STEP);
-        })
-        .on_set_value(move |s: &mut S, value, _| {
-            a4(s).set_width(value as f32);
-        })
+            })
+            .on_double_press(move |s: &mut S| a2(s).reset_width())
+            .on_step(move |s: &mut S, steps, _| {
+                let p = a3(s);
+                p.set_width(p.width() + steps as f32 * step.fine);
+            })
+            .on_set_value(move |s: &mut S, value, _| {
+                a4(s).set_width(value as f32);
+            });
+        if step.tab_stop {
+            let a_key = drag_access;
+            e = e.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
+                if ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo {
+                    return false;
+                }
+                let p = a_key(s);
+                let before = p.width();
+                match &ev.key {
+                    Key::Left | Key::Right => {
+                        let amount = if ev.mods.shift { step.coarse } else { step.fine };
+                        let dir = if ev.key == Key::Right { 1.0 } else { -1.0 };
+                        let visual_sign = if tx.key_direction() == Direction::Rtl { -sign } else { sign };
+                        p.set_width(before + dir * visual_sign * amount);
+                    }
+                    Key::Home if !ev.mods.shift => p.reset_width(),
+                    Key::End if !ev.mods.shift => p.set_width(p.max_width()),
+                    Key::Enter if !ev.mods.shift => {
+                        if !tx.key_repeat() {
+                            p.reset_width();
+                        }
+                    }
+                    Key::Text(t) if !ev.mods.shift && t == " " => {
+                        if !tx.key_repeat() {
+                            p.reset_width();
+                        }
+                    }
+                    _ => return false,
+                }
+                if p.width() == before {
+                    tx.live_only();
+                }
+                true
+            });
+        }
+        e
     });
     let toggle: Option<Apply> = toggle.then(|| {
         let toggle_access = access.clone();
@@ -622,12 +611,14 @@ fn pane<S: 'static>(state: PaneState, access: PaneAccess<S>, content: El, sign: 
             })
         }) as Hover
     });
-    Pane { state, content, handlers: vec![drag], toggle, clear, hover }
+    Pane { state, content, grip, toggle, clear, hover }
 }
 
 const DOT_FADE: f32 = 0.15;
-/// Points one increment from assistive technology widens a pane by.
+/// Points one increment from assistive technology (or a plain arrow) widens a pane by default.
 const GRIP_STEP: f32 = 8.0;
+/// Points one Shift-arrow widens a pane by default.
+const GRIP_COARSE_STEP: f32 = GRIP_STEP * 4.0;
 
 /// What the panes share.
 struct Dock<'a> {
@@ -635,6 +626,9 @@ struct Dock<'a> {
     spring: Spring,
     motion: PaneMotion,
     reduced: bool,
+    grip: GripStep,
+    sidebar_grip_label: Option<&'a str>,
+    inspector_grip_label: Option<&'a str>,
 }
 
 /// How one pane holds its contents.
@@ -738,27 +732,35 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
         }
     }
     if open || s.is_resizing() {
+        let grip_label = if leading {
+            d.sidebar_grip_label.unwrap_or(DEFAULT_SIDEBAR_GRIP_LABEL)
+        } else {
+            d.inspector_grip_label.unwrap_or(DEFAULT_INSPECTOR_GRIP_LABEL)
+        };
         let mut grip = el()
             .key(if leading { "sidebar-grip" } else { "inspector-grip" })
             .role("separator")
-            .label(if leading { "Resize sidebar" } else { "Resize inspector" })
+            .label(grip_label)
             // Its value is the pane's width; a reader's increment and decrement step it.
             .range_value(f64::from(s.width()), f64::from(s.min_width()), f64::from(s.max_width()))
-            .range_step(f64::from(GRIP_STEP))
+            .range_step(f64::from(d.grip.fine))
             .w(GRIP)
             .cursor(Cursor::ResizeColumn)
             .fill(Color::TRANSPARENT)
-            .opacity(0.02)
             .transition(Transition::none());
         grip = if leading { grip.pin(None, Some(0.0), Some(0.0), Some(0.0)) } else { grip.pin(Some(0.0), Some(0.0), None, Some(0.0)) };
         if floating {
             grip = grip.raise();
         }
-        for h in p.handlers {
-            grip = h(grip);
-        }
-        // Not a Tab stop: AppKit's dividers aren't either.
-        slot = slot.child(grip.focusable(false));
+        grip = (p.grip)(grip, d.grip);
+        grip = if d.grip.tab_stop {
+            // Inset inside the 6pt grip so the pane's clip_soft(0.0) never trims the ring.
+            grip.focusable(true).focus_ring(2.0, -2.0, k.c.border_focus)
+        } else {
+            // Not a Tab stop by default: AppKit's dividers aren't either.
+            grip.opacity(0.02).focusable(false)
+        };
+        slot = slot.child(grip);
     }
     slot
 }

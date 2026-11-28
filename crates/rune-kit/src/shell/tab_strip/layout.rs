@@ -20,6 +20,7 @@ pub(super) struct TabBindCtx<'a> {
     pub closable: bool,
     pub select_early: bool,
     pub active: bool,
+    pub window_drag: bool,
     pub scroll_key: &'a str,
     pub auto: &'a Rc<auto_scroll::View>,
 }
@@ -45,6 +46,7 @@ pub(super) struct TabItemCore<'a> {
     pub marked: bool,
     pub pulse_seq: u32,
     pub editor: Option<El>,
+    pub window_drag: bool,
     pub wrap: Option<Wrap<'a>>,
 }
 
@@ -62,6 +64,7 @@ impl<'a> TabItemCore<'a> {
             marked: false,
             pulse_seq: 0,
             editor: None,
+            window_drag: false,
             wrap: None,
         }
     }

@@ -233,6 +233,13 @@ impl<'a, S: 'static> TabItem<'a, S> {
     pub fn pulse(mut self, seq: u32) -> Self { self.core.pulse_seq = seq; self }
     /// A field in place of the title while renaming in place. The tab doesn't drag meanwhile.
     pub fn editor(mut self, field: El) -> Self { self.core.editor = Some(field); self }
+    /// Lets dragging this tab move the window and double-clicking it trigger the titlebar's
+    /// double-click action (for example when it is the only tab in a custom titlebar). When
+    /// `true` and not inline-editing via [`Self::editor`], the slot attaches [`El::window_drag`]
+    /// and omits its press, double-click and tab-drag handlers while keeping its close button,
+    /// middle-click close, hover, keyboard focus and [`Self::decorate`] context menus working.
+    /// Default `false`.
+    pub fn window_drag(mut self, enabled: bool) -> Self { self.core.window_drag = enabled; self }
     /// Wraps the built tab: a context menu handler, a hover card's anchor.
     pub fn decorate(mut self, f: impl FnOnce(El, TabDensity) -> El + 'a) -> Self { self.core.wrap = Some(Box::new(f)); self }
 }
@@ -295,6 +302,23 @@ impl<S: 'static> TabBind for TabHandlers<S> {
                 close(s, &id, tx);
             });
         }
+        if access.is_some() || self.hover.is_some() {
+            let (id, hover, access) = (ctx.id.to_owned(), self.hover.clone(), access.clone());
+            slot = slot.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
+                if let Some(a) = &access {
+                    a(s).set_hovered(&id, inside);
+                }
+                // The strip draws nothing from it (its hover groups do): only the app's handler can
+                // change what the view draws, and it says so.
+                match &hover {
+                    Some(f) => f(s, &id, inside, tx),
+                    None => tx.live_only(),
+                }
+            });
+        }
+        if ctx.window_drag {
+            return slot.window_drag();
+        }
         {
             let (id, select, reveal, access) = (ctx.id.to_owned(), self.select.clone(), reveal.clone(), access.clone());
             slot = slot.on_press_tx(move |s: &mut S, tx: &mut Tx| {
@@ -311,20 +335,6 @@ impl<S: 'static> TabBind for TabHandlers<S> {
         if let Some(f) = self.double.clone() {
             let id = ctx.id.to_owned();
             slot = slot.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &id, tx));
-        }
-        if access.is_some() || self.hover.is_some() {
-            let (id, hover, access) = (ctx.id.to_owned(), self.hover.clone(), access.clone());
-            slot = slot.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
-                if let Some(a) = &access {
-                    a(s).set_hovered(&id, inside);
-                }
-                // The strip draws nothing from it (its hover groups do): only the app's handler can
-                // change what the view draws, and it says so.
-                match &hover {
-                    Some(f) => f(s, &id, inside, tx),
-                    None => tx.live_only(),
-                }
-            });
         }
         let Some(access) = access else { return slot };
 

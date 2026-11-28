@@ -367,3 +367,249 @@ fn sidebar_toggle_labels_localize_name_and_tooltip_and_keep_copy() {
     rt.frame(1.0 / 60.0);
     assert_eq!(find(&rt, "sidebar-toggle").label.as_deref(), Some("Show sidebar"));
 }
+
+#[test]
+fn split_grip_tab_stop_keyboard_resize_rtl_reset_and_focus_ring() {
+    struct G {
+        sidebar: PaneState,
+        inspector: PaneState,
+        tab_stop: bool,
+        step: Option<(f32, f32)>,
+        labels: Option<(&'static str, &'static str)>,
+        rtl: bool,
+        opts_first: bool,
+        default_clicks: usize,
+        toggle_shortcut_hits: usize,
+    }
+
+    impl Default for G {
+        fn default() -> Self {
+            Self {
+                sidebar: PaneState::new(240.0).range(180.0, 420.0),
+                inspector: PaneState::new(220.0).range(180.0, 400.0),
+                tab_stop: false,
+                step: None,
+                labels: None,
+                rtl: false,
+                opts_first: false,
+                default_clicks: 0,
+                toggle_shortcut_hits: 0,
+            }
+        }
+    }
+
+    fn grip_view(s: &G, _: &mut Cx<G>) -> El {
+        let k = Kit::neutral(true);
+        let main = col()
+            .key("body")
+            .w_full()
+            .h_full()
+            .child(
+                el().key("default-btn")
+                    .size(80.0, 28.0)
+                    .role("button")
+                    .label("Apply")
+                    .focusable(true)
+                    .default_button()
+                    .on_press(|s: &mut G| s.default_clicks += 1),
+            );
+        let apply_opts = |mut split: SplitView| {
+            split = split.grip_tab_stop(s.tab_stop);
+            if let Some((fine, coarse)) = s.step {
+                split = split.grip_step(fine, coarse);
+            }
+            if let Some((sb, insp)) = s.labels {
+                split = split.grip_labels(sb, insp);
+            }
+            split
+        };
+        let mut split = SplitView::new(main).reduced_motion(true);
+        if s.opts_first {
+            split = apply_opts(split);
+        }
+        split = split
+            .sidebar(&s.sidebar, |s: &mut G| &mut s.sidebar, col().key("side-body"))
+            .inspector(&s.inspector, |s: &mut G| &mut s.inspector, col().key("insp-body"));
+        if !s.opts_first {
+            split = apply_opts(split);
+        }
+        let root = split.build(&k);
+        if s.rtl { root.dir(rune::Direction::Rtl) } else { root }
+    }
+
+    let make = |g: G| {
+        let mut rt = Runtime::new(g, grip_view, (1000.0, 600.0), Env::new(true, 1.0));
+        rt.set_system_reduced_motion(true);
+        rt.on_key = Some(|s, ev, _| {
+            if is_sidebar_toggle(ev) {
+                s.toggle_shortcut_hits += 1;
+                return true;
+            }
+            false
+        });
+        rt.frame(0.0);
+        rt
+    };
+    let send = |rt: &mut Runtime<G>, key: Key, shift: bool| {
+        rt.key(KeyEvent { key, mods: Mods { shift, ..Mods::default() } });
+        rt.frame(1.0 / 60.0);
+    };
+    let focused_key = |rt: &Runtime<G>| rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    let grip_ring_count = |rt: &Runtime<G>, key: &str| {
+        let k = Kit::neutral(true);
+        let ring_color = premul(rt.srgb_blend(), k.c.border_focus);
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).expect(key).rect;
+        rt.instances
+            .iter()
+            .filter(|i| {
+                i.border == ring_color
+                    && (i.params[0] - 2.0).abs() < 0.05
+                    && (0..4).all(|idx| (i.rect[idx] - r[idx]).abs() < 0.5)
+            })
+            .count()
+    };
+
+    // 1. Default (grip_tab_stop = false): Tab skips both grips, default labels stay intact.
+    let mut rt = make(G::default());
+    rt.set_tab_visits_controls(true);
+    let mut visited = Vec::new();
+    for _ in 0..8 {
+        send(&mut rt, Key::Tab, false);
+        if let Some(k) = focused_key(&rt) {
+            if visited.first() == Some(&k) { break; }
+            visited.push(k);
+        }
+    }
+    assert!(!visited.iter().any(|k| k == "sidebar-grip" || k == "inspector-grip"), "default Tab order skips grips: {visited:?}");
+    let sb = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("sidebar-grip")).unwrap();
+    let insp = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("inspector-grip")).unwrap();
+    assert_eq!(sb.label.as_deref(), Some("Resize sidebar"));
+    assert_eq!(insp.label.as_deref(), Some("Resize inspector"));
+
+    // 2. Opt-in grip_tab_stop(true) + grip_step(16, 64) + grip_labels in both builder orders.
+    for opts_first in [false, true] {
+        let mut rt = make(G {
+            tab_stop: true,
+            step: Some((16.0, 64.0)),
+            labels: Some(("调整侧边栏", "调整检查器")),
+            opts_first,
+            ..G::default()
+        });
+        // Even with tab_visits_controls(false) (macOS default without Full Keyboard Access),
+        // grips own their keyboard (on_key) and remain Tab stops.
+        rt.set_tab_visits_controls(false);
+        let mut stops = Vec::new();
+        for _ in 0..6 {
+            send(&mut rt, Key::Tab, false);
+            if let Some(k) = focused_key(&rt) {
+                if stops.first() == Some(&k) { break; }
+                stops.push(k);
+            }
+        }
+        assert!(stops.contains(&"sidebar-grip".to_owned()), "opts_first={opts_first}: sidebar-grip in Tab order: {stops:?}");
+        assert!(stops.contains(&"inspector-grip".to_owned()), "opts_first={opts_first}: inspector-grip in Tab order: {stops:?}");
+
+        // Localized labels.
+        let sb = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("sidebar-grip")).unwrap();
+        let insp = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("inspector-grip")).unwrap();
+        assert_eq!(sb.label.as_deref(), Some("调整侧边栏"));
+        assert_eq!(insp.label.as_deref(), Some("调整检查器"));
+
+        // Focus sidebar-grip via Tab and verify visible full-opacity focus ring.
+        while focused_key(&rt).as_deref() != Some("sidebar-grip") {
+            send(&mut rt, Key::Tab, false);
+        }
+        assert_eq!(grip_ring_count(&rt, "sidebar-grip"), 1, "focused sidebar-grip draws full-opacity 2pt focus ring");
+        assert_eq!(grip_ring_count(&rt, "inspector-grip"), 0, "unfocused inspector-grip draws no ring");
+
+        // Plain Left/Right step by 16 pt, Shift+Left/Right by 64 pt.
+        send(&mut rt, Key::Right, false);
+        assert_eq!(rt.state.sidebar.width(), 256.0);
+        send(&mut rt, Key::Right, true);
+        assert_eq!(rt.state.sidebar.width(), 320.0);
+        send(&mut rt, Key::Left, false);
+        assert_eq!(rt.state.sidebar.width(), 304.0);
+        send(&mut rt, Key::Left, true);
+        assert_eq!(rt.state.sidebar.width(), 240.0);
+
+        // End jumps to max; Home resets to default.
+        send(&mut rt, Key::End, false);
+        assert_eq!(rt.state.sidebar.width(), 420.0);
+        send(&mut rt, Key::Home, false);
+        assert_eq!(rt.state.sidebar.width(), 240.0);
+
+        // Enter and Space reset to default without activating default_button; repeat Enter does not leak.
+        send(&mut rt, Key::Right, true);
+        assert_eq!(rt.state.sidebar.width(), 304.0);
+        send(&mut rt, Key::Enter, false);
+        assert_eq!(rt.state.sidebar.width(), 240.0);
+        assert_eq!(rt.state.default_clicks, 0, "Enter on grip must not fire window default_button");
+        rt.repeat_key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.default_clicks, 0, "repeated Enter on grip must stay consumed");
+
+        send(&mut rt, Key::Left, false);
+        assert_eq!(rt.state.sidebar.width(), 224.0);
+        send(&mut rt, Key::Text(" ".into()), false);
+        assert_eq!(rt.state.sidebar.width(), 240.0);
+
+        // Modified app shortcuts still pass through while grip is focused.
+        rt.key(KeyEvent { key: Key::Command('b'), mods: Mods { shift: true, cmd: true, ..Mods::default() } });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.toggle_shortcut_hits, 1, "modified shortcuts pass through focused grip");
+
+        // Tab to inspector-grip: ring moves, and Left/Right are inverted so arrows move the separator visually.
+        while focused_key(&rt).as_deref() != Some("inspector-grip") {
+            send(&mut rt, Key::Tab, false);
+        }
+        assert_eq!(grip_ring_count(&rt, "sidebar-grip"), 0);
+        assert_eq!(grip_ring_count(&rt, "inspector-grip"), 1);
+
+        send(&mut rt, Key::Left, false);
+        assert_eq!(rt.state.inspector.width(), 236.0, "LTR inspector: Left widens");
+        send(&mut rt, Key::Left, true);
+        assert_eq!(rt.state.inspector.width(), 300.0, "LTR inspector: Shift+Left widens by 64");
+        send(&mut rt, Key::Right, false);
+        assert_eq!(rt.state.inspector.width(), 284.0, "LTR inspector: Right narrows");
+        send(&mut rt, Key::Right, true);
+        assert_eq!(rt.state.inspector.width(), 220.0, "LTR inspector: Shift+Right narrows by 64");
+        send(&mut rt, Key::End, false);
+        assert_eq!(rt.state.inspector.width(), 400.0);
+        send(&mut rt, Key::Home, false);
+        assert_eq!(rt.state.inspector.width(), 220.0);
+    }
+
+    // 3. RTL flips visual arrow direction for both sidebar (on the right) and inspector (on the left).
+    let mut rt = make(G { tab_stop: true, step: Some((16.0, 64.0)), rtl: true, ..G::default() });
+    while focused_key(&rt).as_deref() != Some("sidebar-grip") {
+        send(&mut rt, Key::Tab, false);
+    }
+    send(&mut rt, Key::Left, false);
+    assert_eq!(rt.state.sidebar.width(), 256.0, "RTL sidebar sits on right: Left widens");
+    send(&mut rt, Key::Right, true);
+    assert_eq!(rt.state.sidebar.width(), 192.0, "RTL sidebar sits on right: Shift+Right narrows");
+    while focused_key(&rt).as_deref() != Some("inspector-grip") {
+        send(&mut rt, Key::Tab, false);
+    }
+    send(&mut rt, Key::Right, false);
+    assert_eq!(rt.state.inspector.width(), 236.0, "RTL inspector sits on left: Right widens");
+    send(&mut rt, Key::Left, true);
+    assert_eq!(rt.state.inspector.width(), 180.0, "RTL inspector sits on left: Shift+Left narrows and clamps");
+
+    // 4. Blank grip_labels and non-positive/NaN grip_step fall back safely to defaults.
+    let mut rt = make(G {
+        tab_stop: true,
+        step: Some((f32::NAN, -10.0)),
+        labels: Some(("   ", "")),
+        ..G::default()
+    });
+    assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("sidebar-grip")).unwrap().label.as_deref(), Some("Resize sidebar"));
+    assert_eq!(rt.elements().into_iter().find(|e| e.key.as_deref() == Some("inspector-grip")).unwrap().label.as_deref(), Some("Resize inspector"));
+    while focused_key(&rt).as_deref() != Some("sidebar-grip") {
+        send(&mut rt, Key::Tab, false);
+    }
+    send(&mut rt, Key::Right, false);
+    assert_eq!(rt.state.sidebar.width(), 248.0, "NaN fine step falls back to default 8 pt");
+    send(&mut rt, Key::Right, true);
+    assert_eq!(rt.state.sidebar.width(), 256.0, "negative coarse step falls back to fine step");
+}

@@ -411,3 +411,190 @@ fn arrow_keys_cross_a_break() {
         assert_eq!(rt.state.selected, ["tab2", "tab1"], "vertical: {vertical}: and crosses it back");
     }
 }
+
+#[test]
+fn tab_item_window_drag_moves_and_zooms_window_while_keeping_close_middle_hover_menu_and_focus() {
+    use rune::runtime::TitlebarAction;
+    use rune::{PointerButton, TextEdit, text_input};
+
+    const DEFER_MOUSE_DRAG: bool =
+        cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")));
+
+    struct S {
+        drag_only: bool,
+        editing: bool,
+        edit: TextEdit,
+        drag: TabDragState,
+        selected: Vec<String>,
+        closed: Vec<String>,
+        doubled: Vec<String>,
+        hovered: Vec<(String, bool)>,
+        menus: Vec<String>,
+    }
+
+    impl Default for S {
+        fn default() -> Self {
+            Self {
+                drag_only: true,
+                editing: false,
+                edit: TextEdit::new("Tab 0"),
+                drag: TabDragState::default(),
+                selected: Vec::new(),
+                closed: Vec::new(),
+                doubled: Vec::new(),
+                hovered: Vec::new(),
+                menus: Vec::new(),
+            }
+        }
+    }
+
+    fn view(s: &S, _: &mut rune::Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let mut t0 = TabItem::new("tab0", "Tab 0")
+            .window_drag(true)
+            .decorate(|tab, _| tab.on_secondary_press(|s: &mut S, _, _| s.menus.push("tab0".into())));
+        if s.editing {
+            t0 = t0.editor(text_input(&s.edit, k.ty.ui_compact).on_edit(|s: &mut S| &mut s.edit).key("tab0-edit"));
+        }
+        let mut items = vec![t0];
+        if !s.drag_only {
+            items.push(
+                TabItem::new("tab1", "Tab 1")
+                    .decorate(|tab, _| tab.on_secondary_press(|s: &mut S, _, _| s.menus.push("tab1".into()))),
+            );
+        }
+        let strip = TabStrip::new("strip", TabOrientation::Horizontal)
+            .tabs(items)
+            .active(Some("tab0"))
+            .viewport_width(Some(600.0))
+            .drag_state(&s.drag, |s: &mut S| &mut s.drag)
+            .on_select(|s: &mut S, id, _| s.selected.push(id.to_owned()))
+            .on_close(|s: &mut S, id, _| s.closed.push(id.to_owned()))
+            .on_double_click(|s: &mut S, id, _| s.doubled.push(id.to_owned()))
+            .on_hover(|s: &mut S, id, inside, _| s.hovered.push((id.to_owned(), inside)))
+            .build(&k);
+        col().size(600.0, 200.0).child(strip)
+    }
+
+    let rect = |rt: &rune::Runtime<S>, key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).expect(key).rect
+    };
+
+    let mut rt = rune::Runtime::new(S::default(), view, (600.0, 200.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+
+    let r = rect(&rt, "t-tab0");
+    // Left half of the tab (clear of the 20pt close button at its trailing edge).
+    let (tx, ty) = (r[0] + 24.0, r[1] + r[3] / 2.0);
+
+    // 1. Hover fires enter and leave cleanly on a window_drag tab.
+    rt.pointer_move(tx, ty);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.hovered, [("tab0".to_owned(), true)]);
+
+    // 2. Primary press + drag moves the window without selecting or starting a tab drag.
+    rt.pointer_down(tx, ty);
+    if DEFER_MOUSE_DRAG {
+        assert_eq!(rt.take_titlebar_action(), None);
+        rt.pointer_move(tx + 12.0, ty);
+    }
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag), "window_drag tab emits TitlebarAction::Drag");
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(tx + 12.0, ty);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.selected.is_empty(), "window_drag tab omits on_select");
+    assert!(rt.state.drag.dragging().is_none(), "window_drag tab omits tab drag");
+
+    // 3. Double-click triggers titlebar double-click (zoom/maximize), not TabStrip::on_double_click.
+    rt.frame(1.0);
+    rt.pointer_move(tx, ty);
+    rt.pointer_down(tx, ty);
+    let _ = rt.take_titlebar_action();
+    rt.pointer_up(tx, ty);
+    rt.pointer_down(tx, ty);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick), "window_drag tab emits TitlebarAction::DoubleClick");
+    rt.pointer_up(tx, ty);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.doubled.is_empty(), "window_drag tab omits on_double_click");
+
+    // 4. Context menu attached via decorate still fires on secondary click.
+    rt.secondary_down(tx, ty);
+    rt.secondary_up(tx, ty);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.menus, ["tab0"]);
+
+    // 5. Middle-click still closes the tab.
+    rt.button_down(tx, ty, PointerButton::Middle);
+    rt.button_up(tx, ty, PointerButton::Middle);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.closed, ["tab0"]);
+    rt.state.closed.clear();
+
+    // 6. Close button inside the tab still closes it and never triggers a window drag.
+    let close_r = rect(&rt, "close");
+    let (cx, cy) = (close_r[0] + close_r[2] / 2.0, close_r[1] + close_r[3] / 2.0);
+    rt.pointer_move(cx, cy);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_down(cx, cy);
+    if DEFER_MOUSE_DRAG {
+        rt.pointer_move(cx + 12.0, cy);
+    }
+    assert_eq!(rt.take_titlebar_action(), None, "close button must not drag window");
+    rt.pointer_up(cx, cy);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.closed, ["tab0"]);
+
+    // 7. Leaving the tab fires hover(false).
+    rt.pointer_move(590.0, 190.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.hovered.last(), Some(&("tab0".to_owned(), false)));
+
+    // 8. Keyboard focus still reaches the tab with role "tab".
+    rt.key(rune::KeyEvent { key: rune::Key::Tab, mods: rune::Mods::default() });
+    rt.frame(1.0 / 60.0);
+    let focused = rt.elements().into_iter().find(|e| e.focused).expect("focused tab");
+    assert_eq!(focused.key.as_deref(), Some("t-tab0"));
+    assert_eq!(focused.role, "tab");
+
+    // 9. While inline-editing via editor(...), window_drag is suppressed so clicking focuses the field.
+    rt.update(|s, _| s.editing = true);
+    rt.frame(1.0 / 60.0);
+    let edit_r = rect(&rt, "tab0-edit");
+    let (ex, ey) = (edit_r[0] + edit_r[2] / 2.0, edit_r[1] + edit_r[3] / 2.0);
+    rt.pointer_move(ex, ey);
+    rt.pointer_down(ex, ey);
+    if DEFER_MOUSE_DRAG {
+        rt.pointer_move(ex + 12.0, ey);
+    }
+    assert_eq!(rt.take_titlebar_action(), None, "inline editor suppresses window_drag");
+    rt.pointer_up(ex, ey);
+    rt.frame(1.0 / 60.0);
+
+    // 10. A sibling tab with default window_drag(false) keeps normal select/double-click/drag behaviour.
+    rt.update(|s, _| {
+        s.editing = false;
+        s.drag_only = false;
+    });
+    rt.frame(1.0 / 60.0);
+    rt.settle_all();
+    rt.frame(1.0 / 60.0);
+    let r1 = rect(&rt, "t-tab1");
+    let (x1, y1) = (r1[0] + 24.0, r1[1] + r1[3] / 2.0);
+    rt.pointer_move(x1, y1);
+    rt.pointer_down(x1, y1);
+    if DEFER_MOUSE_DRAG {
+        rt.pointer_move(x1 + 12.0, y1);
+    }
+    assert_eq!(rt.take_titlebar_action(), None, "normal tab never emits TitlebarAction::Drag");
+    rt.pointer_up(x1, y1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.selected, ["tab1"], "normal tab still selects");
+
+    // Rapid second press on normal tab triggers on_double_click, not TitlebarAction::DoubleClick.
+    rt.pointer_down(x1, y1);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(x1, y1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.doubled, ["tab1"], "normal tab still fires on_double_click");
+}

@@ -231,6 +231,7 @@ pub(super) fn build(item: TabItemCore<'_>, at: Place, prev: Option<&str>, st: &S
             closable,
             select_early: st.select_on_drag_start,
             active: at.active,
+            window_drag: item.window_drag,
             scroll_key: &st.scroll_key,
             auto: &st.auto,
         });
