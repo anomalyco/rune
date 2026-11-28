@@ -216,6 +216,70 @@ fn compact_style_setters_match_taffy_style() {
 }
 
 #[test]
+fn cold_setters_reuse_the_boxed_style_and_match_a_fresh_pack() {
+    let inset = Rect {
+        left: LengthPercentageAuto::length(8.0),
+        right: LengthPercentageAuto::AUTO,
+        top: LengthPercentageAuto::length(8.0),
+        bottom: LengthPercentageAuto::AUTO,
+    };
+    for dir in [FlexDirection::Row, FlexDirection::Column] {
+        let mut cs = CompactStyle::rune_base(dir);
+        let mut ts = Style {
+            display: Display::Flex,
+            flex_direction: dir,
+            flex_shrink: 0.0,
+            position: Position::Relative,
+            ..Style::DEFAULT
+        };
+
+        // The first cold set boxes the style; every later set arrives while the Box exists.
+        cs.set_absolute_inset(inset);
+        ts.position = Position::Absolute;
+        ts.inset = inset;
+        assert!(cs.heap_bytes() > 0, "an absolute inset needs the extra Box");
+        assert_eq!(cs, CompactStyle::from_style(ts.clone()));
+
+        cs.set_width(length(120.0));
+        ts.size.width = length(120.0);
+        cs.set_height(percent(0.5));
+        ts.size.height = percent(0.5);
+        assert!(cs.heap_bytes() > 0, "still cold after the width and height sets");
+        assert_eq!(cs, CompactStyle::from_style(ts.clone()), "cold sets match a fresh pack");
+        assert_eq!(cs.to_style(), ts);
+        assert_eq!(CoreStyle::size(&cs), ts.size, "the inline mirror follows the Box");
+
+        // Clearing the last cold field must drop the Box, exactly as a fresh pack would.
+        let auto = Rect {
+            left: LengthPercentageAuto::AUTO,
+            right: LengthPercentageAuto::AUTO,
+            top: LengthPercentageAuto::AUTO,
+            bottom: LengthPercentageAuto::AUTO,
+        };
+        cs.set_absolute_inset(auto);
+        ts.inset = auto;
+        assert_eq!(cs.heap_bytes(), 0, "clearing the inset drops the extra Box");
+        assert_eq!(cs, CompactStyle::from_style(ts.clone()));
+        assert_eq!(cs.to_style(), ts);
+    }
+}
+
+#[test]
+fn whole_rows_survives_a_cold_set() {
+    let mut cs = CompactStyle::rune_base(FlexDirection::Column);
+    cs.set_whole_rows();
+    cs.set_absolute_inset(Rect {
+        left: LengthPercentageAuto::length(4.0),
+        right: LengthPercentageAuto::AUTO,
+        top: LengthPercentageAuto::AUTO,
+        bottom: LengthPercentageAuto::AUTO,
+    });
+    assert!(cs.whole_rows(), "the whole-rows bit survives the cold set that boxes the style");
+    let ts = cs.to_style();
+    assert!(!cs.eq_style(&ts), "eq_style knows the whole-rows bit is set");
+}
+
+#[test]
 fn a_taken_box_placement_keeps_the_overflow_on_the_wrapper() {
     for cold in [false, true] {
         let mut cs = CompactStyle::rune_base(FlexDirection::Column);

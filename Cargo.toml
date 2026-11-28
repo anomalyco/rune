@@ -38,6 +38,7 @@ members = [
     "examples/fetch",
     "www/app",
     "examples/todo",
+    "examples/storm-race",
     "examples/settings",
     "examples/playground",
     "examples/knobs",

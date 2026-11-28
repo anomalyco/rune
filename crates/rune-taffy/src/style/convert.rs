@@ -4,6 +4,15 @@ use super::*;
 
 impl CompactStyle {
     pub fn from_style(s: Style) -> Self {
+        let (mut packed, needs_extra) = Self::pack_hot(&s);
+        packed.extra = needs_extra.then(|| Box::new(s));
+        packed
+    }
+
+    /// The inline half of [`Self::from_style`]: every packed field from `s`, and whether any field
+    /// forced the `extra` Box. `extra` is left `None` so a caller that already holds the Box can
+    /// put it back instead of allocating a new one.
+    pub(super) fn pack_hot(s: &Style) -> (Self, bool) {
         let mut vals = [0u32; HOT_VAL_COUNT];
         let mut len_tags: u16 = 0;
         let mut needs_extra = has_cold_fields(&s);
@@ -109,23 +118,25 @@ impl CompactStyle {
         let align_self_u8 = pack_align_self(s.align_self);
         let justify_content_u8 = pack_align_content(s.justify_content);
         let align_content_u8 = pack_align_content(s.align_content);
-        let extra = needs_extra.then(|| Box::new(s));
 
-        Self {
-            vals,
-            gap_w_bf16,
-            gap_h_bf16,
-            flex_grow_bf16,
-            flex_shrink_bf16,
-            len_tags,
-            box_flags,
-            mode_flags,
-            align_items_u8,
-            align_self_u8,
-            justify_content_u8,
-            align_content_u8,
-            extra,
-        }
+        (
+            Self {
+                vals,
+                gap_w_bf16,
+                gap_h_bf16,
+                flex_grow_bf16,
+                flex_shrink_bf16,
+                len_tags,
+                box_flags,
+                mode_flags,
+                align_items_u8,
+                align_self_u8,
+                justify_content_u8,
+                align_content_u8,
+                extra: None,
+            },
+            needs_extra,
+        )
     }
 
     pub fn to_style(&self) -> Style {
