@@ -15,6 +15,7 @@ impl RuntimeCore {
         r: [f32; 4],
         r_exact: [f32; 4],
         raw_edges: [f32; 4],
+        (snaps, origin_pt, shape_size): (bool, [f32; 2], [f32; 2]),
         radii: [f32; 4],
         w: f32,
         h: f32,
@@ -423,7 +424,7 @@ impl RuntimeCore {
                     && n.vis.paint_alpha == 1.0 && bw == 0.0 && overlay == [0.0; 4]
                     && !n.vis.tracks_hover_paint() && !n.vis.tracks_press()
                     && self.instances.len() == primitive_start && n.text.is_none() && n.input.is_none()
-                    && n.vis.shape.is_none() && n.vis.pixels.is_none() && n.vis.web_image.is_none() && n.vis.effect.is_none()
+                    && !n.vis.has_shape() && n.vis.pixels.is_none() && n.vis.web_image.is_none() && n.vis.effect.is_none()
                     && n.vis.shadows.is_empty() && n.handlers.get().is_none() && n.focus.get().is_none()
                     && !n.vis_flags.hit() && !turned && cover.is_none() && n.help.is_none()
                     && curve.stops.iter().all(|&(_, a)| a.is_finite() && a > 0.001 && a <= 1.0 && base[3] * a > 0.0005)
@@ -510,6 +511,10 @@ impl RuntimeCore {
                     [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                 },
                 raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
+                origin_pt,
+                shape_size,
+                rigid: pinh.rigid.map(|v| v * s),
+                snaps,
                 contain: pcold.snap_contain.map(|v| v * s),
                 radii,
                 sc,

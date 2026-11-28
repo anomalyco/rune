@@ -203,8 +203,26 @@ impl El {
     pub fn shape(mut self, shape: Shape) -> Self {
         let sh = (!shape.is_empty()).then(|| Rc::new(shape));
         if sh.is_some() || !self.vis.cold.is_empty() {
-            self.vis.cold_mut().shape = sh;
+            let cold = self.vis.cold_mut();
+            cold.shape = sh;
+            cold.shape_builder = None;
         }
+        self
+    }
+    /// Paints a [`Shape`] built from the element's laid-out size `[width, height]` (in points)
+    /// and the window's device `scale` on the frame the element is painted, over the fill and
+    /// under any text. It does not affect layout or hit testing.
+    ///
+    /// Unlike [`Shape::view_box`], this lets you anchor geometry to the box's right or bottom
+    /// edge or adapt stroke widths and element counts to the laid-out size without stretching,
+    /// and without a one-frame layout-callback delay (including inside [`El::virtual_rows`]).
+    /// Combine with [`Shape::rect`], [`Shape::rounded_rect`], or [`Shape::rounded_rect_corners`]
+    /// so axis-aligned bars and boxes snap to device pixels in window space like box elements
+    /// while preserving scroll-shifted paint reuse.
+    pub fn shape_with(mut self, build: impl Fn([f32; 2], f32) -> Shape + 'static) -> Self {
+        let cold = self.vis.cold_mut();
+        cold.shape = None;
+        cold.shape_builder = Some(Rc::new(crate::el::visual::ShapeBuilder::new(build)));
         self
     }
     /// Shows `pixels`, scaled into the element's rect and clipped to its corner radius. The image

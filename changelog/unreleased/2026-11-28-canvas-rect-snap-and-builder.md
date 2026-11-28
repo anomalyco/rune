@@ -1,0 +1,1 @@
+- Add `Shape::rect`, `Shape::rounded_rect`, and `Shape::rounded_rect_corners` (painted as single `KIND_RECT` primitives with window-space edge snapping matching box fills) plus `canvas_with` / `El::shape_with` to build a canvas shape from its laid-out `[width, height]` and device `scale` on the frame it paints (#2668).

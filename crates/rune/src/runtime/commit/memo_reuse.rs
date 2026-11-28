@@ -162,7 +162,7 @@ fn opt_box_eq<T: PartialEq>(a: &Option<Box<T>>, b: &Option<Box<T>>) -> bool {
 fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> bool {
     let crate::el::VisualCold {
         surface, surface_place, border_bottom, border_sides, border_layout, border_dash, border_dash_phase, shadows, blur_motion,
-        clip, clip_radius, clip_corners, cutouts, icon, icon_inked, icon_one_color, gradient, radial, outline, shape,
+        clip, clip_radius, clip_corners, cutouts, icon, icon_inked, icon_one_color, gradient, radial, outline, shape, shape_builder,
         grid, pixels, pixels_fit, pixels_wrap, pixels_tint, web_image, image_filter, image_menu, effect, backdrop_blur, hover_motion, hover_motion_default, hover_within, press_motion,
         group_opacity, group_color, hover_alone, hover_share, hover_pointer_only, group_focus, group_motion, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop, flight_in_place,
@@ -183,7 +183,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         }
         && a.icon_inked == *icon_inked && a.icon_one_color == *icon_one_color
         && opt_box_eq(&a.gradient, gradient) && opt_box_eq(&a.radial, radial)
-        && a.outline == *outline && opt_rc_eq(&a.shape, shape)
+        && a.outline == *outline && opt_rc_eq(&a.shape, shape) && opt_rc_eq(&a.shape_builder, shape_builder)
         // A grid built again from the same rows is the same grid.
         && match (&a.grid, grid) {
             (None, None) => true,
