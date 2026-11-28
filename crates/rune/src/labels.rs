@@ -292,7 +292,3 @@ pub(crate) fn test_lock() -> LabelsGuard {
     let prev = NAMER.read().ok().and_then(|n| n.clone());
     LabelsGuard { _lock: lock, prev }
 }
-
-#[cfg(test)]
-#[path = "labels_tests.rs"]
-mod tests;

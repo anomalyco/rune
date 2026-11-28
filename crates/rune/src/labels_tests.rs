@@ -1,4 +1,4 @@
-use super::*;
+use crate::labels::{Label, label, set_labels, test_lock};
 use crate::{Mods, Shortcut, modifier_keycaps};
 
 #[test]
