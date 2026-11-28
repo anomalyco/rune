@@ -612,3 +612,75 @@ fn ime_sync_enables_restarts_pauses_and_hides_keyboard() {
     );
     assert_eq!(s.ime_editor, None);
 }
+
+#[test]
+fn unhandled_root_back_moves_to_background_and_resumes_without_losing_state() {
+    let mut s = State::default();
+    let _ = run(&mut s, Event::Resumed);
+    let _ = run(&mut s, Event::InsetsChanged {
+        safe_area_px: [144, 0, 102, 0],
+        keyboard_px: 0,
+        scale: 3.0,
+    });
+    let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
+    assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
+    let _ = run(&mut s, frame_done(false, None));
+
+    // Back at root is unconsumed, so RuneActivity calls moveTaskToBack(true) instead of finish():
+    // Android pauses and detaches the surface without emitting Event::Destroy.
+    assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
+    assert!(run(&mut s, Event::BackDone { consumed: false }).is_empty());
+    let _ = run(&mut s, Event::Paused);
+    assert_eq!(run(&mut s, Event::SurfaceDestroyed), [Effect::DetachSurface]);
+    assert!(!s.destroyed, "moving a root task to the back must keep the host alive");
+
+    // Returning from the launcher reattaches the surface, replays cached insets, and redraws.
+    assert!(run(&mut s, Event::Resumed).is_empty());
+    let recreated = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
+    assert_eq!(recreated[0], Effect::AttachSurface { viewport: (360.0, 800.0), scale: 3.0 });
+    assert!(has(&recreated, Effect::SetSafeArea([48.0, 0.0, 34.0, 0.0])));
+    assert!(has(&recreated, Effect::ScheduleFrame));
+    assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
+}
+
+#[test]
+fn rune_activity_requests_no_title_before_content_and_moves_task_root_to_back() {
+    let src = include_str!("../../../android/src/main/java/dev/rune/RuneActivity.kt");
+
+    // Window.FEATURE_NO_TITLE must be requested inside onCreate() before configureEdgeToEdge()
+    // (which touches decorView on API < 30) and before setContentView(runeView).
+    let on_create_start = src
+        .find("override fun onCreate(")
+        .expect("RuneActivity must override onCreate()");
+    let on_create = &src[on_create_start..];
+    let no_title = on_create
+        .find("requestWindowFeature(Window.FEATURE_NO_TITLE)")
+        .expect("RuneActivity must request Window.FEATURE_NO_TITLE");
+    let edge_to_edge = on_create
+        .find("configureEdgeToEdge()")
+        .expect("RuneActivity must call configureEdgeToEdge()");
+    let set_content = on_create
+        .find("setContentView(runeView)")
+        .expect("RuneActivity must call setContentView(runeView)");
+    assert!(no_title < edge_to_edge, "FEATURE_NO_TITLE must precede configureEdgeToEdge()");
+    assert!(no_title < set_content, "FEATURE_NO_TITLE must precede setContentView(runeView)");
+
+    // Unhandled Back moves task-root activities to the back before falling back to finish(),
+    // and both API 33+ OnBackInvokedCallback and API < 33 onBackPressed() share onUnhandledBack().
+    let unhandled_fn = src
+        .find("fun onUnhandledBack()")
+        .expect("RuneActivity must define onUnhandledBack()");
+    let body = &src[unhandled_fn..];
+    let move_back = body
+        .find("isTaskRoot && moveTaskToBack(true)")
+        .expect("onUnhandledBack() must move task-root activities to the back");
+    let finish_call = body
+        .find("finish()")
+        .expect("onUnhandledBack() must fall back to finish() for non-root activities");
+    assert!(move_back < finish_call, "moveTaskToBack(true) must precede finish()");
+    assert_eq!(
+        src.matches("onUnhandledBack()").count(),
+        3,
+        "onUnhandledBack() must be defined once and called by both OnBackInvokedCallback and onBackPressed()",
+    );
+}

@@ -109,4 +109,13 @@ mod tests {
         rt.frame(1.0 / 60.0);
         assert!(!rt.has_focus(), "Back mapped to Escape blurs focused text input");
     }
+
+    #[test]
+    fn android_hello_manifest_hides_action_bar() {
+        let manifest = include_str!("../AndroidManifest.xml");
+        assert!(
+            manifest.contains(r#"android:theme="@android:style/Theme.DeviceDefault.NoActionBar""#),
+            "android-hello manifest must set a NoActionBar theme so no system title bar covers Rune",
+        );
+    }
 }

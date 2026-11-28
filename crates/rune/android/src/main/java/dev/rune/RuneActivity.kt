@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
@@ -17,9 +18,12 @@ import android.window.OnBackInvokedDispatcher
  * Default [Activity] hosting a full-screen edge-to-edge [RuneView].
  *
  * Reads the Rust shared library name from activity manifest meta-data `dev.rune.lib_name`
- * (defaulting to `rune_app`), configures `SOFT_INPUT_ADJUST_NOTHING` so soft keyboards report
- * [dev.rune.RuneView] IME overlap without resizing the layout viewport, forwards dark mode and
- * lifecycle events, and delegates Back presses to Rune (as `Key::Escape`), falling through to Android when unconsumed.
+ * (defaulting to `rune_app`), requests [Window.FEATURE_NO_TITLE] so no system action bar covers
+ * the edge-to-edge surface even when an app omits a `NoActionBar` theme, configures
+ * `SOFT_INPUT_ADJUST_NOTHING` so soft keyboards report [dev.rune.RuneView] IME overlap without
+ * resizing the layout viewport, forwards dark mode and lifecycle events, and delegates Back
+ * presses to Rune (as `Key::Escape`). When Back is unconsumed, task-root activities move to the
+ * back (preserving app state across launcher re-entry) while non-root activities finish.
  */
 open class RuneActivity : Activity() {
 
@@ -59,6 +63,7 @@ open class RuneActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
         configureEdgeToEdge()
         lastDark = isDark(resources.configuration)
         runeView = RuneView(this, nativeLibraryName())
@@ -66,11 +71,12 @@ open class RuneActivity : Activity() {
             launchDocumentPicker(requestId, intent)
         }
         setContentView(runeView)
+        actionBar?.hide()
 
         if (Build.VERSION.SDK_INT >= 33) {
             val cb = OnBackInvokedCallback {
                 if (!runeView.handleBack()) {
-                    finish()
+                    onUnhandledBack()
                 }
             }
             backCallback = cb
@@ -135,11 +141,25 @@ open class RuneActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    /**
+     * Called when Rune did not consume a Back press.
+     *
+     * Matches Android 12+'s root-activity Back behaviour: moves a task-root activity to the back
+     * so the activity, [runeView], and Rust app state survive returning from the launcher, and
+     * finishes non-root activities (or falls back to [finish] if the task cannot be moved).
+     */
+    protected open fun onUnhandledBack() {
+        if (isTaskRoot && moveTaskToBack(true)) {
+            return
+        }
+        finish()
+    }
+
     @Suppress("DEPRECATION")
     @Deprecated("Deprecated in Android 13; kept for API < 33 fallback.")
     override fun onBackPressed() {
         if (!runeView.handleBack()) {
-            super.onBackPressed()
+            onUnhandledBack()
         }
     }
 

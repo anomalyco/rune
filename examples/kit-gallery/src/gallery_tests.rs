@@ -569,3 +569,76 @@ fn overlay_default_metrics_match_explicit_kit_defaults() {
         }
     }
 }
+
+/// Regression test for mobile edge-to-edge surfaces: `kit-gallery` keeps its page fill full-bleed
+/// while padding the index scroll viewport and single-story decorator by `Cx::safe_area()` and
+/// `Cx::keyboard_inset()`.
+#[test]
+fn gallery_pads_index_and_single_story_by_safe_area_and_keyboard_inset() {
+    let rect_of = |rt: &rune::Runtime<G>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .map(|e| e.rect)
+            .unwrap_or_else(|| panic!("expected element with key {key:?}"))
+    };
+
+    let mut rt = build_app().headless_runtime((390.0, 844.0), rune::Env::new(true, 3.0));
+    rt.frame(0.0);
+    assert_eq!(rect_of(&rt, "frame"), [0.0, 0.0, 390.0, 844.0]);
+    assert_eq!(rect_of(&rt, "index-scroll"), [0.0, 0.0, 390.0, 844.0]);
+
+    // Status bar (48), right cutout (12), nav bar (34), left cutout (16).
+    rt.set_safe_area([48.0, 12.0, 34.0, 16.0]);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rect_of(&rt, "frame"), [0.0, 0.0, 390.0, 844.0], "page fill remains full-bleed");
+    assert_eq!(
+        rect_of(&rt, "index-scroll"),
+        [16.0, 48.0, 390.0 - 16.0 - 12.0, 844.0 - 48.0 - 34.0],
+        "index scroll viewport clears status bar, nav bar, and horizontal cutouts",
+    );
+    let first_story_top = rect_of(&rt, "index")[1] + 24.0;
+    assert!(first_story_top >= 48.0 + 24.0, "first story label must sit below status bar: {first_story_top}");
+
+    // Raising the soft keyboard lifts the bottom of the scroll viewport above the keyboard.
+    rt.set_keyboard_inset(280.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(
+        rect_of(&rt, "index-scroll"),
+        [16.0, 48.0, 390.0 - 16.0 - 12.0, 844.0 - 48.0 - 280.0],
+    );
+    rt.set_keyboard_inset(0.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(
+        rect_of(&rt, "index-scroll"),
+        [16.0, 48.0, 390.0 - 16.0 - 12.0, 844.0 - 48.0 - 34.0],
+    );
+
+    // Single stories add safe-area insets on top of the 24 px Storybook decorator padding.
+    let (_, setup) = stories::SCENES
+        .iter()
+        .find(|(id, _)| *id == "ui-button--variants")
+        .expect("ui-button--variants scene");
+    let mut single_zero = build_app().headless_runtime((390.0, 844.0), rune::Env::new(true, 3.0));
+    single_zero.update(|s, _| setup(s));
+    single_zero.frame(0.0);
+    let zero_btn_top = single_zero
+        .elements()
+        .into_iter()
+        .find(|e| e.role == "button")
+        .expect("button in ui-button--variants")
+        .rect;
+
+    let mut single_inset = build_app().headless_runtime((390.0, 844.0), rune::Env::new(true, 3.0));
+    single_inset.update(|s, _| setup(s));
+    single_inset.set_safe_area([48.0, 12.0, 34.0, 16.0]);
+    single_inset.frame(0.0);
+    let inset_btn_top = single_inset
+        .elements()
+        .into_iter()
+        .find(|e| e.role == "button")
+        .expect("button in ui-button--variants")
+        .rect;
+    assert_eq!(inset_btn_top[0], zero_btn_top[0] + 16.0, "single story shifts right by left safe area");
+    assert_eq!(inset_btn_top[1], zero_btn_top[1] + 48.0, "single story shifts down by top safe area");
+}
