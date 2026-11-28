@@ -1,0 +1,1 @@
+- Android: removed `#[allow(unsafe_code)]` from `rune::android_main!` and scoped its exported `unsafe extern "system" fn JNI_OnLoad` inside an anonymous `const` block so crates using `#![forbid(unsafe_code)]` (and strict Clippy / `missing_docs` lints) can invoke `rune::android_main!` directly without `cfg_attr` workarounds.
