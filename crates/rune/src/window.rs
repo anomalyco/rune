@@ -296,6 +296,11 @@ pub(crate) trait AnyHost {
     fn quit_hook(&mut self) {}
     /// The app quits: off the screen now, before any hook runs.
     fn vanish(&mut self) {}
+    /// Releases this host's native Wayland surfaces (window or layer surface and attached GPU
+    /// surface) without tearing down app state or the GPU device, so fast exit destroys every
+    /// `wl_surface` cleanly before `_exit`.
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    fn release_wayland_surface(&mut self) {}
     /// The close about to come ends the app (`Host::close`).
     fn closing_ends_app(&mut self) {}
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
@@ -848,6 +853,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
         );
         #[cfg(not(target_arch = "wasm32"))]
         if step == app_events::ExitStep::FastExit && let Some(last) = fast_hook {
+            app_events::prepare_fast_exit_wayland(&mut self.hosts, event_loop);
             crate::quit::end_fast(last);
         }
         let effects = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::Exiting);
@@ -863,14 +869,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 crate::tray::remove_all();
             },
             || {
-                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                {
-                    crate::platform::wayland::primary_selection::wire::shutdown();
-                    crate::platform::wayland::drop::shutdown();
-                    crate::platform::wayland::backdrop::shutdown();
-                    crate::platform::wayland::presentation::shutdown();
-                    crate::platform::wayland::serial::wire::shutdown();
-                }
+                app_events::finish_wayland_teardown(event_loop, has_display_error);
                 crate::marks::mark("windows.dropped");
                 crate::clipboard::shutdown();
             },

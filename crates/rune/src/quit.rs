@@ -159,7 +159,8 @@ pub(crate) fn fast_exit_hook() -> Option<fn()> {
 /// `last`, then the process ends without dropping a window, a device or an allocation.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn end_fast(last: fn()) -> ! {
-    // The windows go now, not when the process's threads are torn down.
+    // The windows go now, not when the process's threads are torn down (Wayland surfaces were
+    // already released and synced in `Windows::exiting` while winit's display handle is in scope).
     #[cfg(target_os = "windows")]
     crate::platform::win32::destroy_own_windows();
     // What the loop's end does for an orderly exit (`event_loop::run_configured`).

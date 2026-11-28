@@ -10,6 +10,7 @@
 # load via `LoadLibraryExA` with `LOAD_LIBRARY_SEARCH_SYSTEM32`; and on macOS the input method reads the app's text around its selection, to convert it again, and its marked text's clauses reach the app, beside `Ime::Preedit`, through `platform::macos::{set_ime_text, take_ime_clauses, take_ime_replacement}`; and
 # `platform::wayland::WindowExtWayland::content_corner_radius` says what radius a Wayland client-side frame
 # leaves the window's content's bottom corners at, 0 when it draws none or draws it square; and
+# `platform::wayland::ActiveEventLoopExtWayland::reap_closed_wayland_windows` drops closed Wayland `WindowState`s immediately (also called in `EventLoop::run_on_demand` before its final roundtrip); and
 # `platform::wayland::ActiveEventLoopExtWayland::set_wake_on_wayland_read` opts into waking from
 # `ControlFlow::Wait` on any successful Wayland display read so foreign queues such as layer-shell
 # overlays dispatch without background reader threads; and Windows `handle_os_dragging` packs signed

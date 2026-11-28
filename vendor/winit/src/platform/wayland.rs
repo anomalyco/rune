@@ -33,6 +33,12 @@ pub trait ActiveEventLoopExtWayland {
     /// had no events. Foreign Wayland queues sharing the display (such as layer-shell overlays)
     /// dispatch on that turn without background reader threads. Off by default; no-op on X11.
     fn set_wake_on_wayland_read(&self, wake: bool);
+
+    /// Rune: drops Wayland `WindowState` entries for every `Window` already dropped so their
+    /// `xdg_toplevel`, `xdg_surface`, `wl_surface` and decoration subsurfaces queue destroy
+    /// requests on the connection immediately, rather than waiting for the next event-loop
+    /// iteration (which never runs once the loop is exiting). No-op on X11.
+    fn reap_closed_wayland_windows(&self);
 }
 
 impl ActiveEventLoopExtWayland for ActiveEventLoop {
@@ -44,6 +50,11 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
     #[inline]
     fn set_wake_on_wayland_read(&self, wake: bool) {
         self.p.set_wake_on_wayland_read(wake);
+    }
+
+    #[inline]
+    fn reap_closed_wayland_windows(&self) {
+        self.p.reap_closed_wayland_windows();
     }
 }
 

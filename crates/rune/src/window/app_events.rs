@@ -186,6 +186,78 @@ pub(super) fn exiting_hosts(
     ExitStep::Orderly { relaunch }
 }
 
+/// Runs the ordered Wayland surface teardown sequence before `crate::quit::end_fast` ends the
+/// process: releases each host's native Wayland surface, reaps closed winit `WindowState`s,
+/// shuts down Rune's global Wayland helpers, and performs a bounded `wl_display.sync` roundtrip
+/// so the compositor processes every destroy and clears keyboard focus while the client socket is
+/// still open. No-op off Wayland.
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub(super) fn prepare_fast_exit_wayland_with(
+    hosts: &mut [Option<Box<dyn AnyHost>>],
+    wayland: bool,
+    reap_winit_windows: impl FnOnce(),
+    shutdown_wayland_globals: impl FnOnce(),
+    sync_display: impl FnOnce(),
+) {
+    if !wayland {
+        return;
+    }
+    for host in hosts.iter_mut().flatten() {
+        host.release_wayland_surface();
+    }
+    reap_winit_windows();
+    shutdown_wayland_globals();
+    sync_display();
+}
+
+/// Reaps closed Wayland `WindowState`s from winit, tears down Rune's global Wayland helpers,
+/// and (when running on a live Wayland display) waits for a bounded `wl_display.sync` roundtrip.
+/// No-op off Unix/Wayland desktop targets.
+pub(super) fn finish_wayland_teardown(event_loop: &ActiveEventLoop, has_display_error: bool) {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        winit::platform::wayland::ActiveEventLoopExtWayland::reap_closed_wayland_windows(event_loop);
+        crate::platform::wayland::teardown::shutdown_globals();
+        if !has_display_error
+            && is_wayland(event_loop)
+            && let Ok(display) = winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop)
+        {
+            let _ = crate::platform::wayland::teardown::sync_display(
+                display.as_raw(),
+                crate::platform::wayland::teardown::SYNC_TIMEOUT,
+            );
+        }
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    let _ = (event_loop, has_display_error);
+}
+
+/// Tears down Wayland surfaces, helpers, and flushes/syncs the display before fast exit calls
+/// `_exit`. No-op off Wayland (Windows, macOS, X11 keep full fast exit with zero teardown work).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn prepare_fast_exit_wayland(
+    hosts: &mut [Option<Box<dyn AnyHost>>],
+    event_loop: &ActiveEventLoop,
+) {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    prepare_fast_exit_wayland_with(
+        hosts,
+        is_wayland(event_loop),
+        || winit::platform::wayland::ActiveEventLoopExtWayland::reap_closed_wayland_windows(event_loop),
+        crate::platform::wayland::teardown::shutdown_globals,
+        || {
+            if let Ok(display) = winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop) {
+                let _ = crate::platform::wayland::teardown::sync_display(
+                    display.as_raw(),
+                    crate::platform::wayland::teardown::SYNC_TIMEOUT,
+                );
+            }
+        },
+    );
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    let _ = (hosts, event_loop);
+}
+
 /// Runs the non-blocking orderly teardown steps inside `Windows::exiting` before the event loop
 /// returns and `shutdown_prewarm()` begins its bounded wait: drops every host (windows and
 /// overlays), removes every live tray icon so nothing stays visible on screen during a slow or
@@ -291,3 +363,7 @@ mod tests;
 #[cfg(test)]
 #[path = "quit_request_tests.rs"]
 mod quit_request_tests;
+
+#[cfg(test)]
+#[path = "wayland_teardown_tests.rs"]
+mod wayland_teardown_tests;
