@@ -507,6 +507,21 @@ impl<S: 'static> LayerHost<S> {
         self.core.resize(self.rt.core_mut(), viewport, scale);
     }
 
+    /// Routes an Android Back press through the runtime as `Key::Escape` synchronously without
+    /// acquiring a GPU drawable, returning whether Rune consumed the key.
+    #[cfg(target_os = "android")]
+    pub(crate) fn dispatch_back_escape(&mut self) -> bool {
+        let was_animating =
+            self.rt.core().animating || self.compositor.as_ref().is_some_and(|c| c.animating());
+        let (rt, mut app) = self.rt.split_mut();
+        let consumed = crate::platform::android::machine::dispatch_back_escape_core(rt, &mut app);
+        embed_frame::flush_requests(rt, &mut app);
+        if !was_animating && consumed {
+            self.core.clock.hold(crate::time::now());
+        }
+        consumed
+    }
+
     /// Steps animations and layout to `Instant::now()` and presents one frame, following the
     /// shared [`crate::frame::host_step`] order. Returns `drew: false` when suspended or detached.
     pub fn frame(&mut self) -> EmbedFrame {

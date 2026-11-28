@@ -74,8 +74,8 @@ impl RuntimeCore {
     /// A modifier key still gets its `Key::Modifier` when modifier keys are on.
     pub(crate) fn physical_input(&mut self, event: PhysicalInput) {
         self.observe_mods(&event);
-        if self.cancel_drag_key(&event) { return; }
-        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { return; }
+        if self.cancel_drag_key(&event) { self.kbd.note_key_consumed(true); return; }
+        if matches!(event, PhysicalInput::Key { pressed: true, .. }) && self.pointer.autoscroll_key() { self.kbd.note_key_consumed(true); return; }
         self.frame.queue.push(Action::Physical(event, None));
     }
 

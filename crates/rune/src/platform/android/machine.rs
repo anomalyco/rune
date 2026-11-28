@@ -100,9 +100,11 @@ pub(crate) enum Event {
         scale: f32,
     },
     DarkModeChanged(bool),
-    /// System Back button or gesture pressed; `has_focus` reports `Runtime::has_focus()`.
-    BackPressed {
-        has_focus: bool,
+    /// System Back button or gesture pressed.
+    BackPressed,
+    /// Outcome of [`Effect::DispatchBack`]: whether Rune consumed `Key::Escape`.
+    BackDone {
+        consumed: bool,
     },
     /// Activity destroyed.
     Destroy,
@@ -123,8 +125,9 @@ pub(crate) enum Effect {
     SetSafeArea([f32; 4]),
     SetKeyboardInset(f32),
     SetDark(bool),
-    /// Deliver `Key::Escape` to blur focused input or dismiss a modal; consumes the Back event.
-    SendEscapeKey,
+    /// Queue `Key::Escape`, run one synchronous zero-dt frame to route it, and feed
+    /// [`Event::BackDone`] with whether Rune consumed the key (`Runtime::take_key_consumed`).
+    DispatchBack,
     ScheduleFrame,
     CancelFrame,
     ScheduleWakeAfter(f64),
@@ -328,9 +331,11 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
                 request_frame(state, &mut effects);
             }
         }
-        Event::BackPressed { has_focus } => {
-            if has_focus {
-                effects.push(Effect::SendEscapeKey);
+        Event::BackPressed => {
+            effects.push(Effect::DispatchBack);
+        }
+        Event::BackDone { consumed } => {
+            if consumed {
                 request_frame(state, &mut effects);
             }
         }
@@ -351,13 +356,28 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
     effects
 }
 
-/// Whether the effects emitted for [`Event::BackPressed`] consumed the event inside Rune.
-#[inline]
-pub(crate) fn consumed_back(effects: &Effects<Effect>) -> bool {
-    match effects {
-        Effects::None => false,
-        Effects::One(a) => matches!(a, Effect::SendEscapeKey),
-        Effects::Two(a, b) => matches!(a, Effect::SendEscapeKey) || matches!(b, Effect::SendEscapeKey),
-        Effects::Many(v) => v.iter().any(|e| matches!(e, Effect::SendEscapeKey)),
-    }
+/// Routes an Android Back press through `rt` as `Key::Escape` on a synchronous zero-dt frame and
+/// returns whether Rune consumed the key (`RuntimeCore::take_key_consumed`).
+///
+/// Mirrors the web host's key-consumption contract: active modals, app `on_key` panels, focused
+/// text fields (blur or IME composition), and active drags consume Escape so the Activity stays;
+/// focused controls that ignore Escape (such as a tapped button or switch) return `false` so
+/// Android navigates back.
+pub(crate) fn dispatch_back_escape_core(
+    rt: &mut crate::runtime::RuntimeCore,
+    app: &mut dyn crate::runtime::AppDriver,
+) -> bool {
+    rt.take_key_consumed();
+    rt.key(crate::KeyEvent {
+        key: crate::Key::Escape,
+        mods: crate::Mods::default(),
+    });
+    let _ = rt.frame(app, 0.0);
+    rt.take_key_consumed()
+}
+
+#[cfg(test)]
+pub(crate) fn dispatch_back_escape<S: 'static>(rt: &mut crate::Runtime<S>) -> bool {
+    let (core, mut app) = rt.split_mut();
+    dispatch_back_escape_core(core, &mut app)
 }

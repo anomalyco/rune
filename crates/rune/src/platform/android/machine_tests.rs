@@ -2,7 +2,7 @@
 //! repeated Home/return background trips, rotation, insets and keyboard overlap without viewport
 //! resize, dark mode, Back navigation, and Choreographer deduplication.
 
-use super::machine::{Effect, Event, State, Surface, consumed_back, step};
+use super::machine::{Effect, Event, State, Surface, dispatch_back_escape, step};
 
 fn run(state: &mut State, event: Event) -> Vec<Effect> {
     step(state, event).into_iter().collect()
@@ -191,23 +191,213 @@ fn dark_mode_updates_emit_set_dark_and_schedule_frame_only_on_change() {
 }
 
 #[test]
-fn back_press_sends_escape_when_focused_and_falls_through_when_unfocused() {
+fn back_press_dispatches_and_schedules_frame_only_when_consumed() {
     let mut s = State::default();
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     let _ = run(&mut s, Event::Frame);
     let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
 
-    // Nothing focused -> not consumed -> Activity returns to launcher.
-    let raw = step(&mut s, Event::BackPressed { has_focus: false });
-    assert!(!consumed_back(&raw));
-    assert!(raw.is_empty());
+    // Back always dispatches to the runtime regardless of focus state.
+    assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
+    // Unconsumed Back schedules no frame (Activity is about to leave).
+    assert!(run(&mut s, Event::BackDone { consumed: false }).is_empty());
 
-    // Something focused -> sends Escape and schedules redraw -> consumed.
-    let raw = step(&mut s, Event::BackPressed { has_focus: true });
-    assert!(consumed_back(&raw));
-    let v: Vec<_> = raw.into_iter().collect();
-    assert_eq!(v, [Effect::SendEscapeKey, Effect::ScheduleFrame]);
+    // Consumed Back schedules a redraw so the dismissed/blurred UI presents.
+    assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
+    assert_eq!(run(&mut s, Event::BackDone { consumed: true }), [Effect::ScheduleFrame]);
+
+    // Already-scheduled frame is not duplicated if another consumed Back arrives before vsync.
+    assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
+    assert!(run(&mut s, Event::BackDone { consumed: true }).is_empty());
+
+    // While paused, consumed Back records a pending wake instead of scheduling a frame.
+    let _ = run(&mut s, Event::Paused);
+    s.pending_wake = false;
+    assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
+    assert!(run(&mut s, Event::BackDone { consumed: true }).is_empty());
+    assert!(s.pending_wake);
+    assert_eq!(run(&mut s, Event::Resumed), [Effect::ScheduleFrame]);
+
+    // After Destroy, Back emits nothing.
+    let _ = run(&mut s, Event::Destroy);
+    assert!(run(&mut s, Event::BackPressed).is_empty());
+}
+
+#[test]
+fn back_closes_unfocused_panel_then_leaves_app() {
+    use crate::{Cx, El, Env, Key, Runtime, col, el};
+
+    struct PanelApp {
+        panel_open: bool,
+    }
+    fn view(s: &PanelApp, _cx: &mut Cx<PanelApp>) -> El {
+        let mut root = col().size(360.0, 800.0);
+        if s.panel_open {
+            root = root.child(el().key("panel").size(300.0, 200.0));
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(PanelApp { panel_open: true }, view, (360.0, 800.0), Env::new(true, 3.0));
+    rt.on_key = Some(|s, ev, _| {
+        if ev.key == Key::Escape && s.panel_open {
+            s.panel_open = false;
+            return true;
+        }
+        false
+    });
+    rt.frame(0.0);
+    assert!(!rt.has_focus(), "panel holds no focus");
+
+    // First Back closes the unfocused panel and is consumed.
+    assert!(dispatch_back_escape(&mut rt), "unfocused panel closed by Escape must consume Back");
+    assert!(!rt.state.panel_open);
+
+    // Second Back has nothing left to close and falls through to Android.
+    assert!(!dispatch_back_escape(&mut rt), "once panel is closed, Back must leave the app");
+}
+
+#[test]
+fn back_does_not_trap_when_tapped_button_keeps_focus() {
+    use crate::{Cx, El, Env, Runtime, col, el};
+
+    struct ButtonApp {
+        clicks: usize,
+    }
+    fn view(_s: &ButtonApp, _cx: &mut Cx<ButtonApp>) -> El {
+        col().size(360.0, 800.0).child(
+            el().key("btn")
+                .role("button")
+                .label("Action")
+                .focusable(true)
+                .size(120.0, 44.0)
+                .on_press(|s: &mut ButtonApp| s.clicks += 1),
+        )
+    }
+
+    let mut rt = Runtime::new(ButtonApp { clicks: 0 }, view, (360.0, 800.0), Env::new(true, 3.0));
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("btn").expect("button present");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.clicks, 1);
+    assert!(rt.has_focus(), "tapped button keeps focus");
+
+    // A focused button has no use for Escape, so Back must NOT be consumed.
+    assert!(!dispatch_back_escape(&mut rt), "focused button must not trap Back inside the app");
+    assert!(rt.has_focus(), "button keeps focus when Back falls through");
+}
+
+#[test]
+fn back_closes_modal_dialog_then_leaves_app_even_with_opener_focused() {
+    use crate::{Cx, El, Env, Runtime, col, el};
+
+    struct DialogApp {
+        open: bool,
+    }
+    fn view(s: &DialogApp, _cx: &mut Cx<DialogApp>) -> El {
+        let mut root = col().size(360.0, 800.0).child(
+            el().key("opener")
+                .role("button")
+                .label("Open dialog")
+                .focusable(true)
+                .size(120.0, 44.0)
+                .on_press(|s: &mut DialogApp| s.open = true),
+        );
+        if s.open {
+            root = root.child(
+                el().key("dialog")
+                    .size(280.0, 180.0)
+                    .modal(true, |s: &mut DialogApp| s.open = false),
+            );
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(DialogApp { open: false }, view, (360.0, 800.0), Env::new(true, 3.0));
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("opener").expect("opener present");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.open);
+
+    // First Back dismisses the modal dialog.
+    assert!(dispatch_back_escape(&mut rt), "Back must dismiss the active modal");
+    assert!(!rt.state.open);
+    assert!(rt.has_focus(), "dismissing the modal restores focus to the opener button");
+
+    // Second Back leaves the app even though the opener button still holds focus.
+    assert!(!dispatch_back_escape(&mut rt), "next Back must leave the app with the button still focused");
+}
+
+#[test]
+fn back_blurs_focused_text_field_before_leaving_app() {
+    use crate::{Cx, El, Env, Runtime, TextEdit, col, text_input};
+
+    struct FieldApp {
+        note: TextEdit,
+    }
+    fn view(s: &FieldApp, _cx: &mut Cx<FieldApp>) -> El {
+        col().size(360.0, 800.0).child(
+            text_input(&s.note, crate::tok::type_::BODY)
+                .key("note")
+                .label("Note")
+                .size(240.0, 44.0)
+                .on_edit(|s: &mut FieldApp| &mut s.note),
+        )
+    }
+
+    let mut rt = Runtime::new(FieldApp { note: TextEdit::new("") }, view, (360.0, 800.0), Env::new(true, 3.0));
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("note").expect("text field present");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.has_focus());
+
+    // First Back blurs the focused text field.
+    assert!(dispatch_back_escape(&mut rt), "first Back must blur the focused text field");
+    assert!(!rt.has_focus());
+
+    // Second Back leaves the app.
+    assert!(!dispatch_back_escape(&mut rt), "second Back must leave the app once the field is blurred");
+}
+
+#[test]
+fn back_cancels_active_drag_before_leaving_app() {
+    use crate::{Cx, Drag, El, Env, Phase, Runtime, col, el};
+
+    struct DragApp {
+        events: Vec<(Phase, bool)>,
+    }
+    fn view(_s: &DragApp, _cx: &mut Cx<DragApp>) -> El {
+        col().size(360.0, 800.0).child(
+            el().key("slider")
+                .size(200.0, 44.0)
+                .on_drag(|s: &mut DragApp, d: &mut Drag, _| s.events.push((d.phase, d.cancelled))),
+        )
+    }
+
+    let mut rt = Runtime::new(DragApp { events: Vec::new() }, view, (360.0, 800.0), Env::new(true, 3.0));
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("slider").expect("slider present");
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 20.0, y);
+    rt.frame(1.0 / 60.0);
+
+    // First Back cancels the in-flight drag and is consumed.
+    assert!(dispatch_back_escape(&mut rt), "Back during an active drag must cancel the drag");
+    assert_eq!(rt.state.events.last(), Some(&(Phase::Up, true)));
+
+    // Second Back leaves the app.
+    assert!(!dispatch_back_escape(&mut rt), "Back after drag cancellation must leave the app");
 }
 
 #[test]

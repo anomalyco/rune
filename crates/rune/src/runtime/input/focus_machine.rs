@@ -343,7 +343,7 @@ impl KeyboardState {
     }
 
     #[inline]
-    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    #[cfg_attr(not(any(target_arch = "wasm32", target_os = "android", test)), allow(dead_code))]
     pub(in crate::runtime) fn take_key_consumed(&mut self) -> bool {
         std::mem::take(&mut self.last_key_consumed)
     }

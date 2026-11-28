@@ -148,7 +148,7 @@ open class RuneView(
         nativeDarkMode(dark)
     }
 
-    /** Returns true if Rune consumed Back (by sending Escape to a focused element). */
+    /** Returns true if Rune consumed Back (routed as Escape); false lets the Activity go back. */
     fun handleBack(): Boolean = nativeBack()
 
     fun onDestroy() {
