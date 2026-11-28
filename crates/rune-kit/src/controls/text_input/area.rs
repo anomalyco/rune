@@ -38,13 +38,12 @@ impl TextArea {
     /// Typing/paste append, or replace the whole value if selected; Backspace deletes at the
     /// end. Reveal to edit an interior position. Enter inserts a newline; Cmd/Ctrl+Enter submits.
     pub fn secure(mut self) -> Self {
-        self.edit.set_secure(true);
+        self.edits.visual(El::secure);
         self
     }
     /// Show the text without enabling undo, copy, cut, IME or accessibility text.
     /// Toggling preserves the model selection until a hidden edit or navigation occurs.
     pub fn revealed(mut self, revealed: bool) -> Self {
-        self.edit.set_revealed(revealed);
         self.edits.visual(move |e| e.revealed(revealed));
         self
     }
@@ -69,7 +68,6 @@ impl TextArea {
     /// # ;
     /// ```
     pub fn line_home_end(mut self, on: bool) -> Self {
-        self.edit.set_line_home_end(on);
         self.edits.visual(move |e| e.line_home_end(on));
         self
     }

@@ -346,3 +346,160 @@ fn offscreen_virtual_focused_tracked_field_does_not_bump_and_blurs_when_inert() 
     assert!(!rt.state.edits[0].focused, "turning an offscreen virtual input inert must clear edit.focused");
     assert!(rt.kbd.focus.path().is_none());
 }
+
+#[test]
+fn premutated_edit_clone_still_syncs_flags_and_keeps_tracked_edit_clean() {
+    struct App {
+        secret: Tracked<TextEdit>,
+        code: Tracked<TextEdit>,
+        revealed: Tracked<bool>,
+        line_home_end: Tracked<bool>,
+        counter: Tracked<u32>,
+    }
+
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let style = TextStyle::new(14.0, 400.0);
+        col().size(400.0, 240.0).children([
+            region("clone-fields", || {
+                // Mirror wrapper widgets that clone `TextEdit` and mutate flags on the clone
+                // before calling `text_input`.
+                let mut secret_copy = (*s.secret).clone();
+                secret_copy.set_secure(true);
+                secret_copy.set_revealed(*s.revealed);
+                let mut code_copy = (*s.code).clone();
+                code_copy.set_line_home_end(*s.line_home_end);
+                col().key("clone-fields").w_full().children([
+                    text_input(&secret_copy, style)
+                        .key("secret")
+                        .label("Secret")
+                        .size(200.0, 28.0)
+                        .single_line()
+                        .revealed(*s.revealed)
+                        .on_edit(|s: &mut App| &mut *s.secret),
+                    text_input(&code_copy, style)
+                        .key("code")
+                        .label("Code")
+                        .size(200.0, 60.0)
+                        .line_home_end(*s.line_home_end)
+                        .on_edit(|s: &mut App| &mut *s.code),
+                ])
+            }),
+            region("clone-counter", || {
+                text(format!("tick {}", *s.counter)).key("clone-counter").font(style)
+            }),
+        ])
+    }
+
+    let mut secret = TextEdit::new("pw");
+    secret.focused = true;
+    let mut rt = Runtime::new(
+        App {
+            secret: Tracked::new(secret),
+            code: Tracked::new(TextEdit::new("a\nb")),
+            revealed: Tracked::new(true),
+            line_home_end: Tracked::new(true),
+            counter: Tracked::new(0),
+        },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // First commit must sync flags into both app-owned models even though the clones already had them.
+    assert!(rt.state.secret.is_secure() && rt.state.secret.is_revealed() && rt.state.secret.is_single_line());
+    assert!(rt.state.code.line_home_end());
+
+    // Subsequent unrelated commits must keep both Tracked<TextEdit>s clean.
+    let v_secret = Tracked::version(&rt.state.secret);
+    let v_code = Tracked::version(&rt.state.code);
+    let builds = rt.commit.memo_builds();
+    for _ in 0..10 {
+        rt.update(|s, _| *s.counter += 1);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(Tracked::version(&rt.state.secret), v_secret);
+    assert_eq!(Tracked::version(&rt.state.code), v_code);
+    assert_eq!(rt.commit.memo_builds() - builds, 10);
+
+    // Dynamic flag flips must still propagate to the app-owned models, then settle again.
+    rt.update(|s, _| {
+        *s.revealed = false;
+        *s.line_home_end = false;
+    });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.secret.is_secure() && !rt.state.secret.is_revealed());
+    assert!(!rt.state.code.line_home_end());
+
+    let v_secret2 = Tracked::version(&rt.state.secret);
+    let v_code2 = Tracked::version(&rt.state.code);
+    for _ in 0..5 {
+        rt.update(|s, _| *s.counter += 1);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(Tracked::version(&rt.state.secret), v_secret2);
+    assert_eq!(Tracked::version(&rt.state.code), v_code2);
+}
+
+#[test]
+fn preconfigured_overrides_keep_tracked_edit_and_region_clean_from_next_commit() {
+    struct App {
+        secret: Tracked<TextEdit>,
+        code: Tracked<TextEdit>,
+        counter: Tracked<u32>,
+    }
+
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let style = TextStyle::new(14.0, 400.0);
+        col().size(400.0, 240.0).children([
+            region("preconfig-fields", || {
+                col().key("preconfig-fields").w_full().children([
+                    text_input(&s.secret, style)
+                        .key("secret")
+                        .label("Secret")
+                        .size(200.0, 28.0)
+                        .single_line()
+                        .secure()
+                        .revealed(true)
+                        .on_edit(|s: &mut App| &mut *s.secret),
+                    text_input(&s.code, style)
+                        .key("code")
+                        .label("Code")
+                        .size(200.0, 60.0)
+                        .line_home_end(true)
+                        .on_edit(|s: &mut App| &mut *s.code),
+                ])
+            }),
+            region("preconfig-counter", || {
+                text(format!("tick {}", *s.counter)).key("preconfig-counter").font(style)
+            }),
+        ])
+    }
+
+    let mut secret = TextEdit::new("pw").secure().revealed(true);
+    secret.focused = true;
+    let mut code = TextEdit::new("a\nb");
+    code.set_line_home_end(true);
+    let mut rt = Runtime::new(
+        App {
+            secret: Tracked::new(secret),
+            code: Tracked::new(code),
+            counter: Tracked::new(0),
+        },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let v_secret = Tracked::version(&rt.state.secret);
+    let v_code = Tracked::version(&rt.state.code);
+    let builds = rt.commit.memo_builds();
+    for _ in 0..10 {
+        rt.update(|s, _| *s.counter += 1);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(Tracked::version(&rt.state.secret), v_secret);
+    assert_eq!(Tracked::version(&rt.state.code), v_code);
+    assert_eq!(rt.commit.memo_builds() - builds, 10);
+}
