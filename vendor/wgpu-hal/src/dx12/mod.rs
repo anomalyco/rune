@@ -629,6 +629,8 @@ struct SwapChain {
     waitable: Option<Foundation::HANDLE>,
     acquired_count: usize,
     present_mode: wgt::PresentMode,
+    /// Rune: whether this swap chain was created with `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`.
+    allow_tearing: bool,
     format: wgt::TextureFormat,
     size: wgt::Extent3d,
     /// Rune: what the next present changed (Surface::set_present_rects); empty is all of it.
@@ -1795,6 +1797,24 @@ fn map_surface_color_space(
     }
 }
 
+/// Rune: computes DXGI swap-chain creation / resize flags for `present_mode`.
+///
+/// Only enables `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` when `PresentMode::Immediate` is requested
+/// (matching Dawn/Chromium): setting `ALLOW_TEARING` unconditionally on vsynced (`Fifo`/`Mailbox`)
+/// swap chains advertises tearing/VRR capability to DXGI/DWM/display drivers even though `Present`
+/// never passes `DXGI_PRESENT_ALLOW_TEARING`. Switching between `Immediate` and a vsynced mode
+/// recreates the swap chain rather than calling `ResizeBuffers`.
+pub fn swapchain_flags(
+    supports_allow_tearing: bool,
+    present_mode: wgt::PresentMode,
+) -> Dxgi::DXGI_SWAP_CHAIN_FLAG {
+    let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if supports_allow_tearing && present_mode == wgt::PresentMode::Immediate {
+        flags |= Dxgi::DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+    flags
+}
+
 impl crate::Surface for Surface {
     type A = Api;
 
@@ -1803,16 +1823,9 @@ impl crate::Surface for Surface {
         device: &Device,
         config: &crate::SurfaceConfiguration,
     ) -> Result<(), crate::SurfaceError> {
-        let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-        // We always set ALLOW_TEARING on the swapchain no matter
-        // what kind of swapchain we want because ResizeBuffers
-        // cannot change the swapchain's ALLOW_TEARING flag.
-        //
-        // This does not change the behavior of the swapchain, just
-        // allow present calls to use tearing.
-        if self.supports_allow_tearing {
-            flags |= Dxgi::DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
-        }
+        let allow_tearing =
+            self.supports_allow_tearing && config.present_mode == wgt::PresentMode::Immediate;
+        let flags = swapchain_flags(self.supports_allow_tearing, config.present_mode);
 
         // While `configure`s contract ensures that no work on the GPU's main queues
         // are in flight, we still need to wait for the present queue to be idle.
@@ -1829,7 +1842,17 @@ impl crate::Surface for Surface {
         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
         let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
 
-        let swap_chain = match self.swap_chain.write().take() {
+        let existing = self.swap_chain.write().take().and_then(|sc| {
+            if sc.allow_tearing == allow_tearing {
+                Some(sc)
+            } else {
+                // ResizeBuffers cannot toggle DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING: release the old
+                // swap chain and create a fresh one below.
+                drop(unsafe { sc.release_resources() });
+                None
+            }
+        });
+        let swap_chain = match existing {
             //Note: this path doesn't properly re-initialize all of the things
             Some(sc) => {
                 let raw = unsafe { sc.release_resources() };
@@ -2031,6 +2054,7 @@ impl crate::Surface for Surface {
             waitable,
             acquired_count: 0,
             present_mode: config.present_mode,
+            allow_tearing,
             format: config.format,
             size: config.extent,
             dirty: Vec::new(),

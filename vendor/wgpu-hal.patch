@@ -599,10 +599,20 @@ index 63fb313..04dd48c 100644
  
              if fence_value >= value {
 diff --git a/src/dx12/instance.rs b/src/dx12/instance.rs
-index fdb63bc..5f64a80 100644
+index fdb63bc..62e0a77 100644
 --- a/src/dx12/instance.rs
 +++ b/src/dx12/instance.rs
-@@ -187,3 +187,37 @@ impl crate::Instance for super::Instance {
+@@ -44,7 +44,8 @@ impl crate::Instance for super::Instance {
+ 
+             match hr {
+                 Err(err) => log::warn!("Unable to check for tearing support: {err}"),
+-                Ok(()) => supports_allow_tearing = true,
++                // Rune: respect the actual BOOL returned by CheckFeatureSupport instead of assuming true.
++                Ok(()) => supports_allow_tearing = allow_tearing.as_bool(),
+             }
+         }
+ 
+@@ -187,3 +188,37 @@ impl crate::Instance for super::Instance {
              .collect()
      }
  }
@@ -641,7 +651,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..398264c 100644
+index 285d635..3e3f872 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -694,8 +704,12 @@ index 285d635..398264c 100644
      }
  
      /// Will error with crate::DeviceError::Unexpected if DXGI 1.3 is not available.
-@@ -615,6 +631,8 @@ struct SwapChain {
+@@ -613,8 +629,12 @@ struct SwapChain {
+     waitable: Option<Foundation::HANDLE>,
+     acquired_count: usize,
      present_mode: wgt::PresentMode,
++    /// Rune: whether this swap chain was created with `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING`.
++    allow_tearing: bool,
      format: wgt::TextureFormat,
      size: wgt::Extent3d,
 +    /// Rune: what the next present changed (Surface::set_present_rects); empty is all of it.
@@ -703,7 +717,7 @@ index 285d635..398264c 100644
  }
  
  enum SurfaceTarget {
-@@ -651,6 +669,15 @@ impl Surface {
+@@ -651,6 +671,15 @@ impl Surface {
          Some(self.swap_chain.read().as_ref()?.raw.clone())
      }
  
@@ -719,7 +733,7 @@ index 285d635..398264c 100644
      /// Returns the waitable handle associated with this swap chain, if any.
      /// Handle is only valid while the swap chain is alive.
      pub unsafe fn waitable_handle(&self) -> Option<Foundation::HANDLE> {
-@@ -741,6 +768,279 @@ struct Idler {
+@@ -741,6 +770,279 @@ struct Idler {
      fence: Direct3D12::ID3D12Fence,
  }
  
@@ -999,7 +1013,7 @@ index 285d635..398264c 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -749,13 +1049,33 @@ struct CommandSignatures {
+@@ -749,13 +1051,33 @@ struct CommandSignatures {
      dispatch: Direct3D12::ID3D12CommandSignature,
  }
  
@@ -1034,7 +1048,7 @@ index 285d635..398264c 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1130,7 @@ pub struct Queue {
+@@ -810,6 +1132,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -1042,7 +1056,7 @@ index 285d635..398264c 100644
  }
  
  impl Queue {
-@@ -992,7 +1313,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1315,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -1055,7 +1069,7 @@ index 285d635..398264c 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1343,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1345,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -1064,7 +1078,7 @@ index 285d635..398264c 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1536,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1538,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -1073,7 +1087,71 @@ index 285d635..398264c 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1864,9 @@ impl crate::Surface for Surface {
+@@ -1466,6 +1797,24 @@ fn map_surface_color_space(
+     }
+ }
+ 
++/// Rune: computes DXGI swap-chain creation / resize flags for `present_mode`.
++///
++/// Only enables `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` when `PresentMode::Immediate` is requested
++/// (matching Dawn/Chromium): setting `ALLOW_TEARING` unconditionally on vsynced (`Fifo`/`Mailbox`)
++/// swap chains advertises tearing/VRR capability to DXGI/DWM/display drivers even though `Present`
++/// never passes `DXGI_PRESENT_ALLOW_TEARING`. Switching between `Immediate` and a vsynced mode
++/// recreates the swap chain rather than calling `ResizeBuffers`.
++pub fn swapchain_flags(
++    supports_allow_tearing: bool,
++    present_mode: wgt::PresentMode,
++) -> Dxgi::DXGI_SWAP_CHAIN_FLAG {
++    let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
++    if supports_allow_tearing && present_mode == wgt::PresentMode::Immediate {
++        flags |= Dxgi::DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
++    }
++    flags
++}
++
+ impl crate::Surface for Surface {
+     type A = Api;
+ 
+@@ -1474,16 +1823,9 @@ impl crate::Surface for Surface {
+         device: &Device,
+         config: &crate::SurfaceConfiguration,
+     ) -> Result<(), crate::SurfaceError> {
+-        let mut flags = Dxgi::DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+-        // We always set ALLOW_TEARING on the swapchain no matter
+-        // what kind of swapchain we want because ResizeBuffers
+-        // cannot change the swapchain's ALLOW_TEARING flag.
+-        //
+-        // This does not change the behavior of the swapchain, just
+-        // allow present calls to use tearing.
+-        if self.supports_allow_tearing {
+-            flags |= Dxgi::DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+-        }
++        let allow_tearing =
++            self.supports_allow_tearing && config.present_mode == wgt::PresentMode::Immediate;
++        let flags = swapchain_flags(self.supports_allow_tearing, config.present_mode);
+ 
+         // While `configure`s contract ensures that no work on the GPU's main queues
+         // are in flight, we still need to wait for the present queue to be idle.
+@@ -1500,7 +1842,17 @@ impl crate::Surface for Surface {
+         // For high latency extra buffers seems excessive, so go with a minimum of 3 and beyond that add 1.
+         let swap_chain_buffer = (config.maximum_frame_latency + 1).min(16);
+ 
+-        let swap_chain = match self.swap_chain.write().take() {
++        let existing = self.swap_chain.write().take().and_then(|sc| {
++            if sc.allow_tearing == allow_tearing {
++                Some(sc)
++            } else {
++                // ResizeBuffers cannot toggle DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING: release the old
++                // swap chain and create a fresh one below.
++                drop(unsafe { sc.release_resources() });
++                None
++            }
++        });
++        let swap_chain = match existing {
+             //Note: this path doesn't properly re-initialize all of the things
+             Some(sc) => {
+                 let raw = unsafe { sc.release_resources() };
+@@ -1535,7 +1887,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -1084,15 +1162,18 @@ index 285d635..398264c 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +2033,7 @@ impl crate::Surface for Surface {
+@@ -1700,8 +2054,10 @@ impl crate::Surface for Surface {
+             waitable,
+             acquired_count: 0,
              present_mode: config.present_mode,
++            allow_tearing,
              format: config.format,
              size: config.extent,
 +            dirty: Vec::new(),
          });
  
          Ok(())
-@@ -1768,6 +2100,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2124,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -1107,7 +1188,7 @@ index 285d635..398264c 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2117,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2141,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -1126,7 +1207,7 @@ index 285d635..398264c 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2142,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2166,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -1180,7 +1261,7 @@ index 285d635..398264c 100644
              }
          }
  
-@@ -1838,9 +2213,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2237,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -1206,7 +1287,7 @@ index 285d635..398264c 100644
  
          Ok(())
      }
-@@ -1851,18 +2239,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2263,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {

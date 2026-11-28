@@ -128,6 +128,8 @@ pub(in crate::window) struct VideoLayers {
     /// The swap chain stays premultiplied whether a clip wants a layer or not: its display may
     /// follow an opaque swap chain's presents with its refresh rate (`vrr_guard`).
     hold: bool,
+    /// Latched when switching the swap chain to premultiplied failed, preventing retry loops.
+    alpha_refused: bool,
 }
 
 impl VideoLayers {
@@ -216,8 +218,13 @@ impl VideoLayers {
         {
             h.commit().ok();
         }
-        self.follow_alpha(wanted || self.hold, premultiplied, handover.is_some());
+        self.finish_frame(wanted, premultiplied, handover.is_some(), &mut out);
         out
+    }
+
+    fn finish_frame(&mut self, wanted: bool, premultiplied: bool, handed: bool, out: &mut Frame) {
+        self.follow_alpha(wanted || self.hold, premultiplied, handed);
+        out.again |= self.pending_alpha.is_some();
     }
 
     /// After a frame was drawn: which clips it drew inside an isolated layer.
@@ -239,7 +246,22 @@ impl VideoLayers {
     }
 
     /// Keeps the swap chain premultiplied (`hold`).
-    pub(in crate::window) fn hold_premultiplied(&mut self, on: bool) { self.hold = on; }
+    pub(in crate::window) fn hold_premultiplied(&mut self, on: bool) {
+        self.hold = on;
+        if on {
+            self.alpha_refused = false;
+        }
+    }
+
+    /// Records a failed swap-chain alpha switch so the window does not retry every frame.
+    pub(in crate::window) fn alpha_failed(&mut self, premultiplied: bool) {
+        if premultiplied {
+            self.hold = false;
+            self.alpha_refused = true;
+        } else {
+            self.unused_since = None;
+        }
+    }
 
     /// Whether the window must draw and run [`Self::frame`] even when the UI and surface stamps
     /// match what was last presented: a clip is still moving onto its layer, a swap-chain alpha
@@ -269,7 +291,7 @@ impl VideoLayers {
         let now = crate::time::now();
         if wanted {
             self.unused_since = None;
-            if !premultiplied {
+            if !premultiplied && !self.alpha_refused {
                 self.pending_alpha = Some(true);
             }
             return;

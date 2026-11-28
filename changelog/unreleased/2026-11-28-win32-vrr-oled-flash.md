@@ -1,0 +1,1 @@
+- Windows: keep DX12 `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` off for vsynced (`Fifo`/`Mailbox`) swap chains, configure NVIDIA DirectComposition windows as `PreMultiplied` up front across handover/create/reattach paths, and schedule an immediate follow-up frame when a swap-chain alpha switch is queued.

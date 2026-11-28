@@ -417,8 +417,11 @@ impl Host {
         let SurfaceMode::Cpu { mut cpu, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
         match handover {
             Some(handover) => {
-                cpu.half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
-                w.native.video_layers.hold_premultiplied(vrr_guard(gpu.adapter.get_info().vendor));
+                let vendor = gpu.adapter.get_info().vendor;
+                cpu.half = HalfRounding::of_vendor(vendor);
+                w.native.video_layers.hold_premultiplied(
+                    vrr_guard(vendor) && config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
+                );
                 w.native.mode = SurfaceMode::HandingOver { cpu, handover, done: None, readback: None, since: crate::time::now(), nudged: None, tries, paused: false };
             }
             None => {
@@ -776,8 +779,13 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
                 return Ok(SetupOutcome::SoftwareDeferred);
             }
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
-            let (config, _) = surface_config(surface, &gpu.adapter, size, srgb, false)
+            let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb, false)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
+            if handover.is_some()
+                && let Some(mode) = vrr_alpha_mode(gpu.adapter.get_info().vendor, translucent)
+            {
+                config.alpha_mode = mode;
+            }
             configure_checked(surface, gpu, &config).map_err(|error| SurfaceSetupError::from_configure("", error))?;
             let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
             let mut renderer = match prewarmed {
@@ -861,7 +869,22 @@ fn lower_priority() {
 /// hardware, as reported there). It costs DWM a blend of the regions the window
 /// presents, and nothing while it rests. A fixed-rate display (blade's Iris panel) needs nothing:
 /// its refresh doesn't depend on who presents.
-fn vrr_guard(vendor: u32) -> bool { vendor == 0x10DE }
+pub(in crate::window) const fn vrr_guard(vendor: u32) -> bool { vendor == 0x10DE }
+
+/// Initial swap-chain alpha mode override for opaque Windows DirectComposition surfaces on NVIDIA
+/// adapters (`vrr_guard`): selects `PreMultiplied` at initial configuration whenever the surface
+/// supports it so the swap chain never starts opaque (`Auto`) and never requires a late rebind on
+/// the first redraw.
+pub(in crate::window) const fn vrr_alpha_mode(
+    vendor: u32,
+    translucent: Option<wgpu::CompositeAlphaMode>,
+) -> Option<wgpu::CompositeAlphaMode> {
+    if vrr_guard(vendor) && matches!(translucent, Some(wgpu::CompositeAlphaMode::PreMultiplied)) {
+        Some(wgpu::CompositeAlphaMode::PreMultiplied)
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 #[path = "handover_tests.rs"]

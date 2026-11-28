@@ -84,3 +84,38 @@ fn needs_frame_flags_placing_pending_alpha_and_stopped_layered_clips() {
     // The real Player::file handle is idle (not playing), so needs_frame() itself must return true.
     assert!(layers.needs_frame(), "a layered clip that is no longer playing marks needs_frame");
 }
+
+#[test]
+fn pending_alpha_requests_immediate_followup_frame_and_stops_after_refusal() {
+    let mut layers = VideoLayers::default();
+    layers.hold_premultiplied(true);
+
+    // Already premultiplied from initial configuration: no pending switch and no extra frame.
+    let mut out = Frame::default();
+    layers.finish_frame(false, true, true, &mut out);
+    assert!(!out.again);
+    assert_eq!(layers.take_alpha(), None);
+
+    // If a handed-over surface is not yet premultiplied, finish_frame queues the switch AND
+    // marks `again` so the rebind commits immediately rather than waiting for unrelated input.
+    let mut out = Frame::default();
+    layers.finish_frame(false, false, true, &mut out);
+    assert!(out.again);
+    assert!(layers.needs_frame());
+    assert_eq!(layers.take_alpha(), Some(true));
+
+    // If the adapter refuses the premultiplied switch, alpha_failed latches refusal so later
+    // frames do not spin in an infinite redraw loop.
+    layers.alpha_failed(true);
+    let mut out = Frame::default();
+    layers.finish_frame(true, false, true, &mut out);
+    assert!(!out.again);
+    assert_eq!(layers.take_alpha(), None);
+
+    // Re-arming hold (e.g. after switching to a new adapter) clears the refusal latch.
+    layers.hold_premultiplied(true);
+    let mut out = Frame::default();
+    layers.finish_frame(false, false, true, &mut out);
+    assert!(out.again);
+    assert_eq!(layers.take_alpha(), Some(true));
+}

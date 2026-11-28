@@ -274,3 +274,51 @@ fn opaque_second_window_ignores_software_gpu_in_pool_under_auto_automatic() {
     assert!(win32_opens_on_cpu(CpuFirst::Only, Policy::Automatic, false, false, Some(DiscreteGpu)));
     assert!(win32_opens_on_cpu(CpuFirst::Only, Policy::Automatic, false, false, Some(Cpu)));
 }
+
+#[test]
+fn vrr_alpha_mode_premultiplies_initial_nvidia_directcomposition_only() {
+    use super::{vrr_alpha_mode, vrr_guard};
+    use wgpu::CompositeAlphaMode::{Inherit, Opaque, PostMultiplied, PreMultiplied};
+
+    // NVIDIA (0x10DE) with a DirectComposition surface that supports PreMultiplied:
+    // select PreMultiplied up front so the initial swap chain never starts opaque (`Auto`).
+    assert!(vrr_guard(0x10DE));
+    assert_eq!(vrr_alpha_mode(0x10DE, Some(PreMultiplied)), Some(PreMultiplied));
+
+    // Plain HWND swap chains (None) or non-PreMultiplied modes stay untouched even on NVIDIA.
+    for supports in [None, Some(Opaque), Some(PostMultiplied), Some(Inherit)] {
+        assert_eq!(vrr_alpha_mode(0x10DE, supports), None, "NVIDIA {supports:?}");
+    }
+
+    // Non-NVIDIA adapters (Intel, AMD, WARP) never pay DWM premultiplied blend overhead.
+    for vendor in [0x8086, 0x1002, 0x1414, 0x0000] {
+        assert!(!vrr_guard(vendor), "vendor {vendor:#x}");
+        assert_eq!(vrr_alpha_mode(vendor, Some(PreMultiplied)), None, "vendor {vendor:#x}");
+    }
+}
+
+#[test]
+fn dx12_swapchain_flags_omit_allow_tearing_for_vsynced_modes() {
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    };
+    use wgpu::hal::dx12::swapchain_flags;
+
+    let waitable = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    let tearing = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+
+    for mode in [wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox] {
+        assert_eq!(swapchain_flags(true, mode), waitable, "tearing supported, {mode:?}");
+        assert_eq!(swapchain_flags(false, mode), waitable, "tearing unsupported, {mode:?}");
+    }
+    assert_eq!(
+        swapchain_flags(true, wgpu::PresentMode::Immediate),
+        waitable | tearing,
+        "Immediate sets ALLOW_TEARING when supported"
+    );
+    assert_eq!(
+        swapchain_flags(false, wgpu::PresentMode::Immediate),
+        waitable,
+        "Immediate omits ALLOW_TEARING when unsupported"
+    );
+}

@@ -298,6 +298,9 @@ impl FrameHost for WindowFrame<'_> {
         if let Some(premultiplied) = self.host.win.as_mut().and_then(|w| w.native.video_layers.take_alpha())
             && let Err(error) = self.host.rebind_alpha(premultiplied)
         {
+            if let Some(w) = self.host.win.as_mut() {
+                w.native.video_layers.alpha_failed(premultiplied);
+            }
             eprintln!("rune: the window's swap chain couldn't change its alpha for a clip's layer: {error}");
         }
         // The swap chain still holds a frame the compositor hasn't shown: this one draws when it
