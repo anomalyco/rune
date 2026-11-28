@@ -444,6 +444,12 @@ impl Host {
             if transparent || client_frame {
                 config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
             }
+            #[cfg(target_os = "windows")]
+            if !transparent && !client_frame
+                && let Some(mode) = crate::window::win32::handover::vrr_alpha_mode(gpu.adapter.get_info().vendor, translucent)
+            {
+                config.alpha_mode = mode;
+            }
             configure_checked(&surface, gpu, &config)
                 .map_err(|error| SurfaceSetupError::from_configure("the window's GPU surface refused its configuration", error))?;
             Ok(config)
@@ -489,7 +495,17 @@ impl Host {
         w.backoff_step(BackoffEvent::Lapsed);
         w.damage.reset();
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.dxgi_present.reset(); w.native.mode.rebind(); }
+        {
+            let nvidia = self.gpu.as_ref().is_some_and(|(gpu, _)| {
+                crate::window::win32::handover::vrr_guard(gpu.adapter.get_info().vendor)
+            });
+            w.native.video_layers.hold_premultiplied(
+                !transparent && nvidia && w.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
+            );
+            w.native.slot.reset();
+            w.native.dxgi_present.reset();
+            w.native.mode.rebind();
+        }
         #[cfg(target_os = "macos")]
         { w.native.present = present; w.native.prime.stop(); w.note_surface_configured(); }
         self.sync_window_backdrop(true);

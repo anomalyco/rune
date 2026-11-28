@@ -44,7 +44,8 @@ impl crate::Instance for super::Instance {
 
             match hr {
                 Err(err) => log::warn!("Unable to check for tearing support: {err}"),
-                Ok(()) => supports_allow_tearing = true,
+                // Rune: respect the actual BOOL returned by CheckFeatureSupport instead of assuming true.
+                Ok(()) => supports_allow_tearing = allow_tearing.as_bool(),
             }
         }
 

@@ -278,6 +278,12 @@ impl Host {
             if transparent || client_frame {
                 config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
             }
+            #[cfg(target_os = "windows")]
+            if !transparent && !client_frame
+                && let Some(mode) = handover::vrr_alpha_mode(gpu.adapter.get_info().vendor, translucent)
+            {
+                config.alpha_mode = mode;
+            }
             // A refused configuration (the driver's, or a device that is gone) leaves a surface
             // wgpu panics on its next drawable; on a live device with an automatic pick, the
             // fallback chain moves on to the next adapter.
@@ -531,7 +537,13 @@ impl Host {
                 None => handover::SurfaceMode::Gpu,
             };
             let last_maximized = window.is_maximized();
-            Native { cloak, frame, mode, a11y_start, last_maximized, ..Default::default() }
+            let mut video_layers = crate::window::win32::video_layer::VideoLayers::default();
+            video_layers.hold_premultiplied(
+                !self.options.transparent
+                    && handover::vrr_guard(gpu.adapter.get_info().vendor)
+                    && config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
+            );
+            Native { cloak, frame, mode, a11y_start, last_maximized, video_layers, ..Default::default() }
         };
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let native = Native {
@@ -780,6 +792,12 @@ impl Host {
             if transparent || client_frame {
                 config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
             }
+            #[cfg(target_os = "windows")]
+            if !transparent && !client_frame
+                && let Some(mode) = handover::vrr_alpha_mode(gpu.adapter.get_info().vendor, translucent)
+            {
+                config.alpha_mode = mode;
+            }
             configure_checked(surface, gpu, &config)
                 .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
             let effective_srgb_blend = if is_wide_color_config(&config) { false } else { srgb_blend };
@@ -840,9 +858,16 @@ impl Host {
         w.alpha = alpha;
         w.damage.reset();
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.dxgi_present.reset(); }
-        #[cfg(target_os = "windows")]
-        w.native.mode.rebind();
+        {
+            w.native.video_layers.hold_premultiplied(
+                !transparent
+                    && handover::vrr_guard(gpu.adapter.get_info().vendor)
+                    && w.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
+            );
+            w.native.slot.reset();
+            w.native.dxgi_present.reset();
+            w.native.mode.rebind();
+        }
         #[cfg(target_os = "macos")]
         {
             w.native.present = present;
