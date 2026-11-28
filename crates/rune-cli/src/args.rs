@@ -41,6 +41,7 @@ pub struct NewArgs {
     pub rune_path: Option<PathBuf>,
     pub force: bool,
     pub no_git: bool,
+    pub no_lockfile: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +150,7 @@ fn parse_new(args: &[String]) -> Result<Command, CliError> {
     let mut rune_path = None;
     let mut force = false;
     let mut no_git = false;
+    let mut no_lockfile = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -164,6 +166,7 @@ fn parse_new(args: &[String]) -> Result<Command, CliError> {
             }
             "--force" => force = true,
             "--no-git" => no_git = true,
+            "--no-lockfile" => no_lockfile = true,
             other if other.starts_with('-') => {
                 return Err(CliError::usage(format!("unknown flag for `rune new`: {other}")));
             }
@@ -199,6 +202,7 @@ fn parse_new(args: &[String]) -> Result<Command, CliError> {
         rune_path,
         force,
         no_git,
+        no_lockfile,
     }))
 }
 
@@ -378,11 +382,12 @@ Usage:
 
 Options:
   --name <pkg>        Override Cargo package name (defaults to directory name)
-  --rev <rev>         Pin a specific Rune git revision (defaults to this CLI's build rev)
+  --rev <rev>         Pin a specific Rune git revision (defaults to upstream `dev`)
   --git <url>         Use a custom Rune git URL or mirror
   --path <rune-dir>   Depend on a local Rune checkout instead of git
   --force             Write into a non-empty target directory
   --no-git            Do not run `git init` in the new project
+  --no-lockfile       Do not run `cargo generate-lockfile` after creating the project
   -h, --help          Show this help message
 ",
         Some("dev") => "Run a Rune application with guarded live hot reload (or watch-and-restart fallback).

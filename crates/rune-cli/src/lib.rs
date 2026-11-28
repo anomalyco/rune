@@ -8,6 +8,7 @@ pub mod config;
 pub mod dev;
 pub mod doctor;
 pub mod dx;
+pub mod git_rev;
 pub mod glob;
 pub mod guard;
 pub mod new;
@@ -19,7 +20,11 @@ use std::fmt;
 /// Default Rune git repository URL used when scaffolding new apps.
 pub const DEFAULT_REPO_URL: &str = "https://github.com/anomalyco/rune";
 
-/// Git revision captured when `rune-cli` was compiled (empty if built outside a git checkout).
+/// Git commit `rune-cli` itself was compiled from (empty if built outside a git checkout).
+pub const BUILD_REV: &str = env!("RUNE_BUILD_REV");
+
+/// Verified upstream `anomalyco/rune` revision captured at compile time (empty if built from an
+/// unverified fork, Cargo git checkout, or outside git; `rune new` falls back to `git ls-remote`).
 pub const DEFAULT_REV: &str = env!("RUNE_DEFAULT_REV");
 
 /// Required Dioxus CLI version for live function-body hot patching.
@@ -84,10 +89,15 @@ pub fn run(argv: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         args::Command::Version => {
-            if DEFAULT_REV.is_empty() {
+            let shown = if BUILD_REV.is_empty() {
+                DEFAULT_REV
+            } else {
+                BUILD_REV
+            };
+            if shown.is_empty() {
                 println!("rune {}", env!("CARGO_PKG_VERSION"));
             } else {
-                let short = &DEFAULT_REV[..DEFAULT_REV.len().min(12)];
+                let short = &shown[..shown.len().min(12)];
                 println!("rune {} ({short})", env!("CARGO_PKG_VERSION"));
             }
             Ok(())

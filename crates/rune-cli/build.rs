@@ -1,16 +1,22 @@
-//! Captures Rune's current git revision and `[patch.crates-io]` crate list at compile time so
-//! `rune new`, `rune check`, and `rune doctor` stay aligned with the workspace manifest.
+//! Captures Rune's upstream git revision and `[patch.crates-io]` crate list at compile time so
+//! `rune new`, `rune check`, and `rune doctor` stay aligned with the workspace manifest without
+//! ever pinning unpushed local or fork-only commits.
+
+#[allow(dead_code)]
+#[path = "src/git_rev.rs"]
+mod git_rev;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 const FALLBACK_PATCHES: &[&str] = &[
     "wgpu-hal",
+    "naga",
     "winit",
     "sctk-adwaita",
     "parley_engine",
     "accesskit_windows",
+    "accesskit_atspi_common",
     "accesskit_macos",
 ];
 
@@ -33,14 +39,24 @@ fn main() {
 
     println!("cargo:rustc-env=RUNE_DEFAULT_PATCHES={}", patches.join(","));
 
-    let rev = std::env::var_os("RUNE_CLI_REV")
+    let env_rev = std::env::var_os("RUNE_CLI_REV")
         .and_then(|v| v.into_string().ok())
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| git_head_rev(&manifest_dir))
-        .unwrap_or_default();
+        .filter(|s| !s.is_empty());
 
-    println!("cargo:rustc-env=RUNE_DEFAULT_REV={rev}");
+    let (build_rev, default_rev) = if let Some(rev) = env_rev {
+        (rev.clone(), rev)
+    } else {
+        let head = git_rev::git_head_rev(&manifest_dir).unwrap_or_default();
+        let upstream = git_rev::upstream_dev_rev(&manifest_dir);
+        for path in &upstream.watch_paths {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+        (head, upstream.rev.unwrap_or_default())
+    };
+
+    println!("cargo:rustc-env=RUNE_BUILD_REV={build_rev}");
+    println!("cargo:rustc-env=RUNE_DEFAULT_REV={default_rev}");
 }
 
 fn parse_patch_keys(toml_text: &str) -> Vec<String> {
@@ -63,40 +79,4 @@ fn parse_patch_keys(toml_text: &str) -> Vec<String> {
         }
     }
     keys
-}
-
-fn git_head_rev(dir: &PathBuf) -> Option<String> {
-    if let Ok(out) = Command::new("git")
-        .args(["rev-parse", "--git-path", "HEAD"])
-        .current_dir(dir)
-        .output()
-        && out.status.success()
-    {
-        let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !head.is_empty() {
-            let head_path = PathBuf::from(&head);
-            let resolved = if head_path.is_absolute() {
-                head_path
-            } else {
-                dir.join(head_path)
-            };
-            if resolved.is_file() {
-                println!("cargo:rerun-if-changed={}", resolved.display());
-            }
-        }
-    }
-    let out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(sha)
-    } else {
-        None
-    }
 }

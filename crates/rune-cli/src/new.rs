@@ -1,10 +1,12 @@
 //! Project scaffolding for `rune new <path>`.
 
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::args::NewArgs;
+use crate::git_rev;
 use crate::{CliError, DEFAULT_REPO_URL, DEFAULT_REV, default_patches};
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -104,13 +106,13 @@ pub fn run(opts: &NewArgs) -> Result<(), CliError> {
             .git
             .clone()
             .unwrap_or_else(|| DEFAULT_REPO_URL.to_string());
-        let rev = opts.rev.clone().or_else(|| {
-            if DEFAULT_REV.is_empty() {
-                None
-            } else {
-                Some(DEFAULT_REV.to_string())
-            }
-        });
+        let rev = git_rev::resolve_git_rev(
+            opts.rev.as_deref(),
+            &url,
+            DEFAULT_REPO_URL,
+            DEFAULT_REV,
+            git_rev::resolve_remote_dev_rev,
+        );
         RuneSource::Git { url, rev }
     };
 
@@ -156,6 +158,15 @@ pub fn run(opts: &NewArgs) -> Result<(), CliError> {
             .current_dir(&target_dir)
             .status()
             .ok();
+    }
+
+    if !opts.no_lockfile {
+        println!("Generating Cargo.lock...");
+        if let Err(err) = generate_lockfile(&target_dir.join("Cargo.toml")) {
+            eprintln!(
+                "rune new: note: could not generate Cargo.lock ({err}); the project was created and the first build will resolve dependencies instead"
+            );
+        }
     }
 
     println!("Created Rune app `{pkg_name}` in {}", opts.target.display());
@@ -376,6 +387,35 @@ fn inside_git_repo(dir: &Path) -> bool {
         cur = d.parent();
     }
     false
+}
+
+/// Runs `cargo generate-lockfile` for `manifest_path`, inheriting stdio so Cargo's own progress
+/// and network diagnostics remain visible.
+pub fn generate_lockfile(manifest_path: &Path) -> Result<(), String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    generate_lockfile_with(&cargo, manifest_path)
+}
+
+/// Runs `<cargo_bin> generate-lockfile` for `manifest_path`.
+pub fn generate_lockfile_with(cargo_bin: &OsStr, manifest_path: &Path) -> Result<(), String> {
+    let mut cmd = Command::new(cargo_bin);
+    cmd.arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(manifest_path);
+    if let Some(dir) = manifest_path.parent() {
+        cmd.current_dir(dir);
+    }
+    let status = cmd
+        .status()
+        .map_err(|err| format!("failed to invoke cargo: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "cargo generate-lockfile exited with status {}",
+            status.code().unwrap_or(1)
+        ))
+    }
 }
 
 fn write_file(path: &Path, content: &str) -> Result<(), CliError> {
