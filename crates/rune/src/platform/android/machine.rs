@@ -38,6 +38,8 @@ pub(crate) struct State {
     /// System long-press delay in seconds from `ViewConfiguration.getLongPressTimeout()`,
     /// when positive (`None` keeps Rune's 0.5 s default).
     pub(crate) long_press_secs: Option<f64>,
+    /// Whether `RuneView` currently advertises an active `InputConnection` / soft keyboard.
+    pub(crate) ime_enabled: bool,
     pub(crate) destroyed: bool,
 }
 
@@ -51,6 +53,7 @@ impl Default for State {
             safe_area: [0.0; 4],
             keyboard_inset: 0.0,
             long_press_secs: None,
+            ime_enabled: false,
             destroyed: false,
         }
     }
@@ -91,10 +94,12 @@ pub(crate) enum Event {
     SurfaceDestroyed,
     /// Choreographer vsync callback fired.
     Frame,
-    /// Outcome of [`Effect::DrawFrame`].
+    /// Outcome of [`Effect::DrawFrame`], including post-frame `ImeSync` decisions.
     FrameDone {
         animating: bool,
         wake_after_secs: Option<f64>,
+        ime_allowed: Option<bool>,
+        ime_restart: bool,
     },
     /// Background thread or timer woke the runtime.
     Wake,
@@ -155,6 +160,13 @@ pub(crate) enum Effect {
     /// Queue `Key::Escape`, run one synchronous zero-dt frame to route it, and feed
     /// [`Event::BackDone`] with whether Rune consumed the key (`Runtime::take_key_consumed`).
     DispatchBack,
+    /// Enable or disable `RuneView`'s `InputConnection` and show or hide the soft keyboard.
+    SetImeEnabled {
+        enabled: bool,
+        restart: bool,
+    },
+    /// Commit any open composition and clear host `ImeSync` when pausing while an editor is active.
+    FinishComposition,
     ScheduleFrame,
     CancelFrame,
     ScheduleWakeAfter(f64),
@@ -299,6 +311,14 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
                 state.pending_wake = true;
                 effects.push(Effect::CancelFrame);
             }
+            if state.ime_enabled {
+                state.ime_enabled = false;
+                effects.push(Effect::FinishComposition);
+                effects.push(Effect::SetImeEnabled {
+                    enabled: false,
+                    restart: true,
+                });
+            }
         }
         Event::Frame => {
             let can_draw = state.can_draw();
@@ -312,9 +332,40 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         Event::FrameDone {
             animating,
             wake_after_secs,
+            ime_allowed,
+            ime_restart,
         } => {
             if !state.can_draw() {
                 return effects;
+            }
+            match ime_allowed {
+                Some(true) => {
+                    let was = state.ime_enabled;
+                    if !was || ime_restart {
+                        state.ime_enabled = true;
+                        effects.push(Effect::SetImeEnabled {
+                            enabled: true,
+                            restart: !was || ime_restart,
+                        });
+                    }
+                }
+                Some(false) => {
+                    if state.ime_enabled {
+                        state.ime_enabled = false;
+                        effects.push(Effect::SetImeEnabled {
+                            enabled: false,
+                            restart: true,
+                        });
+                    }
+                }
+                None => {
+                    if ime_restart && state.ime_enabled {
+                        effects.push(Effect::SetImeEnabled {
+                            enabled: true,
+                            restart: true,
+                        });
+                    }
+                }
             }
             if animating || state.pending_wake {
                 request_frame(state, &mut effects);
@@ -407,6 +458,13 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         Event::Destroy => {
             state.destroyed = true;
             state.resumed = false;
+            if state.ime_enabled {
+                state.ime_enabled = false;
+                effects.push(Effect::SetImeEnabled {
+                    enabled: false,
+                    restart: false,
+                });
+            }
             if let Surface::Attached { frame_scheduled, .. } = state.surface {
                 if frame_scheduled {
                     effects.push(Effect::CancelFrame);

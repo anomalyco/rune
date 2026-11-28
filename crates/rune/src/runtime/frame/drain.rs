@@ -141,7 +141,7 @@ impl RuntimeCore {
             }
             // State may have requested focus on a newly mounted field. Resolve the new tree before
             // routing this frame's text, not after it has gone to the previous field.
-            let routed = matches!(&action, Action::Key { .. } | Action::KeyUp(_) | Action::Physical(..) | Action::Ime(_) | Action::FinishIme | Action::Paste(..) | Action::Files(_) | Action::SecondaryRepost { .. } | Action::WheelRepost(_));
+            let routed = matches!(&action, Action::Key { .. } | Action::KeyUp(_) | Action::Physical(..) | Action::Ime(_) | Action::FinishIme { .. } | Action::Paste(..) | Action::Files(_) | Action::SecondaryRepost { .. } | Action::WheelRepost(_));
             if routed {
                 self.latch_playground(app, tx);
                 self.latch_focus(tx);

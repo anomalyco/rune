@@ -64,8 +64,9 @@ pub(in crate::runtime) enum Action {
     WheelRepost(WheelRepost),
     Gesture(Vec<String>, gesture_dispatch::Gesture),
     Ime(Ime),
-    /// The window went inactive: an open composition becomes text (`Runtime::finish_composition`).
-    FinishIme,
+    /// An open composition becomes text. `reset_ime` tells the platform IME to drop its copy
+    /// (true when the host ended composition; false when the IME itself called `finishComposingText`).
+    FinishIme { reset_ime: bool },
     Paste(crate::ClipboardContent, Option<Option<String>>),
     /// A `Tx::read_clipboard` callback's id and what the clipboard held.
     ClipboardRead(u64, crate::ClipboardContent),
@@ -115,7 +116,7 @@ impl ActionQueue {
         let at = crate::input::time::current();
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
-            | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
+            | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme { reset_ime: true }
             | Action::ClipboardRead(..) | Action::CopyImageDone(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
@@ -236,7 +237,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::VisibleRows(..) => "on_visible_rows",
         Action::ScreenLayout(..) => "on_screen_layout",
         Action::Files(_) => "on_drop_files",
-        Action::Ime(_) | Action::FinishIme => "a text input's edit",
+        Action::Ime(_) | Action::FinishIme { .. } => "a text input's edit",
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
         Action::CopyImageDone(..) => "a `copy_image_then` callback",
@@ -640,7 +641,7 @@ impl RuntimeCore {
             Action::WheelRepost(repost) => self.run_wheel_repost(app, repost, &mut one),
             Action::Gesture(chain, gesture) => self.run_gesture(app, chain, gesture, &mut one),
             Action::Ime(ev) => self.run_ime(app, ev, &mut one),
-            Action::FinishIme => self.finish_ime(app, &mut one),
+            Action::FinishIme { reset_ime } => self.finish_ime(app, &mut one, reset_ime),
             Action::Paste(mut content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());

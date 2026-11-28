@@ -124,6 +124,82 @@ pub(super) unsafe fn jni_delete_global_ref(env: *mut JNIEnv, obj: jobject) {
     }
 }
 
+pub(super) fn jni_method(
+    name: &'static std::ffi::CStr,
+    sig: &'static std::ffi::CStr,
+    fn_ptr: *mut c_void,
+) -> JNINativeMethod {
+    JNINativeMethod {
+        name: name.as_ptr().cast_mut(),
+        signature: sig.as_ptr().cast_mut(),
+        fnPtr: fn_ptr,
+    }
+}
+
+pub(super) unsafe fn register_natives(
+    env: *mut JNIEnv,
+    class_name: &'static std::ffi::CStr,
+    methods: &[JNINativeMethod],
+) -> bool {
+    // SAFETY: `env` is a valid JNIEnv*; caller guarantees descriptors match Java declarations.
+    unsafe {
+        let Some(find_class) = (**env).FindClass else { return false };
+        let Some(register) = (**env).RegisterNatives else { return false };
+        let cls: jclass = find_class(env, class_name.as_ptr());
+        if cls.is_null() {
+            jni_clear_exception(env);
+            return false;
+        }
+        let ok = register(env, cls, methods.as_ptr(), methods.len() as jint) == JNI_OK;
+        if !ok {
+            jni_clear_exception(env);
+        }
+        jni_delete_local_ref(env, cls);
+        ok
+    }
+}
+
+pub(super) unsafe fn call_void_0(env: *mut JNIEnv, obj: jobject, method: jmethodID) {
+    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `()V` method.
+    unsafe {
+        if let Some(call) = (**env).CallVoidMethodA {
+            call(env, obj, method, ptr::null());
+            jni_clear_exception(env);
+        }
+    }
+}
+
+pub(super) unsafe fn call_void_long(env: *mut JNIEnv, obj: jobject, method: jmethodID, value: jlong) {
+    let arg = jvalue { j: value };
+    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `(J)V` method.
+    unsafe {
+        if let Some(call) = (**env).CallVoidMethodA {
+            call(env, obj, method, &arg);
+            jni_clear_exception(env);
+        }
+    }
+}
+
+pub(super) unsafe fn call_void_bool_bool(
+    env: *mut JNIEnv,
+    obj: jobject,
+    method: jmethodID,
+    first: bool,
+    second: bool,
+) {
+    let args = [
+        jvalue { z: if first { JNI_TRUE } else { JNI_FALSE } },
+        jvalue { z: if second { JNI_TRUE } else { JNI_FALSE } },
+    ];
+    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `(ZZ)V` method.
+    unsafe {
+        if let Some(call) = (**env).CallVoidMethodA {
+            call(env, obj, method, args.as_ptr());
+            jni_clear_exception(env);
+        }
+    }
+}
+
 unsafe fn jni_delete_local_ref(env: *mut JNIEnv, obj: jobject) {
     if obj.is_null() || env.is_null() {
         return;
@@ -153,7 +229,7 @@ unsafe fn to_jstring(env: *mut JNIEnv, s: &str) -> Option<jstring> {
 }
 
 /// Decodes a Java `String` into a Rust `String` via UTF-16 (`GetStringChars`).
-unsafe fn from_jstring(env: *mut JNIEnv, jstr: jstring) -> Option<String> {
+pub(super) unsafe fn from_jstring(env: *mut JNIEnv, jstr: jstring) -> Option<String> {
     if jstr.is_null() {
         return None;
     }
