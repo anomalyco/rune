@@ -301,7 +301,8 @@ impl MenuItem {
         e = e.child(content).child(spacer().ml(-8.0));
         if let Some(s) = self.shortcut {
             let st = TextStyle { line_height: 11.0, ..k.ty.small_medium };
-            e = e.child(text(s).key("shortcut").font(st).color(c.text_faint).a11y_hidden());
+            // A chord reads left to right in any window (`Ctrl+=`, never `=+Ctrl`).
+            e = e.child(text(s).key("shortcut").font(st).color(c.text_faint).a11y_hidden().dir(rune::Direction::Ltr));
         }
         if let Some(b) = self.badge {
             e = e.child(

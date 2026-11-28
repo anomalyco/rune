@@ -301,3 +301,22 @@ fn menu_shortcuts_are_written_as_the_platform_writes_them() {
     let shortcut = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("shortcut")).and_then(|e| e.text);
     assert_eq!(shortcut.as_deref(), Some("Ctrl+Alt+0"));
 }
+
+/// Right to left, a shortcut still reads left to right (`Ctrl+=`, not `=+Ctrl`): a chord is a
+/// left-to-right island, as native menus write it.
+#[test]
+fn right_to_left_menus_write_shortcuts_left_to_right() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    let mut rt = make_rt((600.0, 400.0));
+    rt.update(|s, _| s.rtl = true);
+    rt.frame(0.0);
+    rt.update(|_, tx| {
+        let m = PopupMenu::new().item(PopupItem::new("in", "Zoom In").key_equivalent("ctrl+=".parse().unwrap()));
+        tx.popup_menu(m, (300.0, 20.0), |_: &mut Demo, _, _| {});
+    });
+    rt.frame(0.0);
+    let [x, y, _, h] = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("shortcut")).expect("the shortcut").rect;
+    assert_eq!(rt.text_offset_at("shortcut", x + 1.0, y + h / 2.0), Some(0), "Ctrl starts at the shortcut's left");
+}
