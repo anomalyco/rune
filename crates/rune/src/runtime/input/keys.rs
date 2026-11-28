@@ -546,9 +546,12 @@ impl RuntimeCore {
         if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return; }
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
-        if self.pointer.autoscroll_key() { return; }
+        if self.pointer.autoscroll_key() { self.kbd.note_key_consumed(true); return; }
         // Escape cancels a held drag first, or releases an active pointer lock, and goes no further.
-        if ev.key == crate::Key::Escape && (self.cancel_drag() || self.release_pointer_lock()) { return; }
+        if ev.key == crate::Key::Escape && (self.cancel_drag() || self.release_pointer_lock()) {
+            self.kbd.note_key_consumed(true);
+            return;
+        }
         self.frame.queue.push(Action::Key { ev, repeat: false, stage });
     }
 
@@ -641,6 +644,13 @@ impl RuntimeCore {
     #[inline]
     pub fn has_focus(&self) -> bool {
         self.kbd.has_focus()
+    }
+
+    /// Returns and clears whether the most recently dispatched key press was consumed by Rune.
+    #[inline]
+    #[cfg_attr(not(any(target_arch = "wasm32", target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn take_key_consumed(&mut self) -> bool {
+        self.kbd.take_key_consumed()
     }
 }
 

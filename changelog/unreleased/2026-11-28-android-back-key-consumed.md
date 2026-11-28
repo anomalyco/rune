@@ -1,0 +1,1 @@
+- Android: Back always routes `Key::Escape` through a synchronous frame and checks `take_key_consumed()` instead of gating on `Runtime::has_focus()`, so unfocused panels/modals close on Back while focused buttons or switches no longer trap Back inside the app.

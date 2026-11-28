@@ -17,7 +17,7 @@ import android.window.OnBackInvokedDispatcher
  * Reads the Rust shared library name from activity manifest meta-data `dev.rune.lib_name`
  * (defaulting to `rune_app`), configures `SOFT_INPUT_ADJUST_NOTHING` so soft keyboards report
  * [dev.rune.RuneView] IME overlap without resizing the layout viewport, forwards dark mode and
- * lifecycle events, and delegates Back presses to Rune when an element has focus.
+ * lifecycle events, and delegates Back presses to Rune (as `Key::Escape`), falling through to Android when unconsumed.
  */
 open class RuneActivity : Activity() {
 

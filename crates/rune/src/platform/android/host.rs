@@ -24,7 +24,7 @@ use crate::compose::Compositor;
 use crate::platform::embed::{EmbedFrame, LayerHost};
 use crate::runtime::Waker;
 use crate::tooling::AppSpec;
-use crate::{Haptic, Key, KeyEvent, Mods};
+use crate::Haptic;
 
 use super::{haptics, logcat};
 use super::machine::{self, Effect, Event, State};
@@ -64,8 +64,7 @@ trait AndroidRunner {
     fn set_safe_area(&mut self, insets: [f32; 4]);
     fn set_keyboard_inset(&mut self, points: f32);
     fn set_dark(&mut self, dark: bool);
-    fn has_focus(&self) -> bool;
-    fn send_escape(&mut self);
+    fn dispatch_back(&mut self) -> bool;
     fn drain_shared(&mut self);
     fn frame(&mut self) -> Option<EmbedFrame>;
     fn take_haptics(&mut self) -> Vec<Haptic>;
@@ -151,17 +150,12 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
         }
     }
 
-    fn has_focus(&self) -> bool {
-        self.host.as_ref().is_some_and(|h| h.runtime().has_focus())
-    }
-
-    fn send_escape(&mut self) {
-        if let Some(host) = &mut self.host {
-            host.runtime_mut().key(KeyEvent {
-                key: Key::Escape,
-                mods: Mods::default(),
-            });
-        }
+    fn dispatch_back(&mut self) -> bool {
+        let Some(host) = self.host.as_mut() else {
+            return false;
+        };
+        let _ = self.shared.drain_window(host.runtime_mut(), |_| {});
+        host.dispatch_back_escape()
     }
 
     fn drain_shared(&mut self) {
@@ -511,7 +505,6 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
             return;
         };
         let effects = machine::step(&mut host.state, event);
-        consumed_back = machine::consumed_back(&effects);
         let mut shutdown = false;
 
         for effect in effects {
@@ -565,9 +558,17 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                         runner.set_dark(dark);
                     }
                 }
-                Effect::SendEscapeKey => {
-                    if let Some(runner) = &mut host.runner {
-                        runner.send_escape();
+                Effect::DispatchBack => {
+                    let consumed = host.runner.as_mut().is_some_and(|r| r.dispatch_back());
+                    consumed_back = consumed;
+                    let follow = machine::step(&mut host.state, Event::BackDone { consumed });
+                    for next in follow {
+                        if let Effect::ScheduleFrame = next
+                            && let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                        {
+                            // SAFETY: `env` is the UI thread's `JNIEnv*`.
+                            unsafe { call_void_0(env, view.obj, view.schedule_frame) };
+                        }
                     }
                 }
                 Effect::ScheduleFrame => {
@@ -760,13 +761,7 @@ unsafe extern "system" fn native_pause(env: *mut JNIEnv, _this: jobject) {
 }
 
 unsafe extern "system" fn native_back(env: *mut JNIEnv, _this: jobject) -> jboolean {
-    let has_focus = HOST.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|h| h.runner.as_ref())
-            .is_some_and(|r| r.has_focus())
-    });
-    if dispatch(env, Event::BackPressed { has_focus }, ptr::null_mut()) {
+    if dispatch(env, Event::BackPressed, ptr::null_mut()) {
         JNI_TRUE
     } else {
         JNI_FALSE

@@ -18,7 +18,7 @@ Rune runs natively on Android without `winit`'s event loop at runtime: a small K
 - **Insets and Back**:
   - Hardware system bars and display cutouts map to `Cx::safe_area()` (`[top, right, bottom, left]` in dp).
   - Soft keyboard overlap maps separately to `Cx::keyboard_inset()` (dp from bottom) so `El::on_edge_drag` bands stay bound to hardware chrome while views can pad by `cx.safe_area()[2].max(cx.keyboard_inset())` and focused text fields auto-scroll above the keyboard.
-  - System Back sends `Key::Escape` when Rune has focus (`Runtime::has_focus()`), and delegates to Android (returning to the launcher) when nothing has focus.
+  - System Back always routes `Key::Escape` through a synchronous zero-dt frame and asks the runtime whether the key was consumed (`take_key_consumed`). Consumed (closing a modal/panel, blurring a focused text field, cancelling a drag, or an app `on_key` returning `true`) keeps the Activity open and schedules a redraw; unconsumed (including when a non-text control such as a button keeps focus) delegates to Android to leave the Activity.
 
 ## Prerequisites
 
