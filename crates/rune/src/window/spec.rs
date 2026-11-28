@@ -1257,6 +1257,8 @@ pub fn open_window<S: 'static>(spec: WindowSpec<S>) -> crate::WindowHandle {
     if !crate::is_headless() {
         let opened = AnyWindowSpec(Box::new(Erased { spec, handle: Some(handle.clone()), secondary: false }));
         OPENED.with(|o| o.borrow_mut().push(opened));
+        #[cfg(target_os = "android")]
+        crate::platform::android::notify_opened();
     }
     handle
 }
@@ -1358,6 +1360,11 @@ impl AnyWindowSpec {
     pub(crate) fn start(self, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
         self.0.start(inherited, cx)
     }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn into_android_page(self) -> crate::platform::android::stack::PageEntry {
+        self.0.into_android_page()
+    }
 }
 
 impl<S: 'static> From<WindowSpec<S>> for AnyWindowSpec {
@@ -1372,6 +1379,8 @@ trait ErasedWindow {
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member>;
     #[cfg(not(target_arch = "wasm32"))]
     fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>>;
+    #[cfg(any(target_os = "android", test))]
+    fn into_android_page(self: Box<Self>) -> crate::platform::android::stack::PageEntry;
 }
 
 struct Erased<S: 'static> {
@@ -1406,6 +1415,11 @@ impl<S: 'static> ErasedWindow for Erased<S> {
     fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
         let inherited = secondary_args(self.secondary, &self.spec.key, inherited);
         crate::window::start(self.spec, self.handle, !self.secondary, inherited, cx)
+    }
+    #[cfg(any(target_os = "android", test))]
+    fn into_android_page(self: Box<Self>) -> crate::platform::android::stack::PageEntry {
+        let Erased { spec, handle, secondary } = *self;
+        crate::platform::android::stack::PageEntry::from_spec(spec, handle, secondary)
     }
 }
 

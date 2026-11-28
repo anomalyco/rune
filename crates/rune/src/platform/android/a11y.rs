@@ -224,9 +224,8 @@ unsafe extern "system" fn native_a11y_wake(env: *mut JNIEnv, this: jobject, atte
         }
         let attempt = crate::machine::Attempt(attempt as u32);
         let events = super::host::with_host_mut(|host| {
-            let runner = host.runner.as_mut()?;
-            let _ = runner.a11y_receive(&mut host.a11y);
-            let sync = runner.a11y_wake(&mut host.a11y, attempt, crate::time::now())?;
+            let _ = host.stack.a11y_receive(&mut host.a11y);
+            let sync = host.stack.a11y_wake(&mut host.a11y, attempt, crate::time::now())?;
             if let Some((next_attempt, delay)) = sync.wake_after {
                 // SAFETY: `env` is the UI thread's valid `JNIEnv*`.
                 unsafe { super::host::schedule_a11y_wake(env, host, next_attempt, delay) };

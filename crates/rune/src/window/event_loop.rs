@@ -20,6 +20,12 @@ pub fn run<S: 'static>(app: App<S>, args: Args) -> Result<(), String> {
 }
 
 pub(crate) fn run_windows(factory: Factory, args: Args, options: crate::RunOptions) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (args, options);
+        return crate::platform::android::run_windows(factory);
+    }
+    #[cfg(not(target_os = "android"))]
     run_configured(factory, args, options.accessory)
 }
 

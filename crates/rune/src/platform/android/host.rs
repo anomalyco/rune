@@ -1,10 +1,12 @@
-//! JNI bridge between `dev.rune.RuneView` (Android UI thread) and Rune's [`LayerHost`].
+//! JNI bridge between `dev.rune.RuneView` (Android UI thread), a shared [`AndroidSurface`],
+//! and Rune's in-activity [`PageStack`].
 //!
 //! `rune::android_main!` exports `JNI_OnLoad`, which stores `JavaVM*`, binds all `RuneView`
 //! native methods via `RegisterNatives`, installs logcat forwarding, and records the app entry
 //! function. When `RuneView` initializes on the UI thread, `nativeInit` invokes the app entry
-//! function; `App::try_run` hands its type-erased app into the thread-local Android host slot and
-//! returns immediately so Android's `Looper` and `Choreographer` drive every frame.
+//! function; `App::try_run` and `run_windows` hand their window specs into the thread-local
+//! Android host slot and return immediately so Android's `Looper` and `Choreographer` drive every
+//! frame.
 
 #![allow(unsafe_code)]
 
@@ -19,8 +21,8 @@ use jni_sys::{
 };
 
 use crate::app::App;
-use crate::input::host_events::ImeSync;
 use crate::runtime::Waker;
+use crate::windows::{AnyWindowSpec, Display, WindowSpec};
 use crate::{Key, KeyEvent};
 
 use super::bridge::{
@@ -31,7 +33,8 @@ use super::document;
 use super::input::{self, TextInputAction};
 use super::machine::{self, Effect, Event, State};
 use super::picker::{PickAnswer, PickRequest, PickStep};
-use super::runner::{AndroidRunner, PendingAndroidApp, TypedRunner};
+use super::stack::{BackOutcome, PageStack};
+use super::surface::AndroidSurface;
 use super::{haptics, logcat};
 
 static APP_ENTRY: OnceLock<fn()> = OnceLock::new();
@@ -60,7 +63,8 @@ unsafe impl Sync for ViewBridge {}
 
 pub(super) struct Host {
     state: State,
-    pub(super) runner: Option<Box<dyn AndroidRunner>>,
+    pub(super) stack: PageStack,
+    surface: Option<AndroidSurface>,
     native_window: *mut ndk_sys::ANativeWindow,
     bridge: Arc<Mutex<Option<ViewBridge>>>,
     waker: Waker,
@@ -73,11 +77,13 @@ impl Host {
         let bridge = Arc::new(Mutex::new(Some(bridge)));
         let wake_bridge = Arc::clone(&bridge);
         let waker: Waker = Arc::new(move || post_wake_from_any_thread(&wake_bridge));
+        let stack = PageStack::new(waker.clone());
         #[cfg(feature = "accessibility")]
         let a11y = crate::a11y::android::Adapter::new(waker.clone());
         Self {
             state: State::default(),
-            runner: None,
+            stack,
+            surface: None,
             native_window: ptr::null_mut(),
             bridge,
             waker,
@@ -91,17 +97,18 @@ impl Host {
             let win = self.native_window;
             self.native_window = ptr::null_mut();
             // SAFETY: `win` was acquired from `ANativeWindow_fromSurface` and any `wgpu::Surface`
-            // referencing it has already been dropped via `runner.detach()`.
+            // referencing it has already been dropped via `surface.detach_surface()`.
             unsafe { ndk_sys::ANativeWindow_release(win) };
         }
     }
 
     fn take_bridge_for_shutdown(&mut self, env: *mut JNIEnv) -> Option<ViewBridge> {
-        if let Some(runner) = &mut self.runner {
-            runner.cancel_file_dialogs();
-            runner.detach();
+        if let Some(surface) = &mut self.surface {
+            surface.detach_surface();
         }
-        self.runner = None;
+        let _ = self.stack.take_haptics();
+        self.stack.shutdown();
+        self.surface = None;
         self.release_native_window();
         // SAFETY: `env` is the UI thread's valid `JNIEnv*`.
         unsafe { bridge::clear_link_target(env) };
@@ -118,15 +125,16 @@ impl Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
-        if let Some(runner) = &mut self.runner { runner.detach(); }
-        self.runner = None;
+        if let Some(surface) = &mut self.surface { surface.detach_surface(); }
+        self.stack.shutdown();
+        self.surface = None;
         self.release_native_window();
     }
 }
 
 thread_local! {
     static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
-    static PENDING_RUNNER: RefCell<Option<Box<dyn AndroidRunner>>> = const { RefCell::new(None) };
+    static PENDING_SPECS: RefCell<Option<Vec<AnyWindowSpec>>> = const { RefCell::new(None) };
 }
 
 #[cfg(feature = "accessibility")]
@@ -134,26 +142,56 @@ pub(super) fn with_host_mut<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     HOST.with(|slot| slot.borrow_mut().as_mut().map(f))
 }
 
-/// Installs an `App<S>` into the Android UI-thread host slot and returns immediately.
-/// Called by `App::try_run` on `target_os = "android"`.
-pub(crate) fn run<S: 'static>(mut app: App<S>) -> Result<(), String> {
-    let compositor = app.compositor.take();
-    let (spec, state, shared, runtime_config) = app.into_parts(None);
-    let runner: Box<dyn AndroidRunner> = Box::new(TypedRunner {
-        pending: Some(PendingAndroidApp { spec, state, runtime_config, compositor }),
-        host: None,
-        shared,
-        clipboard: crate::clipboard::Client::default(),
-        ime: ImeSync::default(),
-    });
+fn install_initial_specs(specs: Vec<AnyWindowSpec>) {
     HOST.with(|slot| {
         if let Some(host) = slot.borrow_mut().as_mut() {
-            host.runner = Some(runner);
+            host.stack.set_initial(specs);
+            let _ = host.stack.pump();
         } else {
-            PENDING_RUNNER.with(|pending| *pending.borrow_mut() = Some(runner));
+            PENDING_SPECS.with(|pending| *pending.borrow_mut() = Some(specs));
         }
     });
+}
+
+/// Installs an `App<S>` (and any secondary windows added via `App::window`) into the Android
+/// UI-thread host slot and returns immediately. Called by `App::try_run` on `target_os = "android"`.
+pub(crate) fn run<S: 'static>(app: App<S>) -> Result<(), String> {
+    install_initial_specs(vec![WindowSpec::from_app("main", app).into()]);
     Ok(())
+}
+
+/// Installs windows built by a `run_windows` factory into the Android UI-thread host slot and
+/// returns immediately.
+pub(crate) fn run_windows(
+    factory: Box<dyn FnOnce(&[Display]) -> Vec<AnyWindowSpec>>,
+) -> Result<(), String> {
+    let display = Display {
+        id: None,
+        name: Some("Android".into()),
+        position: (0, 0),
+        size: (1080, 2400),
+        scale: 3.0,
+        primary: true,
+    };
+    let specs = factory(&[display]);
+    if specs.is_empty() {
+        return Err("the app created no windows".into());
+    }
+    install_initial_specs(specs);
+    Ok(())
+}
+
+/// Wakes the Android host when `rune::open_window` is called outside an active host turn.
+/// Inside an active turn (`HOST` already borrowed), the turn's own `stack.pump()` drains `OPENED`.
+pub(crate) fn notify_opened() {
+    let waker = HOST.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|borrow| borrow.as_ref().map(|host| host.waker.clone()))
+    });
+    if let Some(waker) = waker {
+        waker();
+    }
 }
 
 /// Entry point invoked by `rune::android_main!` inside `JNI_OnLoad`.
@@ -340,10 +378,8 @@ fn apply_view_schedule(env: *mut JNIEnv, bridge: &Mutex<Option<ViewBridge>>, eff
 
 pub(super) fn deliver_file_pick_from_jni(env: *mut JNIEnv, id: u64, answer: PickAnswer) {
     HOST.with(|slot| {
-        if let Some(host) = slot.borrow_mut().as_mut()
-            && let Some(runner) = &mut host.runner
-        {
-            runner.deliver_file_pick(id, answer, &host.bridge);
+        if let Some(host) = slot.borrow_mut().as_mut() {
+            host.stack.deliver_file_pick(id, answer, &host.bridge);
         }
     });
     let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut());
@@ -354,7 +390,7 @@ pub(super) fn deliver_text_input(env: *mut JNIEnv, action: TextInputAction) -> b
         let mut borrow = slot.borrow_mut();
         let Some(host) = borrow.as_mut() else { return false };
         if host.state.destroyed { return false; }
-        host.runner.as_mut().is_some_and(|r| r.text_input(action))
+        host.stack.text_input(action)
     });
     if accepted { let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut()); }
     accepted
@@ -365,9 +401,8 @@ pub(super) fn deliver_key_up(env: *mut JNIEnv, event: KeyEvent) -> bool {
         let mut borrow = slot.borrow_mut();
         let Some(host) = borrow.as_mut() else { return (false, false) };
         if host.state.destroyed { return (false, false); }
-        let Some(runner) = &mut host.runner else { return (false, false) };
-        if matches!(event.key, Key::Media(_)) && !runner.media_keys() { return (false, false); }
-        (true, runner.key_up(event))
+        if matches!(event.key, Key::Media(_)) && !host.stack.media_keys() { return (false, false); }
+        (true, host.stack.key_up(event))
     });
     if needs_frame { let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut()); }
     consumed
@@ -397,54 +432,73 @@ fn dispatch(
             match effect {
                 Effect::AttachSurface { viewport, scale } => {
                     if !pending_window.is_null() {
-                        if let Some(runner) = &mut host.runner { runner.detach(); }
+                        if let Some(surface) = &mut host.surface { surface.detach_surface(); }
                         host.release_native_window();
                         host.native_window = pending_window;
                         pending_window = ptr::null_mut();
                     }
-                    if !host.native_window.is_null()
-                        && let Some(runner) = &mut host.runner
-                        && let Err(err) = runner.attach_or_create(
-                            host.native_window.cast::<c_void>(),
-                            viewport,
-                            scale,
-                            host.state.dark,
-                            host.waker.clone(),
-                        )
-                    {
-                        eprintln!("rune: android surface attach failed: {err}");
+                    if !host.native_window.is_null() {
+                        let srgb_blend = host.stack.top_srgb_blend();
+                        let res = if let Some(surface) = &mut host.surface {
+                            // SAFETY: `host.native_window` is live until `detach_surface` / drop.
+                            unsafe {
+                                surface.attach_native_window(
+                                    host.native_window.cast::<c_void>(),
+                                    viewport,
+                                    scale,
+                                    srgb_blend,
+                                )
+                            }
+                        } else {
+                            // SAFETY: `host.native_window` is live until `detach_surface` / drop.
+                            unsafe {
+                                AndroidSurface::from_native_window(
+                                    host.native_window.cast::<c_void>(),
+                                    viewport,
+                                    scale,
+                                    srgb_blend,
+                                )
+                            }
+                            .map(|(surface, size, applied_scale)| {
+                                host.surface = Some(surface);
+                                (size, applied_scale)
+                            })
+                        };
+                        match res {
+                            Ok((size, applied_scale)) => {
+                                host.stack.set_viewport(size, applied_scale);
+                                let _ = host.stack.pump();
+                            }
+                            Err(err) => eprintln!("rune: android surface attach failed: {err}"),
+                        }
                     }
                 }
                 Effect::ResizeSurface { viewport, scale } => {
-                    if let Some(r) = &mut host.runner { r.resize(viewport, scale); }
+                    if let Some(surface) = &mut host.surface {
+                        if let Some((size, applied_scale)) = surface.resize(viewport, scale) {
+                            host.stack.set_viewport(size, applied_scale);
+                        }
+                    } else {
+                        host.stack.set_viewport(viewport, scale);
+                    }
                 }
                 Effect::DetachSurface => {
                     #[cfg(feature = "accessibility")]
                     host.a11y.reset_throttle();
                     unsafe { cancel_a11y_wake(env, host) };
-                    if let Some(r) = &mut host.runner {
-                        let _ = r.take_haptics();
-                        r.detach();
-                    }
+                    let _ = host.stack.take_haptics();
+                    if let Some(surface) = &mut host.surface { surface.detach_surface(); }
                     host.release_native_window();
                 }
-                Effect::SetSafeArea(insets) => {
-                    if let Some(r) = &mut host.runner { r.set_safe_area(insets); }
-                }
-                Effect::SetKeyboardInset(points) => {
-                    if let Some(r) = &mut host.runner { r.set_keyboard_inset(points); }
-                }
-                Effect::SetDark(dark) => {
-                    if let Some(r) = &mut host.runner { r.set_dark(dark); }
-                }
-                Effect::SetTouchLongPress(secs) => {
-                    if let Some(r) = &mut host.runner { r.set_touch_long_press(secs); }
-                }
+                Effect::SetSafeArea(insets) => host.stack.set_safe_area(insets),
+                Effect::SetKeyboardInset(points) => host.stack.set_keyboard_inset(points),
+                Effect::SetDark(dark) => host.stack.set_dark(dark),
+                Effect::SetTouchLongPress(secs) => host.stack.set_touch_long_press(secs),
                 Effect::Touch { id, phase, x, y, time_secs } => {
-                    if let Some(r) = &mut host.runner { r.touch(id, phase, x, y, time_secs); }
+                    host.stack.touch(id, phase, x, y, time_secs);
                 }
                 Effect::DispatchBack => {
-                    let consumed = host.runner.as_mut().is_some_and(|r| r.dispatch_back());
+                    let consumed = host.stack.handle_back() == BackOutcome::Consumed;
                     consumed_back = consumed;
                     let follow = machine::step(&mut host.state, Event::BackDone { consumed });
                     for next in follow {
@@ -452,13 +506,11 @@ fn dispatch(
                     }
                 }
                 Effect::FinishComposition => {
-                    if let Some(r) = &mut host.runner {
-                        r.finish_composition();
-                        r.clear_ime_sync();
-                    }
+                    host.stack.finish_composition();
+                    host.stack.clear_ime_sync();
                 }
                 Effect::SetImeEnabled { enabled, restart } => {
-                    if !enabled && let Some(r) = &mut host.runner { r.clear_ime_sync(); }
+                    if !enabled { host.stack.clear_ime_sync(); }
                     if let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                         pending_ime = Some((v.obj, v.set_ime_enabled, enabled, restart));
                     }
@@ -474,12 +526,9 @@ fn dispatch(
                 }
                 Effect::DrawFrame => {
                     #[cfg(feature = "accessibility")]
-                    if let Some(runner) = &mut host.runner {
-                        let _ = runner.a11y_receive(&mut host.a11y);
-                    }
-                    let frame_result = host.runner.as_mut().and_then(|r| {
-                        let outcome = r.frame()?;
-                        Some((outcome, r.take_haptics(), r.take_file_pick(), r.ime_sync_step(host.state.resumed)))
+                    let _ = host.stack.a11y_receive(&mut host.a11y);
+                    let frame_result = host.surface.as_mut().and_then(|surface| {
+                        host.stack.draw_top(surface, host.state.resumed)
                     });
                     if let Some((outcome, pending_haptics, pick_step, ime)) = frame_result {
                         if !pending_haptics.is_empty()
@@ -513,9 +562,7 @@ fn dispatch(
                             }
                         }
                         #[cfg(feature = "accessibility")]
-                        if let Some(runner) = &mut host.runner
-                            && let Some(sync) = runner.a11y_sync(&mut host.a11y, crate::time::now())
-                        {
+                        if let Some(sync) = host.stack.a11y_sync(&mut host.a11y, crate::time::now()) {
                             if let Some((attempt, delay)) = sync.wake_after {
                                 // SAFETY: `env` is the UI thread's valid `JNIEnv*`.
                                 unsafe { schedule_a11y_wake(env, host, attempt, delay) };
@@ -579,10 +626,19 @@ unsafe extern "system" fn native_init(env: *mut JNIEnv, this: jobject) {
     HOST.with(|slot| {
         if let Some(mut old) = slot.borrow_mut().take() { old.shutdown(env); }
         let mut host = Host::new(bridge);
-        PENDING_RUNNER.with(|pending| host.runner = pending.borrow_mut().take());
+        PENDING_SPECS.with(|pending| {
+            if let Some(specs) = pending.borrow_mut().take() {
+                host.stack.set_initial(specs);
+            }
+        });
         *slot.borrow_mut() = Some(host);
     });
     if let Some(entry) = APP_ENTRY.get() { entry(); }
+    HOST.with(|slot| {
+        if let Some(host) = slot.borrow_mut().as_mut() {
+            let _ = host.stack.pump();
+        }
+    });
 }
 
 unsafe extern "system" fn native_surface_created(
@@ -648,8 +704,8 @@ unsafe extern "system" fn native_resume(env: *mut JNIEnv, this: jobject) {
 
 unsafe extern "system" fn native_pause(env: *mut JNIEnv, this: jobject) {
     HOST.with(|slot| {
-        if let Some(runner) = slot.borrow_mut().as_mut().and_then(|h| h.runner.as_mut()) {
-            let _ = runner.take_haptics();
+        if let Some(host) = slot.borrow_mut().as_mut() {
+            let _ = host.stack.take_haptics();
         }
     });
     let _ = dispatch(env, this, Event::Paused, ptr::null_mut());
@@ -671,13 +727,11 @@ unsafe extern "system" fn native_long_press_timeout(env: *mut JNIEnv, this: jobj
 
 unsafe extern "system" fn native_wake(env: *mut JNIEnv, this: jobject) {
     HOST.with(|slot| {
-        if let Some(host) = slot.borrow_mut().as_mut()
-            && let Some(runner) = &mut host.runner
-        {
-            runner.drain_shared();
+        if let Some(host) = slot.borrow_mut().as_mut() {
+            let _ = host.stack.pump();
             #[cfg(feature = "accessibility")]
-            let _ = runner.a11y_receive(&mut host.a11y);
-            if !host.state.resumed { let _ = runner.take_haptics(); }
+            let _ = host.stack.a11y_receive(&mut host.a11y);
+            if !host.state.resumed { let _ = host.stack.take_haptics(); }
         }
     });
     let _ = dispatch(env, this, Event::Wake, ptr::null_mut());

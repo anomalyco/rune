@@ -41,7 +41,7 @@ fn shared_gpu() -> Result<Arc<Gpu>, String> {
 static ANDROID_SHARED_GPU: Mutex<Option<Arc<Gpu>>> = Mutex::new(None);
 
 #[cfg(target_os = "android")]
-unsafe fn create_android_surface(
+pub(crate) unsafe fn create_android_surface(
     instance: &wgpu::Instance,
     native_window: *mut c_void,
 ) -> Result<wgpu::Surface<'static>, String> {
@@ -64,7 +64,7 @@ unsafe fn create_android_surface(
 }
 
 #[cfg(target_os = "android")]
-unsafe fn android_gpu_and_surface(
+pub(crate) unsafe fn android_gpu_and_surface(
     native_window: *mut c_void,
 ) -> Result<(Arc<Gpu>, wgpu::Surface<'static>), String> {
     let mut slot = ANDROID_SHARED_GPU
@@ -477,13 +477,6 @@ impl<S: 'static> LayerHost<S> {
         self
     }
 
-    #[cfg(target_os = "android")]
-    pub(crate) fn with_boxed_compositor(mut self, compositor: Box<dyn Compositor<S>>) -> Self {
-        self.rt.track_marks = true;
-        self.compositor = Some(compositor);
-        self
-    }
-
     pub fn runtime(&self) -> &Runtime<S> {
         &self.rt
     }
@@ -506,21 +499,6 @@ impl<S: 'static> LayerHost<S> {
     /// a surface is attached and its clamped device-pixel dimensions change.
     pub fn resize(&mut self, viewport: (f32, f32), scale: f32) {
         self.core.resize(self.rt.core_mut(), viewport, scale);
-    }
-
-    /// Routes an Android Back press through the runtime as `Key::Escape` synchronously without
-    /// acquiring a GPU drawable, returning whether Rune consumed the key.
-    #[cfg(target_os = "android")]
-    pub(crate) fn dispatch_back_escape(&mut self) -> bool {
-        let was_animating =
-            self.rt.core().animating || self.compositor.as_ref().is_some_and(|c| c.animating());
-        let (rt, mut app) = self.rt.split_mut();
-        let consumed = crate::platform::android::machine::dispatch_back_escape_core(rt, &mut app);
-        embed_frame::flush_requests(rt, &mut app);
-        if !was_animating && consumed {
-            self.core.clock.hold(crate::time::now());
-        }
-        consumed
     }
 
     /// Steps animations and layout to `Instant::now()` and presents one frame, following the
