@@ -327,6 +327,33 @@ fn overlay_frame_latency_defaults_to_none_clamps_and_retains() {
 }
 
 #[test]
+fn overlay_wide_color_defaults_false_and_retains_opt_in() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = AppSpec::new("overlay-wide", (120.0, 80.0), || (), view);
+
+    let default_cfg = OverlaySpec::new("default", app.size, view).options(Default::default());
+    assert!(!default_cfg.wide_color);
+    let (default_overlay, _) = Overlay::new(default_cfg, (), &app);
+    assert!(!default_overlay.core.wide_color);
+
+    let wide_cfg = OverlaySpec::new("wide", app.size, view).options(Default::default()).wide_color(true);
+    assert!(wide_cfg.wide_color);
+    let (wide_overlay, _) = Overlay::new(wide_cfg, (), &app);
+    assert!(wide_overlay.core.wide_color);
+
+    let host_cfg = OverlaySpec::new("host-wide", app.size, view).options(Default::default()).wide_color(true);
+    let (host, _) = OverlayHost::new(host_cfg, (), &app, Default::default());
+    assert!(host.core.wide_color);
+
+    let toggled = OverlaySpec::new("toggled", app.size, view)
+        .options(Default::default())
+        .wide_color(true)
+        .wide_color(false);
+    let (toggled_overlay, _) = Overlay::new(toggled, (), &app);
+    assert!(!toggled_overlay.core.wide_color);
+}
+
+#[test]
 fn overlay_setup_measures_use_overlay_text_system_and_stay_warm_for_first_frame() {
     use std::cell::Cell;
     use std::rc::Rc;

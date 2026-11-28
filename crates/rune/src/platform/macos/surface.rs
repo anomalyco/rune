@@ -78,7 +78,12 @@ impl ColorSpaceTarget for NSWindow {
 pub(super) fn apply_window_color_space_to(
     target: &impl ColorSpaceTarget,
     color_space: crate::MacColorSpace,
+    wide_color: bool,
 ) {
+    if wide_color {
+        target.set_color_space(Some(&objc2_app_kit::NSColorSpace::extendedSRGBColorSpace()));
+        return;
+    }
     match color_space {
         crate::MacColorSpace::Srgb => {
             target.set_color_space(Some(&objc2_app_kit::NSColorSpace::sRGBColorSpace()));
@@ -89,11 +94,16 @@ pub(super) fn apply_window_color_space_to(
     }
 }
 
-/// Applies `color_space` to an `NSWindow` or adopted `NSPanel`: `Srgb` sets
-/// `NSColorSpace.sRGBColorSpace` (which colour-manages an untagged `CAMetalLayer`, covering
-/// wgpu-backed windows and overlay panels), and `Unmanaged` clears it to `nil`.
-pub(crate) fn apply_window_color_space(window: &NSWindow, color_space: crate::MacColorSpace) {
-    apply_window_color_space_to(window, color_space);
+/// Applies `color_space` (or `extendedSRGBColorSpace` when `wide_color` is set) to an
+/// `NSWindow` or adopted `NSPanel`: `Srgb` sets `NSColorSpace.sRGBColorSpace` (which
+/// colour-manages an untagged `CAMetalLayer`, covering wgpu-backed windows and overlay panels),
+/// `Unmanaged` clears it to `nil`, and `wide_color` uses `NSColorSpace.extendedSRGBColorSpace`.
+pub(crate) fn apply_window_color_space(
+    window: &NSWindow,
+    color_space: crate::MacColorSpace,
+    wide_color: bool,
+) {
+    apply_window_color_space_to(window, color_space, wide_color);
 }
 
 /// Pins the Metal layer's contents to the window's top left at their own size, disables Core
@@ -111,9 +121,13 @@ pub(crate) fn apply_window_color_space(window: &NSWindow, color_space: crate::Ma
 /// to `nil`. Rune's native Metal backend preserves the layer's colorspace across reconfigures;
 /// wgpu-hal resets it to `nil`, where `NSWindow.colorSpace` (`apply_window_color_space`) keeps
 /// sRGB windows managed and unmanaged windows raw.
-pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface, color_space: crate::MacColorSpace) {
+pub(crate) fn pin_contents_top_left(
+    surface: &wgpu::Surface,
+    color_space: crate::MacColorSpace,
+    wide_color: bool,
+) {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
-    use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
+    use objc2_core_graphics::{CGColorSpace, kCGColorSpaceExtendedLinearSRGB, kCGColorSpaceSRGB};
     use objc2_foundation::{NSDictionary, NSString, ns_string};
     // SAFETY: `layer` is a live `CAMetalLayer` on the main thread under wgpu's lock;
     // `+[NSNull null]` returns the process-lifetime `NSNull` singleton.
@@ -133,6 +147,13 @@ pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface, color_space: crate:
                 let actions = NSDictionary::from_slices(&keys, &[null; 5]);
                 let _: () = msg_send![layer, setActions: &*actions];
             }
+        }
+        if wide_color {
+            let _: () = msg_send![layer, setWantsExtendedDynamicRangeContent: Bool::new(true)];
+            if let Some(ext) = CGColorSpace::with_name(Some(kCGColorSpaceExtendedLinearSRGB)) {
+                let _: () = msg_send![layer, setColorspace: &*ext];
+            }
+            return;
         }
         match color_space {
             crate::MacColorSpace::Srgb => {

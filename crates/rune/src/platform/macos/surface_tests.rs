@@ -28,7 +28,7 @@ fn a_metal_layer_pins_its_contents_to_the_window_top_left() {
         let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
         // SAFETY: the layer outlives the surface.
         let surface = unsafe { crate::render::Gpu::instance().create_surface_unsafe(target) }.expect("a Metal layer surface");
-        pin_contents_top_left(&surface, crate::MacColorSpace::Srgb);
+        pin_contents_top_left(&surface, crate::MacColorSpace::Srgb, false);
         // SAFETY: `layer` is a live `CAMetalLayer`; `contentsGravity` returns a non-null `NSString`.
         let gravity: Retained<objc2_foundation::NSString> = unsafe { msg_send![&*layer, contentsGravity] };
         assert_eq!(gravity.to_string(), if flipped { "bottomLeft" } else { "topLeft" }, "flipped: {flipped}");
@@ -52,10 +52,10 @@ fn a_metal_layer_clears_colorspace_for_unmanaged() {
     // SAFETY: the layer outlives the surface.
     let surface = unsafe { crate::render::Gpu::instance().create_surface_unsafe(target) }.expect("a Metal layer surface");
 
-    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb);
+    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb, false);
     assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceSRGB"));
 
-    pin_contents_top_left(&surface, crate::MacColorSpace::Unmanaged);
+    pin_contents_top_left(&surface, crate::MacColorSpace::Unmanaged, false);
     assert_eq!(layer_colorspace_name(&layer), None, "Unmanaged clears CAMetalLayer.colorspace to nil");
     drop(surface);
 }
@@ -82,17 +82,25 @@ fn window_color_space_seam_sets_srgb_and_clears_unmanaged() {
     }
 
     let win = FakeWindow::default();
-    apply_window_color_space_to(&win, crate::MacColorSpace::Srgb);
+    apply_window_color_space_to(&win, crate::MacColorSpace::Srgb, false);
     assert_eq!(win.calls.get(), 1);
     assert_eq!(win.space.borrow().as_deref(), Some(&*NSColorSpace::sRGBColorSpace()));
 
-    apply_window_color_space_to(&win, crate::MacColorSpace::Unmanaged);
+    apply_window_color_space_to(&win, crate::MacColorSpace::Unmanaged, false);
     assert_eq!(win.calls.get(), 2);
     assert!(win.space.borrow().is_none(), "Unmanaged clears NSWindow.colorSpace to nil");
 
-    apply_window_color_space_to(&win, crate::MacColorSpace::Srgb);
+    apply_window_color_space_to(&win, crate::MacColorSpace::Srgb, false);
     assert_eq!(win.calls.get(), 3);
     assert_eq!(win.space.borrow().as_deref(), Some(&*NSColorSpace::sRGBColorSpace()));
+
+    apply_window_color_space_to(&win, crate::MacColorSpace::Srgb, true);
+    assert_eq!(win.calls.get(), 4);
+    assert_eq!(win.space.borrow().as_deref(), Some(&*NSColorSpace::extendedSRGBColorSpace()));
+
+    apply_window_color_space_to(&win, crate::MacColorSpace::Unmanaged, true);
+    assert_eq!(win.calls.get(), 5);
+    assert_eq!(win.space.borrow().as_deref(), Some(&*NSColorSpace::extendedSRGBColorSpace()));
 }
 
 /// Native Metal surface reconfiguration (as on resize or sRGB-blend pixel-format switches)
@@ -126,7 +134,7 @@ fn native_metal_surface_reconfigure_preserves_srgb_and_unmanaged_tags() {
     };
     surface.configure(&device, &config);
 
-    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb);
+    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb, false);
     assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceSRGB"));
     config.width = 128;
     config.height = 64;
@@ -134,7 +142,7 @@ fn native_metal_surface_reconfigure_preserves_srgb_and_unmanaged_tags() {
     surface.configure(&device, &config);
     assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceSRGB"), "Srgb survives resize and format switch");
 
-    pin_contents_top_left(&surface, crate::MacColorSpace::Unmanaged);
+    pin_contents_top_left(&surface, crate::MacColorSpace::Unmanaged, false);
     assert_eq!(layer_colorspace_name(&layer), None);
     config.width = 96;
     config.height = 48;
@@ -167,7 +175,7 @@ fn a_metal_layer_disables_implicit_scale_and_geometry_animations() {
     let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
     // SAFETY: `layer` outlives `surface`.
     let surface = unsafe { crate::render::Gpu::instance().create_surface_unsafe(target) }.expect("a Metal layer surface");
-    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb);
+    pin_contents_top_left(&surface, crate::MacColorSpace::Srgb, false);
 
     // SAFETY: `layer` is a live `CAMetalLayer` queried on this thread; `+[NSNull null]` returns the singleton.
     unsafe {
@@ -233,19 +241,27 @@ fn overlay_panel_color_space_options_drive_panel_seam_and_metal_layer() {
     assert_eq!(srgb_opts.shadow, Some(false));
     assert_eq!(srgb_opts.level, Some(25));
     assert_eq!(srgb_opts.color_space, crate::MacColorSpace::Srgb);
-    apply_window_color_space_to(&panel, srgb_opts.color_space);
+    apply_window_color_space_to(&panel, srgb_opts.color_space, false);
     assert_eq!(panel.space.borrow().as_deref(), Some(&*NSColorSpace::sRGBColorSpace()));
-    pin_contents_top_left(&surface, srgb_opts.color_space);
+    pin_contents_top_left(&surface, srgb_opts.color_space, false);
     assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceSRGB"));
 
     let unmanaged_opts = super::super::overlay_panel_native_options(crate::OverlayLevel::AboveOverlays, crate::MacColorSpace::Unmanaged);
     assert_eq!(unmanaged_opts.shadow, Some(false));
     assert_eq!(unmanaged_opts.level, Some(27));
     assert_eq!(unmanaged_opts.color_space, crate::MacColorSpace::Unmanaged);
-    apply_window_color_space_to(&panel, unmanaged_opts.color_space);
+    apply_window_color_space_to(&panel, unmanaged_opts.color_space, false);
     assert!(panel.space.borrow().is_none(), "Unmanaged overlay panel clears NSWindow.colorSpace to nil");
-    pin_contents_top_left(&surface, unmanaged_opts.color_space);
+    pin_contents_top_left(&surface, unmanaged_opts.color_space, false);
     assert_eq!(layer_colorspace_name(&layer), None, "Unmanaged overlay clears CAMetalLayer.colorspace to nil");
+
+    apply_window_color_space_to(&panel, srgb_opts.color_space, true);
+    assert_eq!(panel.space.borrow().as_deref(), Some(&*NSColorSpace::extendedSRGBColorSpace()));
+    pin_contents_top_left(&surface, srgb_opts.color_space, true);
+    assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceExtendedLinearSRGB"));
+    // SAFETY: `layer` is a live `CAMetalLayer` queried on this thread.
+    let edr: objc2::runtime::Bool = unsafe { msg_send![&*layer, wantsExtendedDynamicRangeContent] };
+    assert!(edr.as_bool(), "wide_color enables CAMetalLayer.wantsExtendedDynamicRangeContent");
     drop(surface);
 }
 /// Verifies on a standalone off-screen `CAMetalLayer` (never attached to any `NSWindow` or

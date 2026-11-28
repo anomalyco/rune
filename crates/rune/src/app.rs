@@ -164,6 +164,8 @@ pub struct App<S: 'static> {
     pub(crate) window_backdrop: crate::WindowBackdrop,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) frame_latency: Option<u32>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) wide_color: bool,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -251,6 +253,7 @@ impl<S: 'static> App<S> {
             color_scheme: crate::ColorScheme::System,
             window_backdrop: crate::WindowBackdrop::None,
             frame_latency: None,
+            wide_color: false,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -1185,6 +1188,19 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn frame_latency(mut self, frames: u32) -> Self {
         self.frame_latency = Some(frames.clamp(1, 2));
+        self
+    }
+
+    /// Opt into wide-color extended-range linear sRGB output (`Rgba16Float` with
+    /// `kCGColorSpaceExtendedLinearSRGB` and EDR enabled on macOS) so Display P3 colours
+    /// ([`Color::p3`](crate::Color::p3), [`oklch_wide`](crate::oklch_wide)) render outside the
+    /// sRGB gamut without clamping. Off by default (standard 8-bit sRGB).
+    ///
+    /// Wide-color surfaces blend in linear light (`srgb_blend = false`) and supersede
+    /// [`MacColorSpace`](crate::MacColorSpace) on macOS. Platforms without extended-range sRGB
+    /// support keep their standard sRGB surface.
+    pub fn wide_color(mut self, enabled: bool) -> Self {
+        self.wide_color = enabled;
         self
     }
 

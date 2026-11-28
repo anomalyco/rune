@@ -26,7 +26,9 @@ pub mod tracked;
 
 pub use color::Color;
 pub use color::oklch;
+pub use color::oklch_wide;
 pub use color::oklcha;
+pub use color::oklcha_wide;
 pub use growth::GROWTH;
 pub use growth::StreamEdge;
 pub use growth::edge;

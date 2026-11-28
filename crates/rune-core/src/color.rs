@@ -20,6 +20,28 @@ pub fn oklcha(l: f32, c: f32, h: f32, a: f32) -> Color {
     Color::from_oklab([l, c * co, c * s, a])
 }
 
+/// OKLCH to extended-range linear sRGB without clamping RGB channels to `[0, 1]`, so colours in
+/// wider gamuts such as Display P3 keep their full chroma on wide-color surfaces.
+pub fn oklch_wide(l: f32, c: f32, h: f32) -> Color {
+    oklcha_wide(l, c, h, 1.0)
+}
+
+/// OKLCH with alpha to extended-range linear sRGB without clamping RGB channels to `[0, 1]`.
+pub fn oklcha_wide(l: f32, c: f32, h: f32, a: f32) -> Color {
+    let (s, co) = h.to_radians().sin_cos();
+    Color::from_oklab_unclamped([l, c * co, c * s, a])
+}
+
+/// Sign-preserving sRGB transfer decode (CSS Color 4 extended sRGB / Display P3).
+fn extended_srgb_decode(c: f32) -> f32 {
+    if c < 0.0 { -srgb_decode(-c) } else { srgb_decode(c) }
+}
+
+/// Sign-preserving sRGB transfer encode (CSS Color 4 extended sRGB / Display P3).
+fn extended_srgb_encode(c: f32) -> f32 {
+    if c < 0.0 { -srgb_encode(-c) } else { srgb_encode(c) }
+}
+
 /// An `f32`'s bits for hashing a type that compares its floats with `==`: `-0.0` hashes as
 /// `0.0`, which it equals, and every NaN alike.
 pub(crate) fn hash_bits(x: f32) -> u32 {
@@ -53,8 +75,49 @@ impl Color {
         [l, a, b, self.a]
     }
 
+    /// Display P3 (sRGB transfer curve, D65 white point) to extended-range linear sRGB.
+    ///
+    /// Colours outside the sRGB gamut produce linear sRGB channels outside `[0, 1]` (for example
+    /// Display P3 red `(1, 0, 0)` has `r > 1` and `g, b < 0`), which render in full P3 gamut on
+    /// an opt-in wide-color window (`App::wide_color(true)`).
+    pub fn p3(r: f32, g: f32, b: f32) -> Color {
+        Self::p3a(r, g, b, 1.0)
+    }
+
+    /// Display P3 (sRGB transfer curve, D65 white point) with straight alpha to extended-range
+    /// linear sRGB.
+    pub fn p3a(r: f32, g: f32, b: f32, a: f32) -> Color {
+        let lr = extended_srgb_decode(r);
+        let lg = extended_srgb_decode(g);
+        let lb = extended_srgb_decode(b);
+        // CSS Color 4 linear Display P3 -> linear sRGB (D65; shared blue primary).
+        Color {
+            r: 1.224_940_2 * lr - 0.224_940_18 * lg,
+            g: -0.042_056_955 * lr + 1.042_057 * lg,
+            b: -0.019_637_555 * lr - 0.078_636_05 * lg + 1.098_273_6 * lb,
+            a: a.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Converts this linear sRGB colour into Display P3 components `[r, g, b, a]` using the sRGB
+    /// transfer curve (the inverse of [`Self::p3a`]).
+    pub fn to_p3(self) -> [f32; 4] {
+        // CSS Color 4 linear sRGB -> linear Display P3 (D65; shared blue primary).
+        let pr = 0.822_461_96 * self.r + 0.177_538_04 * self.g;
+        let pg = 0.033_194_2 * self.r + 0.966_805_8 * self.g;
+        let pb = 0.017_082_63 * self.r + 0.072_397_44 * self.g + 0.910_519_9 * self.b;
+        [extended_srgb_encode(pr), extended_srgb_encode(pg), extended_srgb_encode(pb), self.a]
+    }
+
     pub fn from_oklab([ll, aa, bb, alpha]: [f32; 4]) -> Color {
         let [r, g, b] = oklab_to_linear([ll, aa, bb]).map(|c| c.clamp(0.0, 1.0));
+        Color { r, g, b, a: alpha.clamp(0.0, 1.0) }
+    }
+
+    /// OKLab `[L, a, b, alpha]` to extended-range linear sRGB without clamping RGB channels to
+    /// `[0, 1]`, preserving wide-gamut colours (such as Display P3) for `App::wide_color(true)`.
+    pub fn from_oklab_unclamped([ll, aa, bb, alpha]: [f32; 4]) -> Color {
+        let [r, g, b] = oklab_to_linear([ll, aa, bb]);
         Color { r, g, b, a: alpha.clamp(0.0, 1.0) }
     }
 
@@ -119,24 +182,5 @@ impl rune_motion::Animatable for Color {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::hash::{BuildHasher, Hash, RandomState};
-
-    fn hash(x: impl Hash, s: &RandomState) -> u64 {
-        s.hash_one(x)
-    }
-
-    #[test]
-    fn equal_colours_hash_equal() {
-        let s = RandomState::new();
-        let a = oklcha(0.6, 0.1, 250.0, 0.5);
-        assert_eq!(hash(a, &s), hash(oklcha(0.6, 0.1, 250.0, 0.5), &s));
-        let zero = Color { r: 0.0, ..Color::BLACK };
-        let negative = Color { r: -0.0, ..Color::BLACK };
-        assert_eq!(zero, negative);
-        assert_eq!(hash(zero, &s), hash(negative, &s));
-        assert_ne!(hash(a, &s), hash(a.alpha(0.6), &s));
-        assert_eq!(hash(Color { a: f32::NAN, ..a }, &s), hash(Color { a: -f32::NAN, ..a }, &s));
-    }
-}
+#[path = "color_tests.rs"]
+mod tests;

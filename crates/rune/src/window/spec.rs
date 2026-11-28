@@ -149,6 +149,18 @@ impl Display {
         }
         (self.position, self.size)
     }
+
+    /// Whether this display can represent wide-gamut colours (Display P3).
+    ///
+    /// On macOS, queries `NSScreen.canRepresentDisplayGamut(.p3)` for this display; returns
+    /// `false` on other platforms, off the main thread, or for headless virtual displays.
+    pub fn wide_color(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() {
+            return crate::platform::macos::display_wide_color(id);
+        }
+        false
+    }
 }
 
 pub(crate) fn native_bounds_for(
@@ -1108,6 +1120,9 @@ impl<S: 'static> WindowSpec<S> {
         /// .frame_latency(1);
         /// ```
         frame_latency(frames: u32);
+        /// Opt into wide-color extended-range linear sRGB output on macOS (`Rgba16Float` with
+        /// `kCGColorSpaceExtendedLinearSRGB`), like [`App::wide_color`]. Off by default.
+        wide_color(enabled: bool);
         /// Keep this window's layout reads across launches, like `App::layout_seed`.
         layout_seed(seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static);
         /// Draw every frame of this window through `compositor`, like `App::compositor`.

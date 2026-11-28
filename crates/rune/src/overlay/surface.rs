@@ -247,6 +247,7 @@ impl OverlayCore {
         let reused = pooled.and_then(|(gpu, translucent)| make(&gpu.instance).filter(|s| crate::render::translucency::serves(&gpu, s, features, translucent)).map(|s| (gpu, s)));
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
+        let wide_color = self.wide_color;
         let prewarm_effects = self.prewarm_effects;
         let frame_latency = crate::window::frame_latency(self.frame_latency);
         // Layer-shell overlays gate every present on `wl_surface.frame` (`layer.request_frame()`
@@ -260,7 +261,7 @@ impl OverlayCore {
         };
         let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
-            let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend, frame_callback_paced)
+            let (mut config, translucent) = crate::window::surface_config_with(surface, &gpu.adapter, (w, h), srgb_blend, frame_callback_paced, wide_color)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
             config.desired_maximum_frame_latency = frame_latency;
             let info = gpu.adapter.get_info();
@@ -282,7 +283,8 @@ impl OverlayCore {
             let prefix = format!("could not configure its GPU surface on {:?} {}", info.backend, info.name);
             crate::window::configure_checked(surface, gpu, &config)
                 .map_err(|error| crate::render::SurfaceSetupError::from_configure(&prefix, error))?;
-            let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+            let effective_srgb_blend = if crate::window::is_wide_color_config(&config) { false } else { srgb_blend };
+            let target_format = if effective_srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
             let mut renderer = match existing {
                 Some(mut renderer) => {
                     renderer.try_set_format(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?;
@@ -291,6 +293,7 @@ impl OverlayCore {
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?,
             };
             renderer.attach_gpu(gpu);
+            renderer.set_srgb_blend(effective_srgb_blend);
             renderer.set_prewarm_effects(prewarm_effects);
             Ok((config, translucent.is_none(), renderer))
         };
@@ -426,8 +429,12 @@ impl OverlayCore {
         }
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
+        let wide_active = crate::window::is_wide_color_config(&config);
+        if wide_active {
+            rt.set_srgb_blend(false);
+        }
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface, self.macos_color_space);
+        crate::platform::macos::pin_contents_top_left(&surface, self.macos_color_space, wide_active);
         let target_format = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, target_format, rt);
         self.renderer = Some(renderer);

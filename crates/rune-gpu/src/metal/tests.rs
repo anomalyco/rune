@@ -750,3 +750,60 @@ fn metal_surface_configure_sets_maximum_drawable_count_from_frame_latency() {
     }
     drop(surface);
 }
+
+/// `MetalSurface` advertises `EXTENDED_SRGB_LINEAR` on `Rgba16Float` and configures
+/// `CAMetalLayer` with `RGBA16Float`, `kCGColorSpaceExtendedLinearSRGB`, and EDR enabled.
+#[allow(unsafe_code)]
+#[test]
+fn metal_surface_configure_supports_extended_srgb_linear() {
+    use objc2_core_graphics::CGColorSpace;
+    use objc2_metal::MTLPixelFormat;
+    use objc2_quartz_core::CAMetalLayer;
+    let layer = CAMetalLayer::new();
+    let instance = super::instance();
+    let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+    // SAFETY: `layer` outlives `surface`.
+    let surface = unsafe { instance.create_surface_unsafe(target) }.expect("MetalSurface");
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("MetalAdapter");
+    let caps = surface.get_capabilities(&adapter);
+    let f16_caps = caps
+        .format_capabilities
+        .iter()
+        .find(|fc| fc.format == wgpu::TextureFormat::Rgba16Float)
+        .expect("Rgba16Float capability");
+    assert!(f16_caps.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR));
+    let bgra_caps = caps
+        .format_capabilities
+        .iter()
+        .find(|fc| fc.format == wgpu::TextureFormat::Bgra8Unorm)
+        .expect("Bgra8Unorm capability");
+    assert!(!bgra_caps.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR));
+
+    let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("MetalDevice");
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba16Float,
+        width: 64,
+        height: 32,
+        present_mode: wgpu::PresentMode::Fifo,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        view_formats: vec![],
+        color_space: wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+    };
+    surface.configure(&device, &config);
+    assert_eq!(layer.pixelFormat(), MTLPixelFormat::RGBA16Float);
+    let space_name = layer.colorspace().and_then(|s| CGColorSpace::name(Some(&s))).map(|n| n.to_string());
+    assert_eq!(space_name.as_deref(), Some("kCGColorSpaceExtendedLinearSRGB"));
+    #[cfg(target_os = "macos")]
+    assert!(layer.wantsExtendedDynamicRangeContent());
+
+    // Returning to default sRGB clears EDR on macOS.
+    config.format = wgpu::TextureFormat::Bgra8Unorm;
+    config.color_space = wgpu::SurfaceColorSpace::Auto;
+    surface.configure(&device, &config);
+    assert_eq!(layer.pixelFormat(), MTLPixelFormat::BGRA8Unorm);
+    #[cfg(target_os = "macos")]
+    assert!(!layer.wantsExtendedDynamicRangeContent());
+    drop(surface);
+}

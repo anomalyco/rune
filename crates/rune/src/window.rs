@@ -123,9 +123,11 @@ pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use surface::{
     Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, acquire_checked, configure,
-    configure_checked, frame_latency, reblend_core, poll_timer_deadline_core, surface_config,
+    configure_checked, frame_latency, is_wide_color_config, reblend_core, poll_timer_deadline_core, surface_config_with,
     timer_deadline_core, timer_wants_frame_core,
 };
+#[cfg(target_vendor = "apple")]
+pub(crate) use surface::surface_config;
 pub(crate) use surface::{Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::{configure_then, damage};

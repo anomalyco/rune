@@ -846,3 +846,22 @@ fn app_and_window_spec_frame_latency_clamps_and_retains() {
 
     assert_eq!(WindowSpec::new("panel", spec()).frame_latency(3).app.frame_latency, Some(2));
 }
+
+#[test]
+fn app_and_window_spec_wide_color_defaults_false_and_retains_opt_in() {
+    let spec = || AppSpec::new("picker", (480.0, 360.0), || (), |_, _| crate::el());
+    assert!(!App::new(spec()).wide_color);
+    assert!(App::new(spec()).wide_color(true).wide_color);
+    assert!(!App::new(spec()).wide_color(true).wide_color(false).wide_color);
+
+    let from_app = WindowSpec::from_app("picker", App::new(spec()).wide_color(true));
+    assert!(from_app.app.wide_color);
+
+    let via_spec = WindowSpec::new("picker", spec()).wide_color(true);
+    assert!(via_spec.app.wide_color);
+    assert!(via_spec.options(WindowOptions::default()).app.wide_color);
+    assert!(!WindowSpec::new("picker", spec()).wide_color(true).wide_color(false).app.wide_color);
+
+    let headless = Display { id: None, name: None, position: (0, 0), size: (1280, 800), scale: 2.0, primary: true };
+    assert!(!headless.wide_color(), "headless virtual display reports wide_color = false");
+}

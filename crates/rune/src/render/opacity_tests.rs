@@ -481,3 +481,56 @@ fn springs_wgsl_opacity_rules_match_kind_opacity_fields_and_gpu_parity() {
         }
     }
 }
+
+#[test]
+fn rgba16float_linear_pipeline_preserves_display_p3_channels_unclamped() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let p3_red = crate::Color::p3(1.0, 0.0, 0.0);
+    let p3_green = crate::Color::p3(0.0, 1.0, 0.0);
+    let (w, h) = (32u32, 16u32);
+    let mut rt = crate::Runtime::new(
+        (p3_red, p3_green),
+        |&(red, green), _| {
+            crate::row()
+                .size(32.0, 16.0)
+                .fill(crate::Color::BLACK)
+                .child(crate::el().size(16.0, 16.0).fill(red))
+                .child(crate::el().size(16.0, 16.0).opacity(0.5).fill(green))
+        },
+        (w as f32, h as f32),
+        crate::Env::new(true, 1.0),
+    );
+    rt.set_srgb_blend(false);
+    rt.frame(0.0);
+
+    let format = wgpu::TextureFormat::Rgba16Float;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    assert!(!renderer.srgb_blend(), "Rgba16Float defaults to linear blending");
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    renderer.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
+    let bytes = target.read(&gpu.device);
+    assert_eq!(bytes.len(), (w * h * 8) as usize);
+
+    let sample = |x: u32, y: u32| -> [f32; 4] {
+        let at = ((y * w + x) * 8) as usize;
+        [
+            half::f16::from_le_bytes([bytes[at], bytes[at + 1]]).to_f32(),
+            half::f16::from_le_bytes([bytes[at + 2], bytes[at + 3]]).to_f32(),
+            half::f16::from_le_bytes([bytes[at + 4], bytes[at + 5]]).to_f32(),
+            half::f16::from_le_bytes([bytes[at + 6], bytes[at + 7]]).to_f32(),
+        ]
+    };
+
+    let red_px = sample(8, 8);
+    assert!((red_px[0] - p3_red.r).abs() < 0.005, "P3 red r unclamped: {red_px:?} vs {p3_red:?}");
+    assert!((red_px[1] - p3_red.g).abs() < 0.005, "P3 red g negative preserved: {red_px:?} vs {p3_red:?}");
+    assert!((red_px[2] - p3_red.b).abs() < 0.005, "P3 red b negative preserved: {red_px:?} vs {p3_red:?}");
+    assert!((red_px[3] - 1.0).abs() < 0.005);
+
+    // 0.5-opacity P3 green over opaque black preserves negative r/b channels through compositing.
+    let green_px = sample(24, 8);
+    assert!((green_px[0] - p3_green.r * 0.5).abs() < 0.005, "P3 green*0.5 r: {green_px:?}");
+    assert!((green_px[1] - p3_green.g * 0.5).abs() < 0.005, "P3 green*0.5 g: {green_px:?}");
+    assert!((green_px[2] - p3_green.b * 0.5).abs() < 0.005, "P3 green*0.5 b: {green_px:?}");
+    assert!((green_px[3] - 1.0).abs() < 0.005);
+}
