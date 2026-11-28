@@ -96,6 +96,35 @@ fn dialog_description_wraps_inside_the_card() {
 }
 
 #[test]
+fn dialog_title_wraps_before_the_close_button() {
+    // A German title too long for one line beside the close button.
+    const TITLE: &str = "Einige Änderungen konnten nicht wiederhergestellt werden";
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        Dialog::new("d", TITLE).width(380.0).open(true).fit()
+            .description("Die Datei hat sich geändert.")
+            .on_close(|_: &mut ()| {})
+            .build(&k, &mut layer);
+        root(rune::el().w_full().h_full(), layer)
+    }
+    for vw in [600.0, 320.0] {
+        let mut rt = Runtime::new((), view, (vw, 400.0), Env::new(true, 1.0));
+        for _ in 0..60 { rt.frame(1.0 / 60.0); }
+        let elements = rt.elements();
+        let panel = elements.iter().find(|e| e.key.as_deref() == Some("d-dialog")).unwrap();
+        let close = elements.iter().find(|e| e.key.as_deref() == Some("close")).unwrap();
+        let title = elements.iter().find(|e| e.text.as_deref() == Some(TITLE)).unwrap();
+        assert!(title.rect[0] >= panel.rect[0] + 16.0 - 0.5, "title starts inside the left padding: {title:?} vs {panel:?}");
+        assert!(title.rect[0] + title.rect[2] <= close.rect[0] + 0.5,
+            "title stops before the close button at width {vw}: {:?} vs {:?}", title.rect, close.rect);
+        assert!(title.rect[3] >= 40.0, "title wraps onto a second line at width {vw}: {:?}", title.rect);
+        // One line would make it 76 points (16 + 20 + 4 + 20 + 16).
+        assert!(panel.rect[3] > 76.0, "fitted card grows for the wrapped title at width {vw}: {:?}", panel.rect);
+    }
+}
+
+#[test]
 fn a_tall_fit_dialog_stays_inside_the_window_and_scrolls_its_body() {
     fn view(rows: &usize, _: &mut Cx<usize>) -> El {
         let k = Kit::neutral(true);

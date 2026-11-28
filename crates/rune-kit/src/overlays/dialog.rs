@@ -86,8 +86,10 @@ impl Dialog {
             if self.description.is_some() { TextStyle { size: 15.0, tracking: -0.13, ..k.ty.ui_medium }.lh(20.0) }
             else { k.ty.ui_medium.lh(16.0) }
         });
+        // The title wraps, as the description does: a long one (a translation, a file's name) takes
+        // a second line instead of running under the close button beside it.
         let mut title = col().grow(1.0).shrink().gap(4.0).child(text(self.title.clone())
-            .font(title_font).color(k.c.text_base));
+            .font(title_font).color(k.c.text_base).wrap().w_full());
         if let Some(description) = self.description.clone() {
             title = title.child(text(description).font(k.ty.ui.lh(20.0)).color(k.c.text_muted).wrap().w_full());
         }
