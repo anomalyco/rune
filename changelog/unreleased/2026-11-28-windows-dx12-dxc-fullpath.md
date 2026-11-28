@@ -1,0 +1,1 @@
+- Windows DX12: pick `wgpu::Dx12Compiler::DynamicDxc` by explicit full path when the app ships `dxcompiler.dll` beside its executable, and fall back to `wgpu::Dx12Compiler::Fxc` (`d3dcompiler_47.dll`) otherwise; probed once per process at GPU initialization without searching `PATH` or the current working directory.
