@@ -329,9 +329,10 @@ pub(crate) fn coverage_exponent(mode: FontSmoothing, fill: [f32; 4], apple: bool
     if (apple && !chromium) || direct_write || matches!(mode, FontSmoothing::On | FontSmoothing::Windfoil) || fill[3] <= 0.0 {
         return 1.0;
     }
-    // Linux's curve is for `Off` only (a fit, not yet a Linux capture); Chromium-weight outline
-    // modes keep the curve they were drawn with everywhere.
-    let [black, white] = if windows || apple || mode != FontSmoothing::Off { WINDOWS_GAMMA } else { LINUX_GAMMA };
+    // Chromium-weight outline modes on Apple platforms keep Windows' curve (as the lab drew them);
+    // Linux (and other non-Windows, non-Apple targets) takes Linux Chromium's gamma across `Off`
+    // and every Chromium-weight outline mode.
+    let [black, white] = if windows || apple { WINDOWS_GAMMA } else { LINUX_GAMMA };
     let luma = ((0.2126 * fill[0] + 0.7152 * fill[1] + 0.0722 * fill[2]) / fill[3]).clamp(0.0, 1.0);
     let line = black + (white - black) * luma;
     if windows { line + windows_correction(luma * 255.0) } else { line }
