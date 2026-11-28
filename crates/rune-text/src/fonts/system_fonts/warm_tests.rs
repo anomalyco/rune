@@ -141,6 +141,39 @@ fn warm_slot_prewarm_handles_collection_across_threads() {
 }
 
 #[test]
+fn warm_slot_prewarm_and_then_runs_follow_up_on_same_worker_once() {
+    static SLOT: WarmSlot<u32> = WarmSlot::new();
+    static AFTER_RUNS: AtomicUsize = AtomicUsize::new(0);
+    static THREAD_NAMES: OnceLock<mpsc::Sender<(String, String)>> = OnceLock::new();
+    static INIT_THREAD: OnceLock<String> = OnceLock::new();
+
+    let (tx, rx) = mpsc::channel();
+    THREAD_NAMES.set(tx).expect("set channel");
+
+    fn init() -> u32 {
+        let name = std::thread::current().name().unwrap_or("").to_owned();
+        let _ = INIT_THREAD.set(name);
+        99
+    }
+
+    fn after() {
+        AFTER_RUNS.fetch_add(1, Ordering::SeqCst);
+        let init_name = INIT_THREAD.get().cloned().unwrap_or_default();
+        let after_name = std::thread::current().name().unwrap_or("").to_owned();
+        THREAD_NAMES.get().unwrap().send((init_name, after_name)).unwrap();
+    }
+
+    SLOT.prewarm_and_then("rune-font-prewarm", || true, init, after);
+    SLOT.prewarm_and_then("rune-font-prewarm", || true, init, after);
+
+    let (init_name, after_name) = rx.recv_timeout(Duration::from_secs(2)).expect("after ran");
+    assert_eq!(init_name, "rune-font-prewarm");
+    assert_eq!(after_name, "rune-font-prewarm", "preloading must run on the same prewarm worker thread");
+    assert_eq!(AFTER_RUNS.load(Ordering::SeqCst), 1, "after must run at most once");
+    assert_eq!(SLOT.with(init, |v| *v), 99);
+}
+
+#[test]
 fn prewarm_system_fonts_is_idempotent_and_nonblocking() {
     let start = rune_core::time::now();
     crate::prewarm_system_fonts();

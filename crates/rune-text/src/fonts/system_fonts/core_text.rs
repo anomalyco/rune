@@ -105,6 +105,16 @@ pub(super) fn installed_families() -> Vec<super::installed::RawFamily> {
 /// CoreText's font registry is process-wide and needs no eager collection build.
 pub(super) fn prewarm() {}
 
+/// Non-blocking cache-only lookup (CoreText resolves on demand).
+pub(super) fn try_cached_family_files(names: &[&str]) -> Option<Vec<PathBuf>> {
+    names.is_empty().then(Vec::new)
+}
+
+/// Non-blocking cache-only lookup (CoreText resolves on demand).
+pub(super) fn try_cached_fallback_family_files(chars: &[char], _: Option<&str>) -> Option<Vec<PathBuf>> {
+    chars.is_empty().then(Vec::new)
+}
+
 /// The files of the installed families `names`, in order, each file once.
 pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();

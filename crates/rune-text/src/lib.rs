@@ -263,7 +263,7 @@ use fonts::platform_face;
 use fonts::fallback::Route;
 #[cfg(test)]
 use fonts::system_fonts::{CJK_FONT_FILES, system_font_files};
-use fonts::system_fonts::{LoadedFiles, family_list, load_installed, load_system_mono, named_list, names_system_mono};
+use fonts::system_fonts::{LoadedFiles, family_list, named_list, names_system_mono};
 use fonts::trak::{Trak, Traks, font_trak};
 use fonts::{fallback, families, system_fonts, system_weight};
 use icon::anim::AnimatedIcons;
@@ -622,22 +622,18 @@ impl TextSystem {
     /// name, so a slot or `Family::Named` can be any font on the system.
     #[doc(hidden)]
     pub fn load_installed(&mut self, list: &str) {
-        load_installed(&mut self.font_cx.collection, &mut self.font_files, &mut self.installed, list);
+        self.load_installed_maybe_async(list, false);
     }
 
     /// Loads any installed system font families named by `list` (as configured by
     /// [`Self::set_emoji_family`]) that are not yet registered in this collection.
     pub(crate) fn load_installed_emoji(&mut self, list: &str) {
-        system_fonts::load_installed_emoji(&mut self.font_cx.collection, &mut self.font_files, &mut self.installed, list);
+        self.load_installed_maybe_async(list, true);
     }
 
     /// The installed `Family::SystemMono` families, loading them the first time.
     fn system_mono(&mut self) -> &[String] {
-        let (collection, loaded) = (&mut self.font_cx.collection, &mut self.font_files);
-        self.system_mono.get_or_insert_with(|| {
-            let _fallback = crate::profile::TextStageScope::enter(crate::profile::TextStage::SystemFallback);
-            load_system_mono(collection, loaded)
-        })
+        self.load_system_mono_maybe_async()
     }
 
     /// The RGBA image of a colour glyph quad (`GlyphQuad::color`, nonzero).
