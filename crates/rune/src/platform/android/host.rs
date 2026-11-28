@@ -23,7 +23,7 @@ use crate::compose::Compositor;
 use crate::platform::embed::{EmbedFrame, LayerHost};
 use crate::runtime::Waker;
 use crate::tooling::AppSpec;
-use crate::Haptic;
+use crate::{Haptic, TouchPhase};
 
 use super::bridge::{self, jni_clear_exception, jni_delete_global_ref};
 use super::{haptics, logcat};
@@ -63,6 +63,8 @@ trait AndroidRunner {
     fn set_safe_area(&mut self, insets: [f32; 4]);
     fn set_keyboard_inset(&mut self, points: f32);
     fn set_dark(&mut self, dark: bool);
+    fn set_touch_long_press(&mut self, secs: Option<f64>);
+    fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time_secs: f64);
     fn dispatch_back(&mut self) -> bool;
     fn drain_shared(&mut self);
     fn frame(&mut self) -> Option<EmbedFrame>;
@@ -122,33 +124,25 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
     }
 
     fn resize(&mut self, viewport: (f32, f32), scale: f32) {
-        if let Some(host) = &mut self.host {
-            host.resize(viewport, scale);
-        }
+        if let Some(h) = &mut self.host { h.resize(viewport, scale); }
     }
-
     fn detach(&mut self) {
-        if let Some(host) = &mut self.host {
-            host.detach_surface();
-        }
+        if let Some(h) = &mut self.host { h.detach_surface(); }
     }
-
     fn set_safe_area(&mut self, insets: [f32; 4]) {
-        if let Some(host) = &mut self.host {
-            host.runtime_mut().set_safe_area(insets);
-        }
+        if let Some(h) = &mut self.host { h.runtime_mut().set_safe_area(insets); }
     }
-
     fn set_keyboard_inset(&mut self, points: f32) {
-        if let Some(host) = &mut self.host {
-            host.runtime_mut().set_keyboard_inset(points);
-        }
+        if let Some(h) = &mut self.host { h.runtime_mut().set_keyboard_inset(points); }
     }
-
     fn set_dark(&mut self, dark: bool) {
-        if let Some(host) = &mut self.host {
-            host.runtime_mut().set_system_dark(dark);
-        }
+        if let Some(h) = &mut self.host { h.runtime_mut().set_system_dark(dark); }
+    }
+    fn set_touch_long_press(&mut self, secs: Option<f64>) {
+        if let Some(h) = &mut self.host { h.runtime_mut().set_touch_long_press(secs.unwrap_or(0.0)); }
+    }
+    fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time_secs: f64) {
+        if let Some(h) = &mut self.host { h.runtime_mut().touch(id, phase, x, y, time_secs); }
     }
 
     fn dispatch_back(&mut self) -> bool {
@@ -341,6 +335,8 @@ unsafe fn register_rune_view_natives(env: *mut JNIEnv) -> bool {
         jni_method(c"nativeResume", c"()V", native_resume as *const () as *mut c_void),
         jni_method(c"nativePause", c"()V", native_pause as *const () as *mut c_void),
         jni_method(c"nativeBack", c"()Z", native_back as *const () as *mut c_void),
+        jni_method(c"nativeTouch", c"(IIIFFJ)V", native_touch as *const () as *mut c_void),
+        jni_method(c"nativeLongPressTimeout", c"(I)V", native_long_press_timeout as *const () as *mut c_void),
         jni_method(c"nativeWake", c"()V", native_wake as *const () as *mut c_void),
         jni_method(c"nativeDestroy", c"()V", native_destroy as *const () as *mut c_void),
     ];
@@ -474,6 +470,22 @@ fn post_wake_from_any_thread(view_bridge: &Mutex<Option<ViewBridge>>) {
     });
 }
 
+fn apply_view_schedule(env: *mut JNIEnv, bridge: &Mutex<Option<ViewBridge>>, effect: Effect) {
+    let guard = bridge.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(view) = guard.as_ref() else { return };
+    match effect {
+        // SAFETY: `env` is the UI thread's `JNIEnv*` and `view` is locked alive.
+        Effect::ScheduleFrame => unsafe { call_void_0(env, view.obj, view.schedule_frame) },
+        Effect::CancelFrame => unsafe { call_void_0(env, view.obj, view.cancel_frame) },
+        Effect::ScheduleWakeAfter(secs) => {
+            let ms = (secs * 1000.0).ceil().clamp(1.0, i64::MAX as f64) as jlong;
+            // SAFETY: `env` is the UI thread's `JNIEnv*` and `view` is locked alive.
+            unsafe { call_void_long(env, view.obj, view.schedule_wake_after, ms) };
+        }
+        _ => {}
+    }
+}
+
 fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativeWindow) -> bool {
     let mut consumed_back = false;
     let mut pending_window = pending_window;
@@ -532,41 +544,24 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                     }
                 }
                 Effect::SetDark(dark) => {
-                    if let Some(runner) = &mut host.runner {
-                        runner.set_dark(dark);
-                    }
+                    if let Some(runner) = &mut host.runner { runner.set_dark(dark); }
+                }
+                Effect::SetTouchLongPress(secs) => {
+                    if let Some(runner) = &mut host.runner { runner.set_touch_long_press(secs); }
+                }
+                Effect::Touch { id, phase, x, y, time_secs } => {
+                    if let Some(runner) = &mut host.runner { runner.touch(id, phase, x, y, time_secs); }
                 }
                 Effect::DispatchBack => {
                     let consumed = host.runner.as_mut().is_some_and(|r| r.dispatch_back());
                     consumed_back = consumed;
                     let follow = machine::step(&mut host.state, Event::BackDone { consumed });
                     for next in follow {
-                        if let Effect::ScheduleFrame = next
-                            && let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-                        {
-                            // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                            unsafe { call_void_0(env, view.obj, view.schedule_frame) };
-                        }
+                        apply_view_schedule(env, &host.bridge, next);
                     }
                 }
-                Effect::ScheduleFrame => {
-                    if let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                        // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                        unsafe { call_void_0(env, view.obj, view.schedule_frame) };
-                    }
-                }
-                Effect::CancelFrame => {
-                    if let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                        // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                        unsafe { call_void_0(env, view.obj, view.cancel_frame) };
-                    }
-                }
-                Effect::ScheduleWakeAfter(secs) => {
-                    let ms = (secs * 1000.0).ceil().clamp(1.0, i64::MAX as f64) as jlong;
-                    if let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                        // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                        unsafe { call_void_long(env, view.obj, view.schedule_wake_after, ms) };
-                    }
+                Effect::ScheduleFrame | Effect::CancelFrame | Effect::ScheduleWakeAfter(_) => {
+                    apply_view_schedule(env, &host.bridge, effect);
                 }
                 Effect::DrawFrame => {
                     if let Some((outcome, pending)) =
@@ -586,22 +581,7 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                             },
                         );
                         for next in follow {
-                            match next {
-                                Effect::ScheduleFrame => {
-                                    if let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                                        // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                                        unsafe { call_void_0(env, view.obj, view.schedule_frame) };
-                                    }
-                                }
-                                Effect::ScheduleWakeAfter(secs) => {
-                                    let ms = (secs * 1000.0).ceil().clamp(1.0, i64::MAX as f64) as jlong;
-                                    if let Some(view) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                                        // SAFETY: `env` is the UI thread's `JNIEnv*`.
-                                        unsafe { call_void_long(env, view.obj, view.schedule_wake_after, ms) };
-                                    }
-                                }
-                                _ => {}
-                            }
+                            apply_view_schedule(env, &host.bridge, next);
                         }
                     }
                 }
@@ -758,6 +738,27 @@ unsafe extern "system" fn native_wake(env: *mut JNIEnv, _this: jobject) {
         }
     });
     let _ = dispatch(env, Event::Wake, ptr::null_mut());
+}
+
+unsafe extern "system" fn native_touch(
+    env: *mut JNIEnv,
+    _this: jobject,
+    action: jint,
+    flags: jint,
+    pointer_id: jint,
+    x_px: jfloat,
+    y_px: jfloat,
+    time_ms: jlong,
+) {
+    let _ = dispatch(
+        env,
+        Event::Touch { action, flags, pointer_id, x_px, y_px, time_ms },
+        ptr::null_mut(),
+    );
+}
+
+unsafe extern "system" fn native_long_press_timeout(env: *mut JNIEnv, _this: jobject, timeout_ms: jint) {
+    let _ = dispatch(env, Event::LongPressTimeoutChanged(timeout_ms), ptr::null_mut());
 }
 
 unsafe extern "system" fn native_destroy(env: *mut JNIEnv, _this: jobject) {

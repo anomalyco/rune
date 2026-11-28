@@ -366,4 +366,98 @@ fn embed_frame_keeps_file_dialog_when_host_handles_them_and_refuses_otherwise() 
     assert_eq!(rt_host.state.answers, [Ok(Some("doc.pdf".to_owned()))]);
 }
 
+#[test]
+fn embed_frame_honors_on_popup_menu_fallback_and_cancels_when_unregistered() {
+    use crate::{App, AppSpec, PopupItem, PopupMenu, PopupMenuRequest, Tx};
+
+    #[derive(Default)]
+    struct S {
+        opened: Vec<PopupMenuRequest>,
+        picks: Vec<Option<String>>,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().key("anchor").size(120.0, 32.0).on_press_tx(|_: &mut S, tx: &mut Tx| {
+            let menu = PopupMenu::new()
+                .item(PopupItem::new("light", "Light"))
+                .item(PopupItem::new("dark", "Dark"));
+            tx.popup_menu(menu, "anchor", |s: &mut S, picked, _| {
+                s.picks.push(picked.map(str::to_owned));
+            });
+        })
+    }
+
+    let start = crate::time::now();
+
+    // Without App::on_popup_menu, flush_requests cancels the pop-up with None immediately.
+    let mut rt_plain = Runtime::new(S::default(), view, (200.0, 100.0), Env::default());
+    rt_plain.wall_start = Some(start);
+    let mut clock_plain = FrameClock::new(start);
+    {
+        let (core, mut app) = rt_plain.split_mut();
+        step_and_flush(&mut clock_plain, core, &mut app, start, false);
+    }
+    rt_plain.pointer_down(20.0, 16.0);
+    rt_plain.pointer_up(20.0, 16.0);
+    {
+        let (core, mut app) = rt_plain.split_mut();
+        step_and_flush(&mut clock_plain, core, &mut app, start + FRAME_60HZ, false);
+    }
+    assert!(rt_plain.popup_menu().is_none());
+    assert_eq!(rt_plain.state.picks, [None], "unregistered on_popup_menu resolves to None");
+
+    // With App::on_popup_menu active (Android / iOS), flush_requests keeps the open fallback menu
+    // alive across frames until the app answers with Tx::resolve_popup_menu.
+    let mut rt = App::new(AppSpec::new("embed-popup", (200.0, 100.0), S::default, view))
+        .on_popup_menu(|s: &mut S, req, _| s.opened.push(req))
+        .headless_runtime((200.0, 100.0), Env::default());
+    rt.core_mut().host.force_popup_menu_fallback = true;
+    rt.wall_start = Some(start);
+    let mut clock = FrameClock::new(start);
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start, false);
+    }
+    rt.pointer_down(20.0, 16.0);
+    rt.pointer_up(20.0, 16.0);
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start + FRAME_60HZ, false);
+    }
+    assert_eq!(rt.state.opened.len(), 1, "App::on_popup_menu receives the request on LayerHost");
+    assert!(rt.state.picks.is_empty(), "flush_requests must not cancel an active fallback pop-up");
+    assert!(rt.popup_menu().is_some(), "open fallback pop-up remains active across frames");
+
+    // Another idle frame must still keep the menu open.
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start + FRAME_60HZ * 2, false);
+    }
+    assert!(rt.state.picks.is_empty());
+
+    // App answers the menu via Tx::resolve_popup_menu.
+    rt.update(|_, tx| tx.resolve_popup_menu(Some("dark")));
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start + FRAME_60HZ * 3, false);
+    }
+    assert!(rt.popup_menu().is_none());
+    assert_eq!(rt.state.picks, [Some("dark".to_owned())]);
+
+    // A pop-up queued before a missed drawable is also delivered instead of cancelled.
+    rt.update(|_, tx| {
+        tx.popup_menu(
+            PopupMenu::new().item(PopupItem::new("copy", "Copy")),
+            (10.0, 10.0),
+            |s: &mut S, picked, _| s.picks.push(picked.map(str::to_owned)),
+        );
+    });
+    let summary = {
+        let (core, mut app) = rt.split_mut();
+        missed_step(core, &mut app, start + FRAME_60HZ * 4, false, false)
+    };
+    assert!(summary.animating, "delivered fallback menu dirties runtime for next frame");
+    assert_eq!(rt.state.opened.len(), 2);
+    assert_eq!(rt.state.picks.len(), 1, "missed_step must not cancel fallback pop-up");
+}
+
 

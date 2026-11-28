@@ -136,6 +136,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "android-gallery"
+version = "0.0.1"
+dependencies = [
+ "kit-gallery",
+ "rune",
+]
+
+[[package]]
 name = "android-hello"
 version = "0.0.1"
 dependencies = [

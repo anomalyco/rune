@@ -14,6 +14,9 @@ mod logcat;
 pub(crate) mod machine;
 #[cfg(test)]
 mod machine_tests;
+pub(crate) mod touch;
+#[cfg(test)]
+mod touch_tests;
 
 #[cfg(target_os = "android")]
 pub(crate) use bridge::{clipboard_revision, open_url};

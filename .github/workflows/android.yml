@@ -56,7 +56,7 @@ jobs:
       - name: Check rune and rune-kit
         run: >-
           cargo check --target ${{ matrix.target }}
-          -p rune -p rune-kit
+          -p rune -p rune-kit -p android-gallery
           --features rune/embedded-fonts,rune/accessibility,rune/tooling,rune/segmenter-dictionaries,rune/svg,rune/avif,rune-kit/markdown,rune-kit/mermaid
 
   apk:

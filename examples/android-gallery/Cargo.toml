@@ -1,0 +1,16 @@
+[package]
+name = "android-gallery"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kit-gallery = { path = "../kit-gallery" }
+rune = { workspace = true, default-features = true }
+
+[lints]
+workspace = true
