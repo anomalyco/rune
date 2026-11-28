@@ -6,6 +6,8 @@
 
 pub(crate) mod haptics;
 #[cfg(target_os = "android")]
+pub(crate) mod bridge;
+#[cfg(target_os = "android")]
 mod host;
 #[cfg(target_os = "android")]
 mod logcat;
@@ -13,6 +15,8 @@ pub(crate) mod machine;
 #[cfg(test)]
 mod machine_tests;
 
+#[cfg(target_os = "android")]
+pub(crate) use bridge::{clipboard_revision, open_url};
 #[cfg(target_os = "android")]
 pub use host::jni_on_load;
 #[cfg(target_os = "android")]
