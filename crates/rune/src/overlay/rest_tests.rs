@@ -363,7 +363,7 @@ fn overlay_give_back_drops_freed_image_textures_at_rest_and_all_on_hide_then_wak
 
     // Frame 2: small removed, large stays. Shelf page 0 stays warm until rest.
     overlay.rt.state.show_small = false;
-    overlay.rt.invalidate();
+    overlay.rt.settle_all();
     overlay.rt.frame(0.0);
     let before_hide = render_read(&mut overlay);
     #[cfg(feature = "test-gpu-counters")]
@@ -393,9 +393,12 @@ fn overlay_give_back_drops_freed_image_textures_at_rest_and_all_on_hide_then_wak
         }
     }
 
-    // Hidden (GiveBackAll): every image GPU texture drops.
+    // Hidden (GiveBackAll): every image GPU texture, CPU atlas page and tree Pixels ref drops.
     overlay.hide();
     assert_eq!(overlay.rest, Rest::Rested);
+    assert!(overlay.rt.images.pages.is_empty(), "hide drops CPU image atlas pages");
+    assert_eq!(Arc::strong_count(&overlay.rt.state.large.source), 1, "hidden overlay tree no longer pins Pixels");
+    assert!(overlay.rt.stale(), "hide marks view dirty so wake rebuilds and re-uploads kept images");
     assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_count(), 0, "hide drops all GPU image textures");
     assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_bytes(), 0);
     #[cfg(feature = "test-gpu-counters")]
@@ -405,8 +408,9 @@ fn overlay_give_back_drops_freed_image_textures_at_rest_and_all_on_hide_then_wak
         assert_eq!(c.texture_memory.read(), base_mem, "hide reclaims all image HAL texture memory");
     }
 
-    // Wake: first drawn frame re-uploads and renders identically with no blank or stale frame.
+    // Wake: first drawn frame rebuilds (dirty from hide) and re-uploads identically with no blank or stale frame.
     overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.frame(0.0);
     let after_wake = render_read(&mut overlay);
     assert_eq!(after_wake, before_hide, "waking from hide draws the image identically on its first frame");
     assert!(overlay.core.renderer.as_ref().unwrap().has_images());

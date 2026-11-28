@@ -148,6 +148,29 @@ impl Pins {
         self.texts().iter().any(|t| t.row_key == key)
     }
 
+    /// Whether any offscreen pinned text holds a `Pixels` pill or inline image.
+    pub(crate) fn has_pill_images(&self) -> bool {
+        self.texts().iter().any(|t| t.spec.cold.pills.iter().any(crate::text::PillChip::has_image))
+    }
+
+    /// Drops every `Pixels` reference held in offscreen pinned text pills.
+    pub(crate) fn clear_pill_images(&mut self) {
+        if let Pins::Pinned { texts, .. } = self {
+            for t in texts {
+                if t.spec.cold.pills.iter().any(crate::text::PillChip::has_image)
+                    && let Some(cold) = t.spec.cold.get_mut_if_some()
+                {
+                    for pill in &mut cold.pills {
+                        pill.image = None;
+                        if let Some(bare) = pill.bare.as_mut() {
+                            bare.image = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Clears the kept texts and providers in place at the start of a commit. The vectors keep
     /// their allocations, and a builder that panics partway leaves what it already collected.
     pub(crate) fn clear_texts(&mut self) {

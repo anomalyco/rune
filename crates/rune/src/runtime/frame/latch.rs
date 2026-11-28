@@ -44,6 +44,9 @@ impl RuntimeCore {
         self.cancel_timer_frame();
         merge(&mut self.frame.pending, one);
         self.commit.dirty |= changed;
+        if changed && !self.live_visible() {
+            self.drop_images();
+        }
         (stale, minimize)
     }
 

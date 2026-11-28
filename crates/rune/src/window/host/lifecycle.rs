@@ -943,6 +943,9 @@ impl Host {
         self.stop_showing();
         self.wind_down();
         let launcher = self.launcher();
+        if !launcher {
+            self.app.rt_mut().drop_images();
+        }
         if self.release_gpu && !launcher {
             self.release();
         } else if is_wayland(event_loop) {
@@ -1052,7 +1055,7 @@ impl Host {
             rt.set_backdrop_opaque_fallback(false);
         }
         rt.text.atlas.invalidate();
-        rt.images.invalidate();
+        rt.drop_images();
     }
 
     /// Creates the window. When the first window can't be created and the app didn't ask to stay
@@ -1104,6 +1107,9 @@ impl Host {
             self.app.set_live_visible(live);
             self.app.rt_mut().cancel_timer_frame();
             self.rest_step(RestEvent::Unseen);
+            if !self.launcher() {
+                self.app.rt_mut().drop_images();
+            }
             return;
         }
         // Its first frame uncovered draws what a covered one owed.
@@ -1136,6 +1142,9 @@ impl Host {
     }
 
     fn give_back(&mut self, all: bool) {
+        if all && !self.launcher() {
+            self.app.rt_mut().drop_images();
+        }
         self.app.rt_mut().rest();
         self.app.run_on_rest();
         if let Some((gpu, renderer)) = &mut self.gpu {

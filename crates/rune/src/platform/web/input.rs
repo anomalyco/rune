@@ -368,6 +368,7 @@ impl Running {
         self.cursor.apply(window, crate::el::Cursor::Default, false);
         // Commit cancellation, FocusLost, FinishIme and poll now: browsers pause rAF while hidden.
         self.commit_dom_frame(window, false);
+        self.app.rt_mut().drop_images();
         self.app.rt_mut().rest();
     }
 

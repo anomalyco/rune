@@ -87,10 +87,85 @@ impl requests::ScrollTables {
     }
 }
 
+fn node_has_pixels(n: &Node) -> bool {
+    n.vis.cold.get().is_some_and(|v| v.pixels.is_some() || v.image_menu.is_some())
+        || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
+        || n.input.as_ref().is_some_and(|i| i.pill_image.is_some())
+}
+
 impl RuntimeCore {
+    /// Drops uploaded image atlas pages and every `Pixels` / `Image` reference kept in the last
+    /// committed tree, spare node buffer, memo cache and virtual list tables, marking the view
+    /// dirty so the next visible frame rebuilds and re-uploads any image the view still shows.
+    ///
+    /// Called when a window or overlay hides, goes unseen/rested, or changes state while hidden,
+    /// so `Pixels` handles the app drops while hidden are freed immediately without showing the
+    /// window. Does nothing (and leaves memos and `dirty` untouched) when the runtime holds no
+    /// image pages or `Pixels` references.
+    pub(crate) fn drop_images(&mut self) {
+        let mut dropped = self.images.clear();
+        if !self.tree.spare_nodes.is_empty() {
+            let had_spare = self.tree.spare_nodes.iter().any(node_has_pixels);
+            self.tree.spare_nodes.clear();
+            dropped |= had_spare;
+        }
+        let has_tree_pixels = self.tree.nodes.iter().any(node_has_pixels);
+        let has_memo_pixels = self.commit.memo_has_pixels();
+        let has_virtual_pixels = self.commit.virtual_inputs.values().any(|i| i.pill_image.is_some())
+            || self.commit.virtuals.values().any(|v| {
+                v.selection.stored.values().any(crate::memo::el_has_pixels)
+                    || v.selection.pins.has_pill_images()
+            });
+        if dropped || has_tree_pixels || has_memo_pixels || has_virtual_pixels {
+            // Clear memos first so `Cold` / `SharedBox` refcounts drop to 1 before mutating in place.
+            self.commit.clear_memo();
+        }
+        if has_tree_pixels {
+            for node in &mut self.tree.nodes {
+                if node.vis.cold.get().is_some_and(|v| v.pixels.is_some() || v.image_menu.is_some())
+                    && let Some(vis) = node.vis.cold.get_mut_if_some()
+                {
+                    vis.pixels = None;
+                    vis.image_menu = None;
+                }
+                if node.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
+                    && let Some(text) = node.text.as_mut()
+                    && let Some(cold) = text.cold.get_mut_if_some()
+                {
+                    for pill in &mut cold.pills {
+                        pill.image = None;
+                        if let Some(bare) = pill.bare.as_mut() {
+                            bare.image = None;
+                        }
+                    }
+                }
+                if let Some(input) = node.input.as_mut() {
+                    input.pill_image = None;
+                }
+            }
+            dropped = true;
+        }
+        if has_virtual_pixels {
+            for input in self.commit.virtual_inputs.values_mut() {
+                input.pill_image = None;
+            }
+            for v in self.commit.virtuals.values_mut() {
+                if v.selection.stored.values().any(crate::memo::el_has_pixels) {
+                    v.selection.stored.clear();
+                }
+                v.selection.pins.clear_pill_images();
+            }
+            dropped = true;
+        }
+        if dropped || has_memo_pixels {
+            self.commit.dirty = true;
+        }
+    }
+
     /// Releases cached layouts, dormant scene slots, spare node/paint/memo capacity and companion
     /// thread-local caches not needed to redraw the current view. Called once when a window or
-    /// overlay rests (`window::rest`).
+    /// overlay rests (`window::rest`). Callers resting an unseen/hidden surface call
+    /// [`Self::drop_images`] first so retained `Pixels` references and CPU image atlas pages go too.
     pub(crate) fn rest(&mut self) {
         self.text.rest();
         self.images.rest();

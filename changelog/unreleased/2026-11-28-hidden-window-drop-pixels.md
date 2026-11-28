@@ -1,0 +1,1 @@
+- **Hidden windows, overlays, and web tabs now release retained `Pixels` / `Image` references and CPU `ImageAtlas` pages on hide, unseen rest, and hidden state changes.** Dropping `Pixels` handles in app state while a window is hidden now frees their backing memory immediately without showing the window, and the next visible frame rebuilds and re-uploads any images still shown.

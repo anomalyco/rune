@@ -230,6 +230,11 @@ impl CommitState {
     }
 
     #[inline]
+    pub(in crate::runtime) fn memo_has_pixels(&self) -> bool {
+        self.memo.has_pixels()
+    }
+
+    #[inline]
     pub(crate) fn evict_memo_prefix(&mut self, prefix: &str) {
         self.memo.evict_prefix(prefix);
     }

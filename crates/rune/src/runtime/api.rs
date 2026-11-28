@@ -726,7 +726,13 @@ impl<S: 'static> Runtime<S> {
     /// `REST_AFTER`.
     #[doc(hidden)]
     #[inline(always)]
-    pub fn rest(&mut self) { self.core_mut().rest(); }
+    pub fn rest(&mut self) {
+        let core = self.core_mut();
+        if !core.live_visible() {
+            core.drop_images();
+        }
+        core.rest();
+    }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     #[inline(always)]
