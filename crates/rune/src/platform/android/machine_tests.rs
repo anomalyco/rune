@@ -1,6 +1,6 @@
 //! Host-side tests for the Android lifecycle state machine: surface loss and recreation,
 //! repeated Home/return background trips, rotation, insets and keyboard overlap without viewport
-//! resize, dark mode, Back navigation, and Choreographer deduplication.
+//! resize, dark mode, Back navigation, IME keyboard sync, and Choreographer deduplication.
 
 use super::machine::{Effect, Event, State, Surface, dispatch_back_escape, step};
 
@@ -10,6 +10,15 @@ fn run(state: &mut State, event: Event) -> Vec<Effect> {
 
 fn has(effects: &[Effect], target: Effect) -> bool {
     effects.contains(&target)
+}
+
+fn frame_done(animating: bool, wake_after_secs: Option<f64>) -> Event {
+    Event::FrameDone {
+        animating,
+        wake_after_secs,
+        ime_allowed: None,
+        ime_restart: false,
+    }
 }
 
 #[test]
@@ -26,7 +35,7 @@ fn surface_loss_and_recreation_preserves_state_and_redraws() {
 
     // First frame draws and goes idle.
     assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
-    assert!(run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None }).is_empty());
+    assert!(run(&mut s, frame_done(false, None)).is_empty());
 
     // Surface lost: detaches cleanly without destroying host.
     assert_eq!(run(&mut s, Event::SurfaceDestroyed), [Effect::DetachSurface]);
@@ -54,7 +63,7 @@ fn twenty_background_home_return_trips_detach_and_reattach_cleanly() {
     });
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: false });
     assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     let mut detaches = 0usize;
     let mut attaches = 0usize;
@@ -91,7 +100,7 @@ fn twenty_background_home_return_trips_detach_and_reattach_cleanly() {
 
         assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
         draws += 1;
-        assert!(run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None }).is_empty());
+        assert!(run(&mut s, frame_done(false, None)).is_empty());
     }
 
     assert_eq!((detaches, attaches, draws), (20, 20, 20));
@@ -104,7 +113,7 @@ fn rotation_resizes_surface_updates_insets_and_redraws() {
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     // Rotate portrait -> landscape.
     let r = run(&mut s, Event::SurfaceChanged { width_px: 2400, height_px: 1080, scale: 3.0 });
@@ -133,7 +142,7 @@ fn keyboard_inset_updates_without_resizing_viewport_or_inflating_safe_area() {
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     // System bars + cutout arrive first.
     let e = run(&mut s, Event::InsetsChanged {
@@ -143,7 +152,7 @@ fn keyboard_inset_updates_without_resizing_viewport_or_inflating_safe_area() {
     });
     assert_eq!(e, [Effect::SetSafeArea([32.0, 0.0, 24.0, 0.0]), Effect::ScheduleFrame]);
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     // Soft keyboard opens (900 px = 300 dp) under adjustNothing:
     // - safe_area stays [32, 0, 24, 0] (not folded!)
@@ -168,7 +177,7 @@ fn keyboard_inset_updates_without_resizing_viewport_or_inflating_safe_area() {
 
     // Soft keyboard closes.
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
     let e = run(&mut s, Event::InsetsChanged {
         safe_area_px: [96, 0, 72, 0],
         keyboard_px: 0,
@@ -184,7 +193,7 @@ fn dark_mode_updates_emit_set_dark_and_schedule_frame_only_on_change() {
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     assert!(run(&mut s, Event::DarkModeChanged(true)).is_empty());
     assert_eq!(run(&mut s, Event::DarkModeChanged(false)), [Effect::SetDark(false), Effect::ScheduleFrame]);
@@ -196,7 +205,7 @@ fn back_press_dispatches_and_schedules_frame_only_when_consumed() {
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     // Back always dispatches to the runtime regardless of focus state.
     assert_eq!(run(&mut s, Event::BackPressed), [Effect::DispatchBack]);
@@ -412,11 +421,11 @@ fn choreographer_deduplicates_wakes_and_honors_animating_and_timers() {
 
     // Frame runs and reports active animation -> schedules next vsync immediately.
     assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
-    assert_eq!(run(&mut s, Event::FrameDone { animating: true, wake_after_secs: Some(0.5) }), [Effect::ScheduleFrame]);
+    assert_eq!(run(&mut s, frame_done(true, Some(0.5))), [Effect::ScheduleFrame]);
 
     // Animation settles with a timer due in 0.25 s -> schedules delayed wake.
     assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
-    assert_eq!(run(&mut s, Event::FrameDone { animating: false, wake_after_secs: Some(0.25) }), [Effect::ScheduleWakeAfter(0.25)]);
+    assert_eq!(run(&mut s, frame_done(false, Some(0.25))), [Effect::ScheduleWakeAfter(0.25)]);
 
     // Pausing while a frame is scheduled cancels it and replays on resume.
     assert_eq!(run(&mut s, Event::Wake), [Effect::ScheduleFrame]);
@@ -467,7 +476,7 @@ fn touch_events_scale_to_dp_deduplicate_frames_and_replay_long_press_timeout() {
     let created = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
     assert!(has(&created, Effect::SetTouchLongPress(Some(0.4))), "cached long-press timeout replays on surface creation");
     let _ = run(&mut s, Event::Frame);
-    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+    let _ = run(&mut s, frame_done(false, None));
 
     // Batched touch sequence schedules exactly one Choreographer frame across multiple samples.
     let down = run(&mut s, Event::Touch {
@@ -502,4 +511,88 @@ fn touch_events_scale_to_dp_deduplicate_frames_and_replay_long_press_timeout() {
     assert_eq!(run(&mut s, Event::LongPressTimeoutChanged(1500)), [Effect::SetTouchLongPress(Some(1.5))]);
     assert!(run(&mut s, Event::LongPressTimeoutChanged(1500)).is_empty(), "unchanged timeout is a no-op");
     assert_eq!(run(&mut s, Event::LongPressTimeoutChanged(0)), [Effect::SetTouchLongPress(None)]);
+}
+
+#[test]
+fn ime_sync_enables_restarts_pauses_and_hides_keyboard() {
+    let mut s = State::default();
+    let _ = run(&mut s, Event::Resumed);
+    let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
+    let _ = run(&mut s, Event::Frame);
+
+    // Focusing an editable field enables the InputConnection and shows the keyboard.
+    let e = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        ime_allowed: Some(true),
+        ime_restart: false,
+    });
+    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
+    assert!(s.ime_enabled);
+
+    // Steady frame while focused emits no duplicate IME calls.
+    assert!(run(&mut s, frame_done(false, None)).is_empty());
+    assert!(s.ime_enabled);
+
+    // Resetting mid-composition (e.g. caret jump) restarts input while keeping keyboard open.
+    let e = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        ime_allowed: Some(true),
+        ime_restart: true,
+    });
+    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
+    assert!(s.ime_enabled);
+
+    // Pausing finishes open composition and hides the keyboard.
+    let e = run(&mut s, Event::Paused);
+    assert_eq!(
+        e,
+        [
+            Effect::FinishComposition,
+            Effect::SetImeEnabled { enabled: false, restart: true },
+        ],
+    );
+    assert!(!s.ime_enabled);
+
+    // Resuming redraws and re-enables the keyboard when ImeSync reports allowed again.
+    assert_eq!(run(&mut s, Event::Resumed), [Effect::ScheduleFrame]);
+    assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
+    let e = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        ime_allowed: Some(true),
+        ime_restart: false,
+    });
+    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
+    assert!(s.ime_enabled);
+
+    // Blurring hides the keyboard.
+    let e = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        ime_allowed: Some(false),
+        ime_restart: false,
+    });
+    assert_eq!(e, [Effect::SetImeEnabled { enabled: false, restart: true }]);
+    assert!(!s.ime_enabled);
+
+    // Destroying while enabled hides the keyboard without restarting input.
+    let _ = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        ime_allowed: Some(true),
+        ime_restart: false,
+    });
+    assert!(s.ime_enabled);
+    let e = run(&mut s, Event::Destroy);
+    assert_eq!(
+        e,
+        [
+            Effect::SetImeEnabled { enabled: false, restart: false },
+            Effect::DetachSurface,
+            Effect::Shutdown,
+        ],
+    );
+    assert!(!s.ime_enabled);
 }

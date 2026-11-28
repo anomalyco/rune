@@ -1,0 +1,1 @@
+- Android: `RuneView` now provides a `RuneInputConnection` while a text field is focused, shows and hides the soft keyboard via `ImeSync`, forwards `commitText`, `setComposingText`, `finishComposingText`, `deleteSurroundingText`, `sendKeyEvent`, and editor actions into Rune's `Ime` and key pipeline, and maps Android hardware and IME key events to Rune `Key` / `Mods` values.

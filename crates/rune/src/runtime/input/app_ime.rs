@@ -104,22 +104,27 @@ impl RuntimeCore {
     }
 
     /// `Runtime::finish_composition`: the focused field's composition becomes its text, or the
-    /// app's editor hears its last preedit committed.
-    pub(in crate::runtime) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
+    /// app's editor hears its last preedit committed. When `reset_ime` is false (the input method
+    /// itself ended its composition), `ime_reset` is left clear so the host does not restart it.
+    pub(in crate::runtime) fn finish_ime(&mut self, app: &mut dyn AppDriver, one: &mut Tx, reset_ime: bool) -> bool {
         if self.app_ime_composing(app) {
             let Some(text) = self.edit.take_app_ime_composing() else { return false };
             return self.app_ime_event(app, &Ime::Commit(text), one);
         }
-        self.finish_field_composition(app, one)
+        self.finish_field_composition_inner(app, one, reset_ime)
     }
 
     /// The focused field's composition becomes its text, its change handler hearing it, before
     /// focus or the caret moves away from it.
     pub(in crate::runtime) fn finish_field_composition(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
+        self.finish_field_composition_inner(app, one, true)
+    }
+
+    fn finish_field_composition_inner(&mut self, app: &mut dyn AppDriver, one: &mut Tx, reset_ime: bool) -> bool {
         if self.focused_input_read_only() || !self.focused_input().is_some_and(|i| i.access.is_some()) || !self.composing(app) { return false; }
         let mut finished = false;
         self.with_focused(app, |e| { finished = e.finish_composition(); EditOutcome::default() }, one);
-        if finished { self.edit.ime_reset = true; }
+        if finished && reset_ime { self.edit.ime_reset = true; }
         finished
     }
 

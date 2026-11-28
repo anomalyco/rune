@@ -11,6 +11,9 @@ mod document;
 pub(crate) mod haptics;
 #[cfg(target_os = "android")]
 mod host;
+pub(crate) mod input;
+#[cfg(test)]
+mod input_tests;
 #[cfg(target_os = "android")]
 mod logcat;
 pub(crate) mod machine;

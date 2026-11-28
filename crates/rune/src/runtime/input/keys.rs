@@ -571,8 +571,15 @@ impl RuntimeCore {
     /// method is told to drop its own copy (`ime_reset`), so it doesn't come back in the next
     /// field.
     pub fn finish_composition(&mut self) {
-        self.frame.queue.push(Action::FinishIme);
+        self.frame.queue.push(Action::FinishIme { reset_ime: true });
         self.edit.ime_reset = true;
+    }
+
+    /// Commits any open composition at the input method's own request (for example Android's
+    /// `InputConnection.finishComposingText`) without requesting a platform IME restart.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn finish_composition_from_ime(&mut self) {
+        self.frame.queue.push(Action::FinishIme { reset_ime: false });
     }
 
     pub fn paste(&mut self, text: String) {

@@ -11,13 +11,18 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.view.Choreographer
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewConfiguration
 import android.view.WindowInsets
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import java.io.IOException
 
 /**
@@ -36,6 +41,7 @@ open class RuneView(
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var frameScheduled = false
+    private var imeEnabled = false
     private val wakeRunnable = Runnable { nativeWake() }
     private val timerWakeRunnable = Runnable { nativeWake() }
     private val clipboard: RuneClipboard
@@ -67,6 +73,138 @@ open class RuneView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         requestApplyInsets()
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = imeEnabled
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        if (!imeEnabled) {
+            return null
+        }
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        return RuneInputConnection(this)
+    }
+
+    /**
+     * Called by Rust (UI thread) after frames or lifecycle changes when `ImeSync` enables,
+     * disables, or resets text input.
+     */
+    fun setImeEnabled(enabled: Boolean, restart: Boolean) {
+        val wasEnabled = imeEnabled
+        imeEnabled = enabled
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            ?: return
+        if (enabled) {
+            if (!hasFocus()) {
+                requestFocus()
+            }
+            if (!wasEnabled || restart) {
+                imm.restartInput(this)
+            }
+            if (!imm.showSoftInput(this, 0)) {
+                post {
+                    if (imeEnabled && windowToken != null) {
+                        if (!hasFocus()) {
+                            requestFocus()
+                        }
+                        imm.restartInput(this)
+                        imm.showSoftInput(this, 0)
+                    }
+                }
+            }
+        } else if (wasEnabled) {
+            windowToken?.let { token ->
+                imm.hideSoftInputFromWindow(token, 0)
+            }
+            if (restart) {
+                imm.restartInput(this)
+            }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (dispatchKeyDown(event)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (dispatchKeyUp(event)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onKeyMultiple(keyCode: Int, repeatCount: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+            val chars = event.characters
+            if (!chars.isNullOrEmpty()) {
+                nativeCommitText(chars)
+                return true
+            }
+        }
+        return super.onKeyMultiple(keyCode, repeatCount, event)
+    }
+
+    internal fun onImeCommitText(text: String) {
+        nativeCommitText(text)
+    }
+
+    internal fun onImeSetComposingText(text: String, newCursorPosition: Int) {
+        nativeSetComposingText(text, newCursorPosition)
+    }
+
+    internal fun onImeFinishComposingText() {
+        nativeFinishComposingText()
+    }
+
+    internal fun onImeDeleteSurroundingText(beforeLength: Int, afterLength: Int) {
+        nativeDeleteSurroundingText(beforeLength, afterLength)
+    }
+
+    internal fun onImeEditorAction(editorAction: Int): Boolean {
+        return nativeEditorAction(editorAction)
+    }
+
+    @Suppress("DEPRECATION")
+    internal fun onImeKeyEvent(event: KeyEvent): Boolean {
+        return when (event.action) {
+            KeyEvent.ACTION_DOWN -> dispatchKeyDown(event)
+            KeyEvent.ACTION_UP -> dispatchKeyUp(event)
+            KeyEvent.ACTION_MULTIPLE -> {
+                if (event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+                    val chars = event.characters
+                    if (!chars.isNullOrEmpty()) {
+                        nativeCommitText(chars)
+                        return true
+                    }
+                }
+                false
+            }
+            else -> false
+        }
+    }
+
+    private fun dispatchKeyDown(event: KeyEvent): Boolean {
+        return nativeKeyDown(
+            event.keyCode,
+            event.metaState,
+            event.unicodeChar,
+            event.getUnicodeChar(0),
+            event.repeatCount > 0,
+        )
+    }
+
+    private fun dispatchKeyUp(event: KeyEvent): Boolean {
+        return nativeKeyUp(
+            event.keyCode,
+            event.metaState,
+            event.unicodeChar,
+            event.getUnicodeChar(0),
+        )
     }
 
     private fun density(): Float {
@@ -495,6 +633,24 @@ open class RuneView(
     )
     private external fun nativeFilePickCancelled(requestId: Long)
     private external fun nativeFilePickError(requestId: Long, message: String)
+    private external fun nativeCommitText(text: String)
+    private external fun nativeSetComposingText(text: String, newCursorPosition: Int)
+    private external fun nativeFinishComposingText()
+    private external fun nativeDeleteSurroundingText(beforeLength: Int, afterLength: Int)
+    private external fun nativeEditorAction(actionCode: Int): Boolean
+    private external fun nativeKeyDown(
+        keyCode: Int,
+        metaState: Int,
+        unicodeChar: Int,
+        unmodifiedChar: Int,
+        repeat: Boolean,
+    ): Boolean
+    private external fun nativeKeyUp(
+        keyCode: Int,
+        metaState: Int,
+        unicodeChar: Int,
+        unmodifiedChar: Int,
+    ): Boolean
 
     private companion object {
         /** API 33+ MotionEvent.FLAG_CANCELED, safe to mask on API 26+. */
