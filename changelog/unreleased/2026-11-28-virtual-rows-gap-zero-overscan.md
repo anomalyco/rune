@@ -1,0 +1,1 @@
+- `virtual_rows` and `virtualize` lists with a `.gap(..)` and `.virtual_overscan(0.0, 0.0)` no longer retry and force-mount every row when a viewport edge lands inside an inter-row gap (including pinned `stick_bottom` lists and variable-height rows).

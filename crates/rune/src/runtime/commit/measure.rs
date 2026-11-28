@@ -177,18 +177,10 @@ impl Measurement<'_> {
                 st.offset as f32
             } else { 0.0 };
             // Rows that shrank or went leave the offset past the end until scrolling clamps it;
-            // what shows then is the end.
+            // what shows then is the end. Never present a blank caused by an estimate: expand
+            // and measure again first.
             let (offset, pinned) = v.locate(offset, held);
-            let offset = offset.min(v.max_offset());
-            let end = v.row_end(v.range.end);
-            let mounted_height = (end - v.before).max(0.0);
-            // Never present a blank caused by an estimate. Expand and measure again first.
-            retry |= if pinned {
-                v.range.start > 0 && mounted_height < v.viewport
-            } else {
-                (v.range.start > 0 && offset < v.pad_top + v.before)
-                    || (v.range.end < v.keys.len() && offset + v.viewport > v.pad_top + end)
-            };
+            retry |= v.viewport_uncovered(offset, pinned);
         }
         retry
     }
