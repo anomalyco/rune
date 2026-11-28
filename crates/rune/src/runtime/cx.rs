@@ -108,6 +108,7 @@ pub(crate) struct CxCore {
     pub(super) primary_pointer: PrimaryPointer,
     pub(super) primary_pointer_read: std::cell::Cell<bool>,
     pub(super) safe_area: [f32; 4],
+    pub(super) keyboard_inset: f32,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
@@ -176,6 +177,7 @@ impl CxCore {
     pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
     pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
     pub(crate) fn safe_area(&self) -> [f32; 4] { self.safe_area }
+    pub(crate) fn keyboard_inset(&self) -> f32 { self.keyboard_inset }
     pub(crate) fn hover_none(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         { crate::platform::web::hover_none() }
@@ -618,6 +620,15 @@ impl<S> Cx<S> {
     /// can extend to the screen edges.
     #[inline(always)]
     pub fn safe_area(&self) -> [f32; 4] { self.core.safe_area() }
+    /// Bottom overlap of an on-screen software keyboard in logical points (`0.0` when closed
+    /// or on desktop/headless), set by [`Runtime::set_keyboard_inset`](crate::Runtime::set_keyboard_inset).
+    ///
+    /// Kept separate from [`Self::safe_area`] (hardware system bars and display cutouts) so
+    /// [`El::on_edge_drag`](crate::El::on_edge_drag) bands do not grow with the keyboard. Views
+    /// that lift a bottom composer or pad a scroll container above the keyboard combine both with
+    /// `cx.safe_area()[2].max(cx.keyboard_inset())`. A change re-runs the view and its memos.
+    #[inline(always)]
+    pub fn keyboard_inset(&self) -> f32 { self.core.keyboard_inset() }
     /// The primary pointer can't hover: on the web, the browser's `(hover: none)` media query;
     /// natively, tracks the window's primary pointer—starting `true` on touch-first postures
     /// (Windows slate mode or touchscreen without a mouse, and iOS), switching to `true` on

@@ -1268,7 +1268,11 @@ impl<S: 'static> App<S> {
     pub fn run(self) {
         #[cfg(target_arch = "wasm32")]
         crate::tooling::started(self.try_run());
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(target_os = "android")]
+        if let Err(err) = self.try_run() {
+            eprintln!("rune: android host failed to start: {err}");
+        }
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
         crate::tooling::finish_start(self.try_run_start());
     }
 
@@ -1282,12 +1286,17 @@ impl<S: 'static> App<S> {
         crate::platform::web::run(self)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    pub fn try_run(self) -> Result<(), String> {
+        crate::platform::android::run(self)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     pub fn try_run(self) -> Result<(), String> {
         self.try_run_start().map_err(crate::tooling::StartError::message)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     fn try_run_start(mut self) -> Result<(), crate::tooling::StartError> {
         // Windows' word dictionaries start loading now, on their own thread (`rune_text::segmenter`).
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]

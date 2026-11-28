@@ -28,6 +28,7 @@ members = [
     "crates/rune-luau",
     "crates/rune-taffy",
     "themes/opencode",
+    "examples/android-hello",
     "examples/hello",
     "examples/hello-floor",
     "examples/launch-floor",

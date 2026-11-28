@@ -97,7 +97,7 @@ pub(crate) use keyboard_dispatch::should_redraw_after_polled_keys;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use keyboard_dispatch::step_immediate_core;
 pub use resize_sync::ResizeSync;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub use event_loop::run;
 #[cfg(test)]
 pub(crate) use event_loop::finish_run;
@@ -126,7 +126,7 @@ pub(crate) use surface::{
     configure_checked, frame_latency, is_wide_color_config, reblend_core, poll_timer_deadline_core, surface_config_with,
     timer_deadline_core, timer_wants_frame_core,
 };
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 pub(crate) use surface::surface_config;
 pub(crate) use surface::{Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
 #[cfg(target_arch = "wasm32")]

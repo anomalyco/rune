@@ -25,6 +25,24 @@ fn fallback_instance_descriptor_allows_noncompliant_adapters() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn required_device_limits_falls_back_to_downlevel_for_16k_uniform_buffer_adapters() {
+    let mut gles_like = wgpu::Limits::default();
+    gles_like.max_uniform_buffer_binding_size = 16_384;
+    let limits = Gpu::required_device_limits(&gles_like, 0);
+    assert_eq!(
+        limits.max_uniform_buffer_binding_size, 16_384,
+        "an adapter whose only shortfall is a 16 KiB UBO limit (Android GLES) must request downlevel limits",
+    );
+
+    let full = wgpu::Limits::default();
+    let desktop = Gpu::required_device_limits(&full, 128);
+    assert_eq!(desktop.max_uniform_buffer_binding_size, wgpu::Limits::default().max_uniform_buffer_binding_size);
+    assert_eq!(desktop.max_immediate_size, 128);
+    assert!(desktop.max_non_sampler_bindings <= 65_536);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 #[ignore]
 fn dx12_presentation_system_env_child() {
     let expected = match crate::env::var("RUNE_TEST_EXPECT_SWAPCHAIN").as_deref() {

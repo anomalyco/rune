@@ -1,0 +1,14 @@
+[package]
+name = "android-hello"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rune = { workspace = true, default-features = true }
+
+[lints]
+workspace = true

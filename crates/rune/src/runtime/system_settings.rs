@@ -181,6 +181,21 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(crate) fn keyboard_inset(&self) -> f32 {
+        self.keyboard_inset
+    }
+
+    pub(super) fn set_keyboard_inset(&mut self, points: f32) -> bool {
+        let clean = if points.is_finite() { points.max(0.0) } else { 0.0 };
+        if self.keyboard_inset == clean {
+            return false;
+        }
+        self.keyboard_inset = clean;
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
+    #[inline]
     pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars {
         self.scroll_bars.state
     }
@@ -455,6 +470,25 @@ impl RuntimeCore {
     /// clamp to `0.0`. A change re-runs the view and its memos.
     pub fn set_safe_area(&mut self, insets: [f32; 4]) {
         if self.host.set_safe_area(insets) { self.commit.dirty = true; }
+    }
+
+    /// Current on-screen software keyboard bottom overlap in logical points (`0.0` when closed).
+    #[inline]
+    pub(crate) fn keyboard_inset(&self) -> f32 {
+        self.host.keyboard_inset()
+    }
+
+    /// Sets the bottom overlap of an on-screen software keyboard in logical points reported by
+    /// [`Cx::keyboard_inset`]. Kept separate from [`Self::set_safe_area`] so edge-drag bands stay
+    /// unaffected. Negative or non-finite values clamp to `0.0`. A change re-runs the view and
+    /// its memos, and scrolls a focused text field into view above the keyboard when positive.
+    pub fn set_keyboard_inset(&mut self, points: f32) {
+        if self.host.set_keyboard_inset(points) {
+            self.commit.dirty = true;
+            if self.host.keyboard_inset() > 0.0 {
+                self.edit.caret_follow = true;
+            }
+        }
     }
 
     #[inline]

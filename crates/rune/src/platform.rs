@@ -9,9 +9,13 @@ pub(crate) mod desktop_settings;
 pub(crate) mod display_link;
 #[cfg(any(test, target_os = "macos"))]
 pub(crate) mod display_link_machine;
-#[cfg(target_vendor = "apple")]
+#[cfg(target_os = "android")]
+pub mod android;
+#[cfg(all(test, not(target_os = "android")))]
+pub(crate) mod android;
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 pub mod embed;
-#[cfg(any(test, target_vendor = "apple"))]
+#[cfg(any(test, target_vendor = "apple", target_os = "android"))]
 pub(crate) mod embed_frame;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod gl_links;
