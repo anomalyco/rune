@@ -285,3 +285,116 @@ fn a_mebibyte_of_code_spans_or_open_parens_scans_in_one_pass() {
     assert!(maths(&parens).is_empty());
     assert!(t.elapsed() < std::time::Duration::from_secs(30), "{:?}", t.elapsed());
 }
+
+#[test]
+fn display_math_with_setext_underlines_stays_one_equation() {
+    let math = |t: &str| vec![(t.to_owned(), Some("math".to_owned()))];
+    // Standalone `=` line inside `\[ ... \]` (regression test).
+    let src = "\\[\nP\\bigl(x,\\varphi_2(x)\\bigr)-P\\bigl(x,\\varphi_1(x)\\bigr)\n=\n\\int_{\\varphi_1(x)}^{\\varphi_2(x)}\n\\frac{\\partial P}{\\partial y}\\,\\mathrm dy.\n\\]\n";
+    let expected = "P\\bigl(x,\\varphi_2(x)\\bigr)-P\\bigl(x,\\varphi_1(x)\\bigr)\n=\n\\int_{\\varphi_1(x)}^{\\varphi_2(x)}\n\\frac{\\partial P}{\\partial y}\\,\\mathrm dy.";
+    let (blocks, sources, _, _, starts, maps) = parse_doc(src, true);
+    assert_eq!(blocks, [Block::Code(expected.into())]);
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].lang.as_deref(), Some("math"));
+    assert_eq!(starts, [0]);
+    let BlockMap::Code(map) = &maps[0] else { panic!("{maps:?}") };
+    assert!(map.0.iter().any(|(s, _)| &src[s.clone()] == "="), "{map:?}");
+
+    // Same for `$$ ... $$`, `$ ... $`, `===`, `-`, `---`, multiple `=`, and `=` on line 1.
+    assert_eq!(display("$$\na\n=\nb\n$$\n"), math("a\n=\nb"));
+    assert_eq!(display("$\na\n=\nb\n$\n"), math("a\n=\nb"));
+    assert_eq!(display("\\[\na\n===\nb\n\\]\n"), math("a\n===\nb"));
+    assert_eq!(display("\\[\nf(b)\n-\nf(a)\n\\]\n"), math("f(b)\n-\nf(a)"));
+    assert_eq!(display("$$\na\n---\nb\n$$\n"), math("a\n---\nb"));
+    assert_eq!(display("\\[\n=\n\\]\n"), math("="));
+    assert_eq!(display("$$\na\n=\nb\n=\nc\n$$\n"), math("a\n=\nb\n=\nc"));
+    // No trailing newline and CRLF line endings.
+    assert_eq!(display("\\[\na\n=\nb\n\\]"), math("a\n=\nb"));
+    assert_eq!(display("\\[\r\na\r\n=\r\nb\r\n\\]\r\n"), math("a\n=\nb"));
+    // Multi-byte UTF-8 inside masked body preserves exact UTF-8 boundaries.
+    assert_eq!(display("\\[\nφ_2(x) - φ_1(x)\n=\n∫ ∂P/∂y\n\\]\n"), math("φ_2(x) - φ_1(x)\n=\n∫ ∂P/∂y"));
+}
+
+#[test]
+fn display_math_with_block_syntax_and_following_blocks() {
+    let math = |t: &str| vec![(t.to_owned(), Some("math".to_owned()))];
+    // List markers, quotes, headings, and numbered lines inside display math stay TeX.
+    assert_eq!(display("$$\na\n- b\n+ c\n* d\n1. e\n4. f\n> 0\n# g\n$$\n"), math("a\n- b\n+ c\n* d\n1. e\n4. f\n> 0\n# g"));
+
+    // Following prose, list, rule, or another equation without a blank line stays distinct.
+    let (blocks, ..) = parse_doc("$$\na\n- b\n$$\n- next item\n", true);
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert!(matches!(&blocks[0], Block::Code(c) if c == "a\n- b"));
+    assert!(matches!(&blocks[1], Block::List { items, .. } if items.len() == 1));
+
+    let (blocks, ..) = parse_doc("\\[\na\n=\nb\n\\]\nwhere $a$ is positive.\n", true);
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert!(matches!(&blocks[0], Block::Code(c) if c == "a\n=\nb"));
+    assert_eq!(maths("\\[\na\n=\nb\n\\]\nwhere $a$ is positive.\n"), ["$a$"]);
+
+    let (blocks, ..) = parse_doc("\\[\na\n=\nb\n\\]\n---\n", true);
+    assert_eq!(blocks, [Block::Code("a\n=\nb".into()), Block::Rule]);
+
+    assert_eq!(
+        display("$$\na\n=\nb\n$$\n$$\nc\n=\nd\n$$\n"),
+        vec![("a\n=\nb".to_owned(), Some("math".to_owned())), ("c\n=\nd".to_owned(), Some("math".to_owned()))]
+    );
+}
+
+#[test]
+fn display_math_with_equals_inside_quotes_and_lists() {
+    let math = |t: &str| vec![(t.to_owned(), Some("math".to_owned()))];
+    assert_eq!(display("> \\[\n> a\n> =\n> b\n> \\]\n"), math("a\n=\nb"));
+    assert_eq!(display("> > $$\n> > a\n> > =\n> > b\n> > $$\n"), math("a\n=\nb"));
+    // Inequality `> 0` inside a quoted display equation keeps its TeX `>`.
+    assert_eq!(display("> \\[\n> x^2 + 1\n> > 0\n> \\]\n"), math("x^2 + 1\n> 0"));
+    // Loose and tight list items, plus quote + list combinations.
+    assert_eq!(display("- intro\n\n  \\[\n  a\n  =\n  b\n  \\]\n"), math("a\n=\nb"));
+    assert_eq!(display("- \\[\n  a\n  =\n  b\n  \\]\n"), math("a\n=\nb"));
+    assert_eq!(display("> - \\[\n>   a\n>   =\n>   b\n>   \\]\n"), math("a\n=\nb"));
+    assert_eq!(display("- > \\[\n  > a\n  > =\n  > b\n  > \\]\n"), math("a\n=\nb"));
+}
+
+#[test]
+fn display_math_respects_code_blocks_and_non_equations() {
+    // Fenced and indented code blocks stay code, not math.
+    let fenced = "```\n\\[\na\n=\nb\n\\]\n```\n";
+    assert_eq!(display(fenced), vec![("\\[\na\n=\nb\n\\]".to_owned(), None)]);
+    let indented = "    \\[\n    a\n    =\n    b\n    \\]\n";
+    assert_eq!(display(indented), vec![("\\[\na\n=\nb\n\\]".to_owned(), None)]);
+    // Mid-paragraph, empty, unclosed, or unclosed before a fence are not display math.
+    assert!(display("intro\n\\[\na\n=\nb\n\\]\n").is_empty());
+    assert!(display("\\[\n\\]\n").is_empty());
+    assert!(display("$$\n$$\n").is_empty());
+    assert!(display("\\[\na\n=\nb\n").is_empty());
+    assert_eq!(display("$$\noops\n```\n$$\n```\n"), vec![("$$".to_owned(), None)]);
+    // Single-line display math followed by `===` remains a heading with inline math.
+    let (blocks, ..) = parse_doc("$$x^2$$\n===\n", true);
+    assert!(matches!(&blocks[..], [Block::Heading(1, _)]), "{blocks:?}");
+}
+
+#[test]
+fn streaming_display_math_with_equals_resolves_when_closer_arrives() {
+    let prefix = "before\n\n";
+    for step in [
+        format!("{prefix}\\[\na\n"),
+        format!("{prefix}\\[\na\n=\n"),
+        format!("{prefix}\\[\na\n=\nb\n"),
+    ] {
+        let _ = crate::markdown::cache::stream_cached(&step);
+    }
+    let done = format!("{prefix}\\[\na\n=\nb\n\\]\n");
+    let (blocks, sources, ..) = crate::markdown::cache::stream_cached(&done);
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert_eq!(blocks[1], Block::Code("a\n=\nb".into()));
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].lang.as_deref(), Some("math"));
+}
+
+#[test]
+fn repeated_unclosed_display_math_with_equals_scans_linearly() {
+    let hostile = "\\[\n=\n".repeat(50_000);
+    let t = rune::time::now();
+    assert!(display(&hostile).is_empty());
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+}
