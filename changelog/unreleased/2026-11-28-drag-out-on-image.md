@@ -1,0 +1,1 @@
+- `DragItem::on_image` hands the app the picture a drag-out session shows (the item's own image, else the element's snapshot) once as the session starts, so the app can keep it, for example as the icon of the file the drag carries.

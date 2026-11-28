@@ -331,3 +331,18 @@ fn encode_png_stored_roundtrips_small_and_multiblock_rgba_images() {
     assert_eq!(decoded.dimensions(), (w, h));
     assert_eq!(decoded.into_raw(), big);
 }
+
+#[test]
+fn on_image_gets_the_items_own_picture_else_the_snapshot() {
+    use std::sync::Mutex;
+    let seen: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let sink = seen.clone();
+    let item = DragItem::new().text("row").on_image(move |image| sink.lock().unwrap().push(image.png_data().to_vec()));
+    item.image_shown(Some(&DragImage::png(vec![2])));
+    item.image_shown(None);
+    item.clone().image(DragImage::png(vec![1])).image_shown(Some(&DragImage::png(vec![2])));
+    assert_eq!(*seen.lock().unwrap(), [vec![2], vec![1]], "the snapshot, nothing without one, then the item's own picture");
+    DragItem::new().image_shown(Some(&DragImage::png(vec![3])));
+    assert_eq!(seen.lock().unwrap().len(), 2, "an item without on_image hands nothing on");
+    assert_eq!(item.clone(), item, "items holding the same callback compare equal");
+}
