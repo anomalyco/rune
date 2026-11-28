@@ -12,7 +12,7 @@ use crate::TextSystem;
 use crate::fonts::fallback;
 
 use super::async_load::{PreloadedFont, register_system_cjk_preloaded};
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[cfg(not(target_arch = "wasm32"))]
 use super::async_load::FallbackJob;
 #[cfg(windows)]
 use super::async_load::WINDOWS_TEXT_SYMBOLS;
@@ -20,21 +20,21 @@ use super::{
     load_preloaded, present_families, system_fonts_enabled,
 };
 use super::SYMBOL_FAMILIES;
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[cfg(not(target_arch = "wasm32"))]
 use super::{SYSTEM_MONO_FAMILIES, blobs, platform};
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn try_cached_family_entries(names: &[&str]) -> Option<Vec<PreloadedFont>> {
     let paths = platform::try_cached_family_files(names)?;
     blobs::try_cached_paths(&paths)
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "android"))]
+#[cfg(target_arch = "wasm32")]
 fn try_cached_family_entries(_: &[&str]) -> Option<Vec<PreloadedFont>> {
     Some(Vec::new())
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn try_cached_fallback_entries(chars: &[char], locale: Option<&str>, cap: usize) -> Option<Vec<PreloadedFont>> {
     let mut paths = platform::try_cached_fallback_family_files(chars, locale)?;
     if paths.len() > cap {
@@ -43,20 +43,29 @@ fn try_cached_fallback_entries(chars: &[char], locale: Option<&str>, cap: usize)
     blobs::try_cached_paths(&paths)
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "android"))]
+#[cfg(target_arch = "wasm32")]
 fn try_cached_fallback_entries(_: &[char], _: Option<&str>, _: usize) -> Option<Vec<PreloadedFont>> {
     Some(Vec::new())
 }
 
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-fn try_cached_linux_emoji() -> Option<Option<(String, Vec<PreloadedFont>)>> {
+fn try_cached_fallback_emoji() -> Option<Option<(String, Vec<PreloadedFont>)>> {
     match super::fontconfig::try_cached_emoji()? {
         None => Some(None),
         Some((family, files)) => Some(Some((family, blobs::try_cached_paths(&files)?))),
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+#[cfg(target_os = "android")]
+fn try_cached_fallback_emoji() -> Option<Option<(String, Vec<PreloadedFont>)>> {
+    let files = super::android::try_cached_emoji_files()?;
+    if files.is_empty() {
+        return Some(None);
+    }
+    Some(Some((String::new(), blobs::try_cached_paths(&files)?)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn try_cached_system_mono() -> Option<(Option<String>, Vec<PreloadedFont>)> {
     #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(unused_mut))]
     let mut preferred_family = None;
@@ -65,6 +74,12 @@ fn try_cached_system_mono() -> Option<(Option<String>, Vec<PreloadedFont>)> {
     if let Some((family, files)) = super::fontconfig::try_cached_monospace()? {
         preferred_family = Some(family);
         paths.extend(files);
+    }
+    #[cfg(target_os = "android")]
+    for path in super::android::try_cached_monospace_files()? {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
     }
     let fallback_paths = platform::try_cached_family_files(SYSTEM_MONO_FAMILIES)?;
     for path in fallback_paths.into_iter().take(12) {
@@ -76,7 +91,7 @@ fn try_cached_system_mono() -> Option<(Option<String>, Vec<PreloadedFont>)> {
     Some((preferred_family, entries))
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "android"))]
+#[cfg(target_arch = "wasm32")]
 fn try_cached_system_mono() -> Option<(Option<String>, Vec<PreloadedFont>)> {
     Some((None, Vec::new()))
 }
@@ -113,7 +128,7 @@ impl TextSystem {
             }
             return;
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             let also_mono_scripts = needs_mono && self.fallbacks.async_load.mark_mono_scripts_pending();
             self.fallbacks.async_load.enqueue(FallbackJob::Script {
@@ -164,7 +179,7 @@ impl TextSystem {
             }
             return;
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             self.fallbacks.async_load.enqueue(FallbackJob::Cjk {
                 chars: cjk,
@@ -209,11 +224,11 @@ impl TextSystem {
         #[cfg(not(target_vendor = "apple"))]
         let query_names = SYMBOL_FAMILIES;
         let cached_entries = try_cached_family_entries(query_names);
-        #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-        let cached_emoji = try_cached_linux_emoji();
-        #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+        #[cfg(all(unix, not(target_vendor = "apple")))]
+        let cached_emoji = try_cached_fallback_emoji();
+        #[cfg(all(unix, not(target_vendor = "apple")))]
         let ready = cached_entries.is_some() && cached_emoji.is_some();
-        #[cfg(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))))]
+        #[cfg(not(all(unix, not(target_vendor = "apple"))))]
         let ready = cached_entries.is_some();
         if ready && let Some(entries) = cached_entries {
             self.fallbacks.symbols = true;
@@ -227,7 +242,7 @@ impl TextSystem {
             {
                 self.symbol_families = present_families(&mut self.font_cx.collection, SYMBOL_FAMILIES);
                 self.emoji = self.symbol_families.iter().copied().find(|f| f.contains("Emoji"));
-                #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+                #[cfg(all(unix, not(target_vendor = "apple")))]
                 if self.emoji.is_none()
                     && let Some(Some((family, emoji_entries))) = cached_emoji
                 {
@@ -236,7 +251,7 @@ impl TextSystem {
             }
             return true;
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             if self.fallbacks.async_load.mark_symbols_pending(emoji_wanted) {
                 self.fallbacks.async_load.enqueue(FallbackJob::Symbols {
@@ -312,7 +327,7 @@ impl TextSystem {
             self.fallbacks.async_load.mark_math_loaded();
             return true;
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             if self.fallbacks.async_load.mark_math_pending() {
                 self.fallbacks.async_load.enqueue(FallbackJob::Math);
@@ -365,7 +380,7 @@ impl TextSystem {
             self.add_symbol_entries(entries);
             return;
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             self.fallbacks.async_load.enqueue(FallbackJob::MissingChars {
                 chars: missing,
@@ -397,11 +412,21 @@ impl TextSystem {
             return self.system_mono.as_deref().unwrap_or_default();
         }
         if let Some((preferred_family, entries)) = try_cached_system_mono() {
-            load_preloaded(&mut self.font_cx.collection, &mut self.font_files, entries);
+            let added = load_preloaded(&mut self.font_cx.collection, &mut self.font_files, entries);
             let mut names = Vec::new();
             if let Some(family) = preferred_family {
                 names.push(family);
             }
+            #[cfg(target_os = "android")]
+            for id in added {
+                if let Some(name) = self.font_cx.collection.family_name(id)
+                    && !names.iter().any(|n| n == name)
+                {
+                    names.push(name.to_owned());
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = added;
             for name in super::SYSTEM_MONO_FAMILIES {
                 if !names.iter().any(|n| n == name) {
                     names.push((*name).to_owned());
@@ -412,7 +437,7 @@ impl TextSystem {
             self.fallbacks.async_load.mark_system_mono_loaded();
             return self.system_mono.as_deref().unwrap_or_default();
         }
-        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        #[cfg(not(target_arch = "wasm32"))]
         if self.fallbacks.async_load.is_enabled() {
             if self.fallbacks.async_load.mark_system_mono_pending() {
                 self.fallbacks.async_load.enqueue(FallbackJob::SystemMono);
@@ -452,7 +477,7 @@ impl TextSystem {
                 load_preloaded(&mut self.font_cx.collection, &mut self.font_files, entries);
                 continue;
             }
-            #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+            #[cfg(not(target_arch = "wasm32"))]
             if self.fallbacks.async_load.is_enabled() {
                 self.fallbacks.async_load.enqueue(FallbackJob::InstalledFamily { name });
                 continue;

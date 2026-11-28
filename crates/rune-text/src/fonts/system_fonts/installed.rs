@@ -48,9 +48,9 @@ impl InstalledFamily {
 ///
 /// Populated lazily on first call and cached for the lifetime of the process, so apps that do
 /// not call it pay nothing at launch. Queries the platform's own font registry (CoreText on
-/// Apple platforms, DirectWrite on Windows, fontconfig on Linux/Unix) without walking font
-/// directories; returns an empty slice on `wasm32` and Android. System-private families whose
-/// names start with `.` are omitted.
+/// Apple platforms, DirectWrite on Windows, fontconfig on Linux/Unix, and `font_fallback.xml` /
+/// `fonts.xml` on Android) without walking font directories; returns an empty slice on `wasm32`.
+/// System-private families whose names start with `.` are omitted.
 ///
 /// ```
 /// let mono: Vec<&str> = rune_text::installed_families()
@@ -66,7 +66,7 @@ pub fn installed_families() -> &'static [InstalledFamily] {
 }
 
 /// Raw family record collected by a platform backend before filtering, merging, and sorting.
-#[cfg_attr(any(target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(super) struct RawFamily {
     pub(super) name: String,
     pub(super) monospace: bool,
@@ -83,7 +83,7 @@ pub(super) fn clamp_weight(weight: f32) -> u16 {
 }
 
 /// Adds every hundred-step weight (`100..=900`) covered by a variable `wght` axis range `[min, max]`.
-#[cfg_attr(any(target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(super) fn push_weight_range(weights: &mut Vec<u16>, min: f32, max: f32) {
     if !min.is_finite() || !max.is_finite() || max <= min {
         return;
@@ -162,66 +162,49 @@ pub(super) fn finalize(raw: Vec<RawFamily>) -> Vec<InstalledFamily> {
     entries.into_iter().map(|(_, family)| family).collect()
 }
 
-/// Whether face `index` of an SFNT or TrueType collection stream is marked fixed-pitch in its
-/// `post` table (`isFixedPitch != 0`) or monospaced in its `OS/2` PANOSE classification
-/// (`bFamilyType == 2 && bProportion == 9`). Reads only the table directory and small headers.
-#[cfg_attr(not(any(all(unix, not(target_vendor = "apple"), not(target_os = "android")), test)), allow(dead_code))]
-pub(super) fn reader_is_monospace(r: &mut (impl Read + Seek), index: u32) -> bool {
+/// Reads the raw 16-byte SFNT table directory records for face `index` of an SFNT or TTC stream.
+#[cfg_attr(not(any(all(unix, not(target_vendor = "apple")), test)), allow(dead_code))]
+fn sfnt_table_records(r: &mut (impl Read + Seek), index: u32) -> Option<Vec<u8>> {
     let mut magic = [0u8; 4];
-    if r.read_exact(&mut magic).is_err() {
-        return false;
-    }
+    r.read_exact(&mut magic).ok()?;
     let face_offset = if &magic == b"ttcf" {
         let mut ttc = [0u8; 8];
-        if r.read_exact(&mut ttc).is_err() {
-            return false;
-        }
+        r.read_exact(&mut ttc).ok()?;
         let num_fonts = u32::from_be_bytes([ttc[4], ttc[5], ttc[6], ttc[7]]);
         if index >= num_fonts {
-            return false;
+            return None;
         }
         let mut off = [0u8; 4];
-        if r.seek(SeekFrom::Start(12 + u64::from(index) * 4)).is_err() || r.read_exact(&mut off).is_err() {
-            return false;
-        }
+        r.seek(SeekFrom::Start(12 + u64::from(index) * 4)).ok()?;
+        r.read_exact(&mut off).ok()?;
         u64::from(u32::from_be_bytes(off))
     } else if index == 0 {
         0
     } else {
-        return false;
+        return None;
     };
 
-    if r.seek(SeekFrom::Start(face_offset)).is_err() {
-        return false;
-    }
+    r.seek(SeekFrom::Start(face_offset)).ok()?;
     let mut header = [0u8; 12];
-    if r.read_exact(&mut header).is_err() {
-        return false;
-    }
+    r.read_exact(&mut header).ok()?;
     if !matches!(&header[..4], [0, 1, 0, 0] | b"OTTO" | b"true" | b"typ1") {
-        return false;
+        return None;
     }
     let num_tables = u16::from_be_bytes([header[4], header[5]]) as usize;
     if num_tables == 0 || num_tables > 1024 {
-        return false;
+        return None;
     }
     let mut records = vec![0u8; num_tables * 16];
-    if r.read_exact(&mut records).is_err() {
-        return false;
-    }
+    r.read_exact(&mut records).ok()?;
+    Some(records)
+}
 
-    let mut post_table = None;
-    let mut os2_table = None;
-    for rec in records.chunks_exact(16) {
-        let offset = u64::from(u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]));
-        let length = u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]);
-        match &rec[..4] {
-            b"post" => post_table = Some((offset, length)),
-            b"OS/2" => os2_table = Some((offset, length)),
-            _ => {}
-        }
-    }
-
+#[cfg_attr(not(any(all(unix, not(target_vendor = "apple")), test)), allow(dead_code))]
+fn tables_is_monospace(
+    r: &mut (impl Read + Seek),
+    post_table: Option<(u64, u32)>,
+    os2_table: Option<(u64, u32)>,
+) -> bool {
     if let Some((offset, length)) = post_table
         && length >= 16
         && let Some(pos) = offset.checked_add(12)
@@ -245,4 +228,189 @@ pub(super) fn reader_is_monospace(r: &mut (impl Read + Seek), index: u32) -> boo
     }
 
     false
+}
+
+/// Whether face `index` of an SFNT or TrueType collection stream is marked fixed-pitch in its
+/// `post` table (`isFixedPitch != 0`) or monospaced in its `OS/2` PANOSE classification
+/// (`bFamilyType == 2 && bProportion == 9`). Reads only the table directory and small headers.
+#[cfg_attr(not(any(all(unix, not(target_vendor = "apple"), not(target_os = "android")), test)), allow(dead_code))]
+pub(super) fn reader_is_monospace(r: &mut (impl Read + Seek), index: u32) -> bool {
+    let Some(records) = sfnt_table_records(r, index) else {
+        return false;
+    };
+    let mut post_table = None;
+    let mut os2_table = None;
+    for rec in records.as_chunks::<16>().0 {
+        let offset = u64::from(u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]));
+        let length = u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]);
+        match &rec[..4] {
+            b"post" => post_table = Some((offset, length)),
+            b"OS/2" => os2_table = Some((offset, length)),
+            _ => {}
+        }
+    }
+    tables_is_monospace(r, post_table, os2_table)
+}
+
+/// Lightweight SFNT metadata read from table headers without mapping the whole font file.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(super) struct SfntMeta {
+    pub(super) family: String,
+    pub(super) monospace: bool,
+    pub(super) weight_class: Option<u16>,
+    pub(super) wght_axis: Option<(f32, f32)>,
+}
+
+/// Reads the SFNT family name (preferring typographic family ID 16 over legacy ID 1), fixed-pitch
+/// flag, `OS/2` weight class, and variable `wght` axis range for face `index` by seeking directly
+/// to those small tables.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(super) fn reader_sfnt_meta(r: &mut (impl Read + Seek), index: u32) -> Option<SfntMeta> {
+    const MAX_NAME_TABLE: u32 = 256 * 1024;
+    const MAX_FVAR_TABLE: u32 = 64 * 1024;
+
+    let records = sfnt_table_records(r, index)?;
+    let (mut name_table, mut post_table, mut os2_table, mut fvar_table) = (None, None, None, None);
+    for rec in records.as_chunks::<16>().0 {
+        let offset = u64::from(u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]));
+        let length = u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]);
+        match &rec[..4] {
+            b"name" => name_table = Some((offset, length)),
+            b"post" => post_table = Some((offset, length)),
+            b"OS/2" => os2_table = Some((offset, length)),
+            b"fvar" => fvar_table = Some((offset, length)),
+            _ => {}
+        }
+    }
+
+    let (name_off, name_len) = name_table?;
+    if !(6..=MAX_NAME_TABLE).contains(&name_len) {
+        return None;
+    }
+    r.seek(SeekFrom::Start(name_off)).ok()?;
+    let mut name_buf = vec![0u8; name_len as usize];
+    r.read_exact(&mut name_buf).ok()?;
+    let family = parse_sfnt_family_name(&name_buf)?;
+
+    let monospace = tables_is_monospace(r, post_table, os2_table);
+
+    let weight_class = os2_table.and_then(|(offset, length)| {
+        if length < 6 {
+            return None;
+        }
+        r.seek(SeekFrom::Start(offset.checked_add(4)?)).ok()?;
+        let mut buf = [0u8; 2];
+        r.read_exact(&mut buf).ok()?;
+        let w = u16::from_be_bytes(buf);
+        (1..=1000).contains(&w).then(|| w.clamp(100, 900))
+    });
+
+    let wght_axis = fvar_table.and_then(|(offset, length)| {
+        if !(16..=MAX_FVAR_TABLE).contains(&length) {
+            return None;
+        }
+        r.seek(SeekFrom::Start(offset)).ok()?;
+        let mut fvar_buf = vec![0u8; length as usize];
+        r.read_exact(&mut fvar_buf).ok()?;
+        parse_fvar_wght_axis(&fvar_buf)
+    });
+
+    Some(SfntMeta {
+        family,
+        monospace,
+        weight_class,
+        wght_axis,
+    })
+}
+
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+fn parse_sfnt_family_name(table: &[u8]) -> Option<String> {
+    if table.len() < 6 {
+        return None;
+    }
+    let count = u16::from_be_bytes([table[2], table[3]]) as usize;
+    let string_offset = u16::from_be_bytes([table[4], table[5]]) as usize;
+    if string_offset > table.len() {
+        return None;
+    }
+    let storage = &table[string_offset..];
+    let mut best: Option<(u8, String)> = None;
+    for i in 0..count {
+        let base = 6 + i * 12;
+        let Some(rec) = table.get(base..base + 12) else {
+            break;
+        };
+        let platform = u16::from_be_bytes([rec[0], rec[1]]);
+        let encoding = u16::from_be_bytes([rec[2], rec[3]]);
+        let language = u16::from_be_bytes([rec[4], rec[5]]);
+        let name_id = u16::from_be_bytes([rec[6], rec[7]]);
+        if name_id != 16 && name_id != 1 {
+            continue;
+        }
+        let len = u16::from_be_bytes([rec[8], rec[9]]) as usize;
+        let off = u16::from_be_bytes([rec[10], rec[11]]) as usize;
+        let Some(raw) = off.checked_add(len).and_then(|end| storage.get(off..end)) else {
+            continue;
+        };
+        let rank_base = if name_id == 16 { 0u8 } else { 4u8 };
+        let (rank, decoded) = match platform {
+            3 if matches!(encoding, 1 | 10) => {
+                let r = rank_base + if language == 0x0409 { 0 } else { 1 };
+                (r, decode_utf16_be(raw))
+            }
+            0 => (rank_base + 1, decode_utf16_be(raw)),
+            1 if encoding == 0 => {
+                let r = rank_base + if language == 0 { 2 } else { 3 };
+                let s: String = raw.iter().filter(|&&b| b != 0).map(|&b| char::from(b)).collect();
+                (r, (!s.trim().is_empty()).then(|| s.trim().to_owned()))
+            }
+            _ => continue,
+        };
+        let Some(name) = decoded else { continue };
+        if best.as_ref().is_none_or(|(best_rank, _)| rank < *best_rank) {
+            best = Some((rank, name));
+            if rank == 0 {
+                break;
+            }
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+fn decode_utf16_be(raw: &[u8]) -> Option<String> {
+    if raw.len() < 2 || !raw.len().is_multiple_of(2) {
+        return None;
+    }
+    let units = raw.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c));
+    let s: String = char::decode_utf16(units).filter_map(Result::ok).filter(|&c| c != ' ').collect();
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+fn parse_fvar_wght_axis(table: &[u8]) -> Option<(f32, f32)> {
+    if table.len() < 16 {
+        return None;
+    }
+    let major = u16::from_be_bytes([table[0], table[1]]);
+    if major != 1 {
+        return None;
+    }
+    let axes_offset = u16::from_be_bytes([table[4], table[5]]) as usize;
+    let axis_count = (u16::from_be_bytes([table[8], table[9]]) as usize).min(64);
+    let axis_size = u16::from_be_bytes([table[10], table[11]]) as usize;
+    if axis_size < 20 {
+        return None;
+    }
+    for i in 0..axis_count {
+        let base = axes_offset.checked_add(i.checked_mul(axis_size)?)?;
+        let rec = table.get(base..base + 20)?;
+        if &rec[0..4] == b"wght" {
+            let min = i32::from_be_bytes([rec[4], rec[5], rec[6], rec[7]]) as f32 / 65536.0;
+            let max = i32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]) as f32 / 65536.0;
+            return Some((min, max));
+        }
+    }
+    None
 }

@@ -1,0 +1,1 @@
+- Android: system font lookup, script/CJK/emoji/symbol fallbacks, `Family::SystemMono` (`monospace`), and `installed_families()` now read `/system/etc/font_fallback.xml` (Android 15+) and `/system/etc/fonts.xml` lazily with a pure-`std` XML parser without walking font directories, while respecting `RUNE_SYSTEM_FONTS=off` and `set_system_fonts(false)`.
