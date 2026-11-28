@@ -129,6 +129,15 @@ impl AnyHost for Host {
     fn vanish(&mut self) {
         if let Some(w) = self.shown_win() { w.hide(); }
     }
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    fn release_wayland_surface(&mut self) {
+        // Drop only `Win` (a11y, Wayland native helpers, `wgpu::Surface`, and `Arc<Window>`) in
+        // protocol order while leaving `self.gpu` and `self.app` untouched for fast exit.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.wayland {
+            self.win = None;
+        }
+    }
     fn cancel_menus(&mut self) { self.in_turn(Self::cancel_menus_in_turn) }
     #[cfg(target_os = "macos")]
     fn stop_pacing(&mut self) {

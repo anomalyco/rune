@@ -1,0 +1,1 @@
+- Fixed Wayland app exit (`fast_exit` and `orderly_exit`) leaving focused `xdg_toplevel`/`wl_surface` and layer surfaces undestroyed when the client socket closes, by releasing Wayland surfaces, reaping closed winit `WindowState` entries, shutting down global Wayland helpers, and completing a bounded `wl_display.sync` roundtrip before process exit.

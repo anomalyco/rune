@@ -882,6 +882,17 @@ impl ActiveEventLoop {
         }
     }
 
+    /// Rune: drops Wayland `WindowState` entries for already-dropped windows; no-op on X11.
+    #[inline]
+    pub fn reap_closed_wayland_windows(&self) {
+        match *self {
+            #[cfg(wayland_platform)]
+            ActiveEventLoop::Wayland(ref evlp) => evlp.reap_closed_wayland_windows(),
+            #[cfg(x11_platform)]
+            ActiveEventLoop::X(_) => {},
+        }
+    }
+
     pub fn create_custom_cursor(&self, cursor: CustomCursorSource) -> CustomCursor {
         x11_or_wayland!(match self; ActiveEventLoop(evlp) => evlp.create_custom_cursor(cursor))
     }

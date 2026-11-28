@@ -197,6 +197,17 @@ impl AnyHost for OverlayHost {
         self.core.hide(&mut *self.app);
     }
 
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    fn release_wayland_surface(&mut self) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        {
+            self.core.after_hidden.sync = None;
+            let _ = self.core.surface.take_live();
+            let _ = self.core.surface.take_parked();
+            self.core.wayland_globals = None;
+        }
+    }
+
     fn terminate(&mut self) {
         self.core.close_tokens();
         self.core.close_after_hidden(&mut *self.app);

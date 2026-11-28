@@ -3197,3 +3197,105 @@ index 942b78512..33d49f099 100644
 +        assert_eq!(monitors, vec![58, 59, 60]);
 +    }
 +}
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index fb28071f2..9f57af5d8 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -33,6 +33,12 @@ pub trait ActiveEventLoopExtWayland {
+     /// had no events. Foreign Wayland queues sharing the display (such as layer-shell overlays)
+     /// dispatch on that turn without background reader threads. Off by default; no-op on X11.
+     fn set_wake_on_wayland_read(&self, wake: bool);
++
++    /// Rune: drops Wayland `WindowState` entries for every `Window` already dropped so their
++    /// `xdg_toplevel`, `xdg_surface`, `wl_surface` and decoration subsurfaces queue destroy
++    /// requests on the connection immediately, rather than waiting for the next event-loop
++    /// iteration (which never runs once the loop is exiting). No-op on X11.
++    fn reap_closed_wayland_windows(&self);
+ }
+ 
+ impl ActiveEventLoopExtWayland for ActiveEventLoop {
+@@ -45,6 +51,11 @@ impl ActiveEventLoopExtWayland for ActiveEventLoop {
+     fn set_wake_on_wayland_read(&self, wake: bool) {
+         self.p.set_wake_on_wayland_read(wake);
+     }
++
++    #[inline]
++    fn reap_closed_wayland_windows(&self) {
++        self.p.reap_closed_wayland_windows();
++    }
+ }
+ 
+ /// Additional methods on [`EventLoop`] that are specific to Wayland.
+diff --git a/src/platform_impl/linux/mod.rs b/src/platform_impl/linux/mod.rs
+index 0071dfee2..0369552a3 100644
+--- a/src/platform_impl/linux/mod.rs
++++ b/src/platform_impl/linux/mod.rs
+@@ -882,6 +882,17 @@ impl ActiveEventLoop {
+         }
+     }
+ 
++    /// Rune: drops Wayland `WindowState` entries for already-dropped windows; no-op on X11.
++    #[inline]
++    pub fn reap_closed_wayland_windows(&self) {
++        match *self {
++            #[cfg(wayland_platform)]
++            ActiveEventLoop::Wayland(ref evlp) => evlp.reap_closed_wayland_windows(),
++            #[cfg(x11_platform)]
++            ActiveEventLoop::X(_) => {},
++        }
++    }
++
+     pub fn create_custom_cursor(&self, cursor: CustomCursorSource) -> CustomCursor {
+         x11_or_wayland!(match self; ActiveEventLoop(evlp) => evlp.create_custom_cursor(cursor))
+     }
+diff --git a/src/platform_impl/linux/wayland/event_loop/mod.rs b/src/platform_impl/linux/wayland/event_loop/mod.rs
+index f73e50056..9342b0286 100644
+--- a/src/platform_impl/linux/wayland/event_loop/mod.rs
++++ b/src/platform_impl/linux/wayland/event_loop/mod.rs
+@@ -206,6 +206,13 @@ impl<T: 'static> EventLoop<T> {
+         // `run_on_demand` calls but if they have only just dropped their
+         // windows we need to make sure those last requests are sent to the
+         // compositor.
++        match &self.window_target.p {
++            PlatformActiveEventLoop::Wayland(window_target) => {
++                window_target.reap_closed_wayland_windows();
++            },
++            #[cfg(x11_platform)]
++            PlatformActiveEventLoop::X(_) => unreachable!(),
++        }
+         let _ = self.roundtrip().map_err(EventLoopError::Os);
+ 
+         exit
+@@ -664,6 +671,32 @@ impl ActiveEventLoop {
+         self.state.borrow_mut().wake_on_wayland_read = wake;
+     }
+ 
++    /// Rune: drops Wayland `WindowState` entries for every `Window` already dropped, queuing
++    /// `xdg_toplevel.destroy`, `xdg_surface.destroy`, `wl_surface.destroy` and frame-subsurface
++    /// destruction immediately. Drops `WindowState`s outside any `RefCell` borrow.
++    pub(crate) fn reap_closed_wayland_windows(&self) {
++        let removed: Vec<_> = {
++            let state = self.state.borrow();
++            let mut window_requests = state.window_requests.borrow_mut();
++            let closed: Vec<WindowId> = window_requests
++                .iter()
++                .filter_map(|(&id, req)| req.take_closed().then_some(id))
++                .collect();
++            if closed.is_empty() {
++                return;
++            }
++            let mut windows = state.windows.borrow_mut();
++            closed
++                .into_iter()
++                .filter_map(|id| {
++                    drop(window_requests.remove(&id));
++                    windows.remove(&id)
++                })
++                .collect()
++        };
++        drop(removed);
++    }
++
+     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
+         self.control_flow.set(control_flow)
+     }

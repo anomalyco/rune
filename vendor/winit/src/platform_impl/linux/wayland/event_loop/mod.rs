@@ -206,6 +206,13 @@ impl<T: 'static> EventLoop<T> {
         // `run_on_demand` calls but if they have only just dropped their
         // windows we need to make sure those last requests are sent to the
         // compositor.
+        match &self.window_target.p {
+            PlatformActiveEventLoop::Wayland(window_target) => {
+                window_target.reap_closed_wayland_windows();
+            },
+            #[cfg(x11_platform)]
+            PlatformActiveEventLoop::X(_) => unreachable!(),
+        }
         let _ = self.roundtrip().map_err(EventLoopError::Os);
 
         exit
@@ -662,6 +669,32 @@ impl ActiveEventLoop {
     #[inline]
     pub(crate) fn set_wake_on_wayland_read(&self, wake: bool) {
         self.state.borrow_mut().wake_on_wayland_read = wake;
+    }
+
+    /// Rune: drops Wayland `WindowState` entries for every `Window` already dropped, queuing
+    /// `xdg_toplevel.destroy`, `xdg_surface.destroy`, `wl_surface.destroy` and frame-subsurface
+    /// destruction immediately. Drops `WindowState`s outside any `RefCell` borrow.
+    pub(crate) fn reap_closed_wayland_windows(&self) {
+        let removed: Vec<_> = {
+            let state = self.state.borrow();
+            let mut window_requests = state.window_requests.borrow_mut();
+            let closed: Vec<WindowId> = window_requests
+                .iter()
+                .filter_map(|(&id, req)| req.take_closed().then_some(id))
+                .collect();
+            if closed.is_empty() {
+                return;
+            }
+            let mut windows = state.windows.borrow_mut();
+            closed
+                .into_iter()
+                .filter_map(|id| {
+                    drop(window_requests.remove(&id));
+                    windows.remove(&id)
+                })
+                .collect()
+        };
+        drop(removed);
     }
 
     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {

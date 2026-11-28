@@ -7,3 +7,4 @@ pub(crate) mod pipe_write;
 pub(crate) mod presentation;
 pub(crate) mod primary_selection;
 pub(crate) mod serial;
+pub(crate) mod teardown;
