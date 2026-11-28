@@ -448,3 +448,58 @@ fn zero_size_surface_suspends_drawing_until_nonzero_and_destroy_shuts_down() {
     assert!(run(&mut s, Event::Wake).is_empty());
     assert!(run(&mut s, Event::Resumed).is_empty());
 }
+
+#[test]
+fn touch_events_scale_to_dp_deduplicate_frames_and_replay_long_press_timeout() {
+    use super::touch::{ACTION_DOWN, ACTION_HOVER_MOVE, ACTION_MOVE, ACTION_UP, FLAG_CANCELED};
+    use crate::TouchPhase;
+
+    let mut s = State::default();
+    // Long-press timeout reported during init before surface creation is cached and replayed.
+    assert!(run(&mut s, Event::LongPressTimeoutChanged(400)).is_empty());
+    assert_eq!(s.long_press_secs, Some(0.4));
+    // Touch arriving while detached is ignored cleanly.
+    assert!(run(&mut s, Event::Touch {
+        action: ACTION_DOWN, flags: 0, pointer_id: 0, x_px: 300.0, y_px: 600.0, time_ms: 100,
+    }).is_empty());
+
+    let _ = run(&mut s, Event::Resumed);
+    let created = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
+    assert!(has(&created, Effect::SetTouchLongPress(Some(0.4))), "cached long-press timeout replays on surface creation");
+    let _ = run(&mut s, Event::Frame);
+    let _ = run(&mut s, Event::FrameDone { animating: false, wake_after_secs: None });
+
+    // Batched touch sequence schedules exactly one Choreographer frame across multiple samples.
+    let down = run(&mut s, Event::Touch {
+        action: ACTION_DOWN, flags: 0, pointer_id: 2, x_px: 300.0, y_px: 600.0, time_ms: 1_000,
+    });
+    assert_eq!(down, [
+        Effect::Touch { id: 2, phase: TouchPhase::Started, x: 100.0, y: 200.0, time_secs: 1.0 },
+        Effect::ScheduleFrame,
+    ]);
+    let mv = run(&mut s, Event::Touch {
+        action: ACTION_MOVE, flags: 0, pointer_id: 2, x_px: 330.0, y_px: 570.0, time_ms: 1_008,
+    });
+    assert_eq!(mv, [
+        Effect::Touch { id: 2, phase: TouchPhase::Moved, x: 110.0, y: 190.0, time_secs: 1.008 },
+    ]);
+    // Non-touch actions and non-finite coordinates emit nothing.
+    assert!(run(&mut s, Event::Touch {
+        action: ACTION_HOVER_MOVE, flags: 0, pointer_id: 2, x_px: 330.0, y_px: 570.0, time_ms: 1_010,
+    }).is_empty());
+    assert!(run(&mut s, Event::Touch {
+        action: ACTION_MOVE, flags: 0, pointer_id: 2, x_px: f32::NAN, y_px: 570.0, time_ms: 1_012,
+    }).is_empty());
+    // FLAG_CANCELED maps ACTION_UP to TouchPhase::Cancelled.
+    let up = run(&mut s, Event::Touch {
+        action: ACTION_UP, flags: FLAG_CANCELED, pointer_id: 2, x_px: 330.0, y_px: 570.0, time_ms: 1_016,
+    });
+    assert_eq!(up, [
+        Effect::Touch { id: 2, phase: TouchPhase::Cancelled, x: 110.0, y: 190.0, time_secs: 1.016 },
+    ]);
+
+    // Accessibility setting updated on resume forwards immediately; invalid timeout restores default.
+    assert_eq!(run(&mut s, Event::LongPressTimeoutChanged(1500)), [Effect::SetTouchLongPress(Some(1.5))]);
+    assert!(run(&mut s, Event::LongPressTimeoutChanged(1500)).is_empty(), "unchanged timeout is a no-op");
+    assert_eq!(run(&mut s, Event::LongPressTimeoutChanged(0)), [Effect::SetTouchLongPress(None)]);
+}

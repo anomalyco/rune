@@ -4,6 +4,8 @@
 //! Every mode is encoded explicitly in [`State`] and [`Surface`]; [`step`] returns declarative
 //! [`Effect`]s instead of performing JNI or GPU work directly.
 
+use super::touch;
+use crate::TouchPhase;
 use crate::machine::Effects;
 
 /// Current `ANativeWindow` attachment state.
@@ -33,6 +35,9 @@ pub(crate) struct State {
     pub(crate) safe_area: [f32; 4],
     /// Software keyboard bottom overlap in logical dp, kept separate from `safe_area`.
     pub(crate) keyboard_inset: f32,
+    /// System long-press delay in seconds from `ViewConfiguration.getLongPressTimeout()`,
+    /// when positive (`None` keeps Rune's 0.5 s default).
+    pub(crate) long_press_secs: Option<f64>,
     pub(crate) destroyed: bool,
 }
 
@@ -45,6 +50,7 @@ impl Default for State {
             dark: true,
             safe_area: [0.0; 4],
             keyboard_inset: 0.0,
+            long_press_secs: None,
             destroyed: false,
         }
     }
@@ -106,6 +112,17 @@ pub(crate) enum Event {
     BackDone {
         consumed: bool,
     },
+    /// System touch long-press timeout in milliseconds (`ViewConfiguration.getLongPressTimeout`).
+    LongPressTimeoutChanged(i32),
+    /// One Android `MotionEvent` touch sample (including batched historical samples).
+    Touch {
+        action: i32,
+        flags: i32,
+        pointer_id: i32,
+        x_px: f32,
+        y_px: f32,
+        time_ms: i64,
+    },
     /// Activity destroyed.
     Destroy,
 }
@@ -125,6 +142,16 @@ pub(crate) enum Effect {
     SetSafeArea([f32; 4]),
     SetKeyboardInset(f32),
     SetDark(bool),
+    /// Update `Runtime::set_touch_long_press` (`None` restores Rune's 0.5 s default).
+    SetTouchLongPress(Option<f64>),
+    /// Deliver one touch sample in logical dp and seconds to `Runtime::touch`.
+    Touch {
+        id: u64,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        time_secs: f64,
+    },
     /// Queue `Key::Escape`, run one synchronous zero-dt frame to route it, and feed
     /// [`Event::BackDone`] with whether Rune consumed the key (`Runtime::take_key_consumed`).
     DispatchBack,
@@ -204,6 +231,9 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             effects.push(Effect::SetDark(state.dark));
             effects.push(Effect::SetSafeArea(state.safe_area));
             effects.push(Effect::SetKeyboardInset(state.keyboard_inset));
+            if state.long_press_secs.is_some() {
+                effects.push(Effect::SetTouchLongPress(state.long_press_secs));
+            }
             request_frame(state, &mut effects);
         }
         Event::SurfaceChanged {
@@ -338,6 +368,41 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             if consumed {
                 request_frame(state, &mut effects);
             }
+        }
+        Event::LongPressTimeoutChanged(timeout_ms) => {
+            let next = touch::long_press_ms_to_secs(timeout_ms);
+            if next != state.long_press_secs {
+                state.long_press_secs = next;
+                if matches!(state.surface, Surface::Attached { .. }) {
+                    effects.push(Effect::SetTouchLongPress(next));
+                }
+            }
+        }
+        Event::Touch {
+            action,
+            flags,
+            pointer_id,
+            x_px,
+            y_px,
+            time_ms,
+        } => {
+            let Surface::Attached { scale, .. } = state.surface else {
+                return effects;
+            };
+            let Some(phase) = touch::action_to_phase(action, flags) else {
+                return effects;
+            };
+            let Some((x, y)) = touch::px_to_dp_point(x_px, y_px, scale) else {
+                return effects;
+            };
+            effects.push(Effect::Touch {
+                id: touch::pointer_id_to_u64(pointer_id),
+                phase,
+                x,
+                y,
+                time_secs: touch::event_time_ms_to_secs(time_ms),
+            });
+            request_frame(state, &mut effects);
         }
         Event::Destroy => {
             state.destroyed = true;

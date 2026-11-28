@@ -214,6 +214,26 @@ impl<S: 'static> Runtime<S> {
     }
     #[inline(always)]
     pub fn touching(&self) -> bool { self.core().touching() }
+    /// Sets how long a still finger must be held (in seconds) before firing a long-press
+    /// secondary click (for example Android's `ViewConfiguration.getLongPressTimeout()`).
+    /// Positive finite values override the `0.5` s default; zero, negative, or non-finite values
+    /// restore the default.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// assert_eq!(rt.touch_long_press(), 0.5);
+    /// rt.set_touch_long_press(0.4);
+    /// assert_eq!(rt.touch_long_press(), 0.4);
+    /// rt.set_touch_long_press(0.0);
+    /// assert_eq!(rt.touch_long_press(), 0.5);
+    /// ```
+    #[inline(always)]
+    pub fn set_touch_long_press(&mut self, secs: f64) { self.core_mut().set_touch_long_press(secs); }
+    /// Active touch long-press delay in seconds (defaults to `0.5` s).
+    #[inline(always)]
+    pub fn touch_long_press(&self) -> f64 { self.core().touch_long_press() }
 
     #[inline(always)]
     pub fn wheel_xy(&mut self, x: f32, y: f32, dx: f32, dy: f32) { self.core_mut().wheel_xy(x, y, dx, dy); }

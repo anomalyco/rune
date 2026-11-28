@@ -452,14 +452,14 @@ fn confirming_timer_fires_on_matching_attempt_and_ignores_stale_attempt() {
 #[test]
 fn confirming_timer_compensates_positive_delay_below_long_press_only() {
     // 200 ms delayed press: compensates to 0.20 + (0.50 - 0.20) = 0.50.
-    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::ConfirmingTimer) - 0.50).abs() < 1e-9);
+    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::ConfirmingTimer, LONG_PRESS) - 0.50).abs() < 1e-9);
     // 700 ms delayed press (>= LONG_PRESS): arms full 0.50 from arrival (1.20).
-    assert!((compensated_hold_due(0.70, 0.0, TouchHoldPolicy::ConfirmingTimer) - 1.20).abs() < 1e-9);
+    assert!((compensated_hold_due(0.70, 0.0, TouchHoldPolicy::ConfirmingTimer, LONG_PRESS) - 1.20).abs() < 1e-9);
     // Malformed future timestamp (negative delay) or NaN: arms full 0.50 from arrival.
-    assert!((compensated_hold_due(0.20, 0.80, TouchHoldPolicy::ConfirmingTimer) - 0.70).abs() < 1e-9);
-    assert!((compensated_hold_due(0.20, f64::NAN, TouchHoldPolicy::ConfirmingTimer) - 0.70).abs() < 1e-9);
-    // DirectTimer (native & headless default) always arms now + LONG_PRESS.
-    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::DirectTimer) - 0.70).abs() < 1e-9);
+    assert!((compensated_hold_due(0.20, 0.80, TouchHoldPolicy::ConfirmingTimer, LONG_PRESS) - 0.70).abs() < 1e-9);
+    assert!((compensated_hold_due(0.20, f64::NAN, TouchHoldPolicy::ConfirmingTimer, LONG_PRESS) - 0.70).abs() < 1e-9);
+    // DirectTimer (native & headless default) always arms now + long_press.
+    assert!((compensated_hold_due(0.20, 0.0, TouchHoldPolicy::DirectTimer, LONG_PRESS) - 0.70).abs() < 1e-9);
 }
 
 #[test]
@@ -514,7 +514,7 @@ fn simulate_hold(
     let mut fire_time = None;
     let mut pending_confirm: Option<(Attempt, f64)> = None;
 
-    let _ = step_hold(&mut seq, &mut state, HoldEvent::Start { now: 0.0, event_time: 0.0, policy });
+    let _ = step_hold(&mut seq, &mut state, HoldEvent::Start { now: 0.0, event_time: 0.0, policy, delay: LONG_PRESS });
 
     // Collect ordered timestamps to visit up to `lift_at`.
     let mut t = 0.0;
@@ -898,4 +898,49 @@ fn web_document_touch_tap_on_unfocused_field_activates_after_tap_up_frame() {
     let act_plain = crate::input::host_events::web_touch_end_activate(rt.core(), true, false);
     rt.frame(0.0);
     assert!(!act_plain.should_activate(rt.core()));
+}
+
+#[test]
+fn set_touch_long_press_arms_at_host_delay_and_falls_back_on_invalid_values() {
+    let mut rt = Runtime::new(HoldStateTest::default(), hold_view, (200.0, 300.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.frame(0.0);
+    assert_eq!(rt.touch_long_press(), LONG_PRESS);
+
+    // Android default 400 ms long-press fires before the 500 ms default.
+    rt.set_touch_long_press(0.4);
+    assert_eq!(rt.touch_long_press(), 0.4);
+    rt.touch(1, TouchPhase::Started, 100.0, 30.0, 0.0);
+    assert_eq!(rt.wake_deadline(), Some(0.4));
+    rt.frame.test_clock_mut().unwrap().seek(0.35);
+    rt.frame(0.35);
+    assert_eq!(rt.state.secondary, 0, "must not fire before 400 ms");
+    rt.frame.test_clock_mut().unwrap().seek(0.41);
+    rt.frame(0.06);
+    assert_eq!(rt.state.secondary, 1, "fires at host-supplied 400 ms delay");
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 0.45);
+    rt.frame(0.0);
+
+    // Android accessibility Long (1500 ms) waits past 500 ms and fires at 1.5 s.
+    rt.set_touch_long_press(1.5);
+    let t0 = rt.core().clock;
+    rt.touch(2, TouchPhase::Started, 100.0, 30.0, t0);
+    assert!((rt.wake_deadline().unwrap() - (t0 + 1.5)).abs() < 1e-9);
+    rt.frame.test_clock_mut().unwrap().seek(t0 + 0.6);
+    rt.frame(0.6);
+    assert_eq!(rt.state.secondary, 1, "must not fire at 0.6 s under 1.5 s accessibility delay");
+    rt.frame.test_clock_mut().unwrap().seek(t0 + 1.51);
+    rt.frame(0.91);
+    assert_eq!(rt.state.secondary, 2, "fires after 1.5 s accessibility delay");
+    rt.touch(2, TouchPhase::Ended, 100.0, 30.0, t0 + 1.55);
+    rt.frame(0.0);
+
+    // Zero, negative, and non-finite delays restore the 0.5 s default.
+    for bad in [0.0, -0.25, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        rt.set_touch_long_press(0.4);
+        rt.set_touch_long_press(bad);
+        assert_eq!(rt.touch_long_press(), LONG_PRESS, "invalid delay {bad:?} must fall back to default");
+    }
+    assert_eq!(hold_duration(TouchHoldPolicy::HostContextMenu, 0.4), HOST_HOLD_FALLBACK);
+    assert_eq!(hold_duration(TouchHoldPolicy::HostContextMenu, 2.2), 2.2);
 }

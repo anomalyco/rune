@@ -219,11 +219,16 @@ pub(crate) fn run_embed_frame<E: EmbedSurface>(surface: &mut E) -> FrameSummary 
 }
 
 /// Drains and discards host requests an embedded layer cannot serve (window close/minimize/frame,
-/// native pop-ups, native file dialogs) and flushes in-memory clipboard writes. Leaves
-/// `rt.host.haptics` intact so the embedding host drains them via `LayerHost::take_haptics()`.
+/// native pop-ups when `App::on_popup_menu` is not active, native file dialogs) and flushes
+/// in-memory clipboard writes. When `App::on_popup_menu` is active on a platform without native
+/// pop-up menus (Android, iOS), queued pop-ups are delivered to the app's fallback hook instead of
+/// being cancelled. Leaves `rt.host.haptics` intact so the embedding host drains them via
+/// `LayerHost::take_haptics()`.
 pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
     crate::clipboard::flush_memory(rt);
-    if rt.popup_menu().is_some() {
+    if rt.popup_menu_fallback_active(app) {
+        let _ = rt.deliver_popup_menu_fallback_from_host(app);
+    } else if rt.popup_menu().is_some() {
         rt.cancel_popups(app);
     }
     if !rt.host.file_dialogs {
