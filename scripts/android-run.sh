@@ -86,6 +86,13 @@ if [ ! -f "$SO_PATH" ]; then
   exit 1
 fi
 
+python3 "$ROOT/scripts/check_android_so.py" \
+  --so "$SO_PATH" \
+  --clang "$CC_PATH" \
+  --nm "$NDK_BIN/llvm-nm" \
+  --readelf "$NDK_BIN/llvm-readelf" \
+  --require-symbol JNI_OnLoad
+
 OUT="$ROOT/target/android/$PKG/$ABI"
 rm -rf "$OUT"
 mkdir -p "$OUT/classes" "$OUT/dex" "$OUT/apk/lib/$ABI"

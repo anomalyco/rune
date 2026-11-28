@@ -72,6 +72,9 @@ jobs:
         with:
           shared-key: android-apk-x86_64
           cache-on-failure: true
-      - name: Build android-hello APK
+      - name: Test Android .so symbol checker
+        shell: bash
+        run: python3 -m unittest -v scripts/check_android_so_tests.py
+      - name: Build and verify android-hello APK
         shell: bash
         run: bash scripts/android-run.sh --build-only --abi x86_64
