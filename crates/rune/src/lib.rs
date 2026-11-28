@@ -153,6 +153,7 @@ pub use el::anchor_rect;
 pub use el::anchor_rect_in;
 pub use el::auto_grow;
 pub use el::canvas;
+pub use el::canvas_with;
 pub use el::col;
 pub use el::edit_access;
 pub use el::effect;

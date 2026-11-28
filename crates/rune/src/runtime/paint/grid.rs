@@ -127,7 +127,8 @@ impl state::PaintState {
             // The vector layer over the text, from its box's origin rounded to the device grid.
             if let Some(shape) = &row.over {
                 let at = [round(x0) + shift[0], round(y0) + shift[1]];
-                push_shape(instances, shape, at, [s, s], s, o, srgb, clip, fade);
+                let rect_snap = paint::shape::RectSnap::Window { origin_pt: None, s, rigid: [0.0; 2] };
+                push_shape(instances, shape, at, [s, s], s, rect_snap, o, srgb, clip, fade);
             }
             *row.drawn.borrow_mut() = pages.map(|pages| DrawnRow {
                 key: key(text.emit_key()),

@@ -257,12 +257,17 @@ impl RuntimeCore {
             // `El::layer_opacity` fades paint only; hit testing and `ElementInfo::opacity` keep
             // `own` (`ElementInfo::layer_opacity` reports the composed static fade separately).
             let paint_own = own * n.vis.layer_opacity;
+            let shape_size = [
+                p.rect.w.max(0.0),
+                if self.paint.row_h[i] >= 0.0 { self.paint.row_h[i].max(0.0) } else { p.rect.h.max(0.0) },
+            ];
             // A fading node with children, or a shape whose pieces overlap, takes its opacity
             // once as a layer rather than each primitive taking it over the ones beneath. So
             // does a layer opacity over two paints of the node's own (a label on its fill).
             let mut isolate = effective_opacity > 0.001 && (p.blur > 0.0 || dissolve
                 || additive_parent || (paint_own > 0.001 && paint_own < 1.0
-                    && (next.is_some_and(|j| self.tree.nodes[j].parent == Some(i)) || n.vis.shape.as_ref().is_some_and(|s| s.overlaps())
+                    && (next.is_some_and(|j| self.tree.nodes[j].parent == Some(i))
+                        || n.vis.resolve_shape(shape_size, s).is_some_and(|sh| sh.overlaps())
                         || (n.vis.layer_opacity < 1.0 && own_paints(n) >= 2))));
             let (mut clip, mut fade) = (pinh.paint_clip, pcold.paint_fade);
             let mut fade_origin = pcold.paint_fade_origin;
@@ -618,6 +623,7 @@ impl RuntimeCore {
                     r,
                     r_exact,
                     raw_edges,
+                    (snaps, [rect_pt[0], rect_pt[1]], shape_size),
                     radii,
                     w,
                     h,

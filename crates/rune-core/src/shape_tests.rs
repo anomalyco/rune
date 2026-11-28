@@ -369,3 +369,35 @@ fn curved_bezier_ring_and_touching_hole_triangulate_without_overlap() {
     let hole_area = 0.5 * 50.0 * 75.0;
     assert!((area(&vt, &tt) - (10_000.0 - hole_area)).abs() < 1e-1, "got {}", area(&vt, &tt));
 }
+
+#[test]
+fn rect_ops_validate_bounds_sanitize_radii_overlap_and_trim() {
+    let empty = Shape::new()
+        .rect([0.0, 0.0, 0.0, 10.0], Color::WHITE)
+        .rect([0.0, 0.0, 10.0, -1.0], Color::WHITE)
+        .rect([f32::NAN, 0.0, 10.0, 10.0], Color::WHITE)
+        .rounded_rect([0.0, f32::INFINITY, 10.0, 10.0], 2.0, Color::WHITE);
+    assert!(empty.is_empty());
+
+    let one = Shape::new().rounded_rect_corners([1.0, 2.0, 10.0, 20.0], [3.0, -1.0, f32::NAN, 4.0], Color::WHITE);
+    assert!(!one.is_empty());
+    assert!(!one.overlaps(), "single rect cannot overlap itself");
+    assert_eq!(
+        one.ops,
+        vec![Op::Rect { rect: [1.0, 2.0, 10.0, 20.0], radii: [3.0, 0.0, 0.0, 4.0], color: Color::WHITE }]
+    );
+
+    let two = one.clone().rect([4.0, 5.0, 6.0, 7.0], Color::BLACK);
+    assert!(two.overlaps(), "two rects can overlap");
+
+    let half = one.drawn(0.5);
+    assert_eq!(
+        half.ops,
+        vec![Op::Rect {
+            rect: [1.0, 2.0, 10.0, 20.0],
+            radii: [3.0, 0.0, 0.0, 4.0],
+            color: Color { a: 0.5, ..Color::WHITE },
+        }]
+    );
+    assert!(one.drawn(0.0).is_empty());
+}

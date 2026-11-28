@@ -437,6 +437,35 @@ pub(super) fn svg(shape: &crate::Shape, size: (f32, f32)) -> String {
                 write!(out, "<{el} fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\" points=\"{}\"/>",
                     color(*c), num(*width), points(pts)).ok();
             }
+            crate::shape::Op::Rect { rect: [rx, ry, rw, rh], radii, color: c } => {
+                flush(&mut out, &mut fill);
+                let [mut tl, mut tr, mut br, mut bl] = radii.map(|r| r.max(0.0));
+                let mut f = 1.0f32;
+                if tl + tr > *rw { f = f.min(*rw / (tl + tr)); }
+                if bl + br > *rw { f = f.min(*rw / (bl + br)); }
+                if tl + bl > *rh { f = f.min(*rh / (tl + bl)); }
+                if tr + br > *rh { f = f.min(*rh / (tr + br)); }
+                [tl, tr, br, bl] = [tl * f, tr * f, br * f, bl * f];
+                if tl == 0.0 && tr == 0.0 && br == 0.0 && bl == 0.0 {
+                    write!(out, "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+                        num(*rx), num(*ry), num(*rw), num(*rh), color(*c)).ok();
+                } else if tl == tr && tr == br && br == bl {
+                    write!(out, "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{}\"/>",
+                        num(*rx), num(*ry), num(*rw), num(*rh), num(tl), num(tl), color(*c)).ok();
+                } else {
+                    let (x0, y0, x1, y1) = (*rx, *ry, *rx + *rw, *ry + *rh);
+                    write!(
+                        out,
+                        "<path fill=\"{}\" d=\"M{},{} H{} A{},{},0,0,1,{},{} V{} A{},{},0,0,1,{},{} H{} A{},{},0,0,1,{},{} V{} A{},{},0,0,1,{},{} Z\"/>",
+                        color(*c),
+                        num(x0 + tl), num(y0),
+                        num(x1 - tr), num(tr), num(tr), num(x1), num(y0 + tr),
+                        num(y1 - br), num(br), num(br), num(x1 - br), num(y1),
+                        num(x0 + bl), num(bl), num(bl), num(x0), num(y1 - bl),
+                        num(y0 + tl), num(tl), num(tl), num(x0 + tl), num(y0),
+                    ).ok();
+                }
+            }
         }
     }
     flush(&mut out, &mut fill);

@@ -486,6 +486,14 @@ pub fn canvas(shape: Shape) -> El {
     e
 }
 
+/// An element whose [`Shape`] is built from its laid-out size `[width, height]` (in points)
+/// and the window's device `scale` on the frame it paints; size it like any element.
+pub fn canvas_with(build: impl Fn([f32; 2], f32) -> Shape + 'static) -> El {
+    let mut e = base(FlexDirection::Row).shape_with(build);
+    e.role = RoleTag::IMAGE;
+    e
+}
+
 impl El {
 
     /// Bind opacity directly to a latest-wins value, without rebuilding or laying out the view.

@@ -177,8 +177,8 @@ impl RuntimeCore {
         if let Some(spec) = n.text.as_deref().filter(|t| !t.redacted && !n.is_secure()) {
             css::text(spec, &mut decls);
             inner = css::text_html(spec);
-        } else if let Some(shape) = n.vis.cold.shape.as_deref() {
-            inner = css::svg(shape, (x1 - x0, y1 - y0));
+        } else if let Some(shape) = n.vis.resolve_shape([x1 - x0, y1 - y0], self.env.scale) {
+            inner = css::svg(&shape, (x1 - x0, y1 - y0));
         }
         if tag == "img" {
             let fit = if let Some(w) = web_img {
