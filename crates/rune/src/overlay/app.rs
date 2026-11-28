@@ -439,7 +439,7 @@ fn build_parts<T: 'static>(
     }
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
-        wheel_glide, wheel_line, macos_level, macos_color_space, window_backdrop, frame_latency, keyboard_dispatch,
+        wheel_glide, wheel_line, macos_level, macos_color_space, window_backdrop, frame_latency, wide_color, keyboard_dispatch,
         on_materials, animate_reveal, release_after, renderer, sizing, min_size, max_size,
     } = configured;
     let inherited = InheritedOverlaySettings {
@@ -484,6 +484,7 @@ fn build_parts<T: 'static>(
         release_after,
     );
     core.frame_latency = frame_latency;
+    core.wide_color = wide_color;
     core.keyboard_dispatch = keyboard_dispatch;
     core.on_materials = on_materials;
     core.requested_renderer = renderer;

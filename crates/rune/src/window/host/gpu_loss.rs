@@ -20,7 +20,7 @@ use crate::window::file_drop::FileDrop;
 use crate::window::keys::map_key_event;
 use crate::window::state::MinimizeEvent;
 use crate::window::surface::{
-    BackoffEvent, configure_checked, drawable_size, max_surface_dim, surface_config,
+    BackoffEvent, configure_checked, drawable_size, is_wide_color_config, max_surface_dim, surface_config_with,
 };
 
 /// Per-window terminal GPU-loss state owned by [`Host`].
@@ -428,6 +428,7 @@ impl Host {
         let raw_size = window.inner_size();
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
+        let wide_color = self.wide_color;
         let frame_latency = crate::window::frame_latency(self.frame_latency);
         let frame_callback_paced = self.wayland;
         let transparent = self.options.transparent;
@@ -437,7 +438,7 @@ impl Host {
                 return Err(SurfaceSetupError::unsupported("the GPU device is gone"));
             };
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-            let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend, frame_callback_paced)
+            let (mut config, translucent) = surface_config_with(&surface, &gpu.adapter, size, srgb_blend, frame_callback_paced, wide_color)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
             config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {
@@ -464,10 +465,18 @@ impl Host {
             drop(surface);
             return false;
         }
-        let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+        let wide_active = is_wide_color_config(&config);
+        if wide_active {
+            self.app.rt_mut().set_srgb_blend(false);
+            if let Some((_, renderer)) = self.gpu.as_mut() {
+                renderer.set_srgb_blend(false);
+            }
+        }
+        let effective_srgb_blend = if wide_active { false } else { srgb_blend };
+        let target_format = if effective_srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
         let alpha = self.gpu.as_ref().and_then(|(gpu, _)| alpha_pass(gpu, transparent, &config, target_format));
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface, self.macos_window.color_space);
+        crate::platform::macos::pin_contents_top_left(&surface, self.macos_window.color_space, wide_active);
         #[cfg(target_os = "macos")]
         let present = self.win.as_ref()
             .and_then(|w| w.native.present_log.clone())

@@ -72,6 +72,9 @@ mod occluded_surface_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "surface/present_mode_tests.rs"]
 mod present_mode_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "surface/wide_color_tests.rs"]
+mod wide_color_tests;
 
 /// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
 /// frame shows at the first composition after it's done, and the window waits for room itself
@@ -160,6 +163,55 @@ pub(crate) fn present_mode(
     }
 }
 
+/// Whether `config` is an active wide-color extended-range linear sRGB surface
+/// (`Rgba16Float` + `ExtendedSrgbLinear`, blending in linear light).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn is_wide_color_config(config: &wgpu::SurfaceConfiguration) -> bool {
+    matches!(config.format, wgpu::TextureFormat::Rgba16Float)
+        && matches!(config.color_space, wgpu::SurfaceColorSpace::ExtendedSrgbLinear)
+}
+
+/// Selects the surface `(format, view_formats, color_space)` from `caps` for `srgb_blend` and
+/// optional `wide_color`.
+///
+/// When `wide_color && allow_wide_color` and `caps` advertises `EXTENDED_SRGB_LINEAR` on
+/// `Rgba16Float` (macOS Metal / wgpu-hal Metal), chooses `Rgba16Float` with
+/// `SurfaceColorSpace::ExtendedSrgbLinear` so out-of-sRGB-gamut Display P3 colours render in
+/// linear light without clamping. Otherwise keeps the standard 8-bit sRGB / non-sRGB choice.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn select_surface_format(
+    caps: &wgpu::SurfaceCapabilities,
+    srgb_blend: bool,
+    wide_color: bool,
+    allow_wide_color: bool,
+) -> Option<(wgpu::TextureFormat, Vec<wgpu::TextureFormat>, wgpu::SurfaceColorSpace)> {
+    let first = *caps.formats.first()?;
+    if wide_color && allow_wide_color {
+        let supports_wide = caps.format_capabilities.iter().any(|fc| {
+            fc.format == wgpu::TextureFormat::Rgba16Float
+                && fc.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+        });
+        if supports_wide {
+            return Some((
+                wgpu::TextureFormat::Rgba16Float,
+                Vec::new(),
+                wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            ));
+        }
+    }
+    let srgb = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(first);
+    if srgb_blend {
+        let non_srgb = srgb.remove_srgb_suffix();
+        if caps.formats.contains(&non_srgb) {
+            Some((non_srgb, Vec::new(), wgpu::SurfaceColorSpace::Auto))
+        } else {
+            Some((srgb, vec![non_srgb], wgpu::SurfaceColorSpace::Auto))
+        }
+    } else {
+        Some((srgb, Vec::new(), wgpu::SurfaceColorSpace::Auto))
+    }
+}
+
 /// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
 /// first alpha mode it supports that composites translucent pixels. `frame_callback_paced` is true
 /// when the surface paces every frame on Wayland's `wl_surface.frame` callback so
@@ -169,9 +221,24 @@ pub(crate) fn present_mode(
 pub(crate) fn surface_config(
     surface: &wgpu::Surface,
     adapter: &wgpu::Adapter,
+    size: (u32, u32),
+    srgb_blend: bool,
+    frame_callback_paced: bool,
+) -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
+    surface_config_with(surface, adapter, size, srgb_blend, frame_callback_paced, false)
+}
+
+/// [`surface_config`] with opt-in wide-color (`App::wide_color`): on macOS, selects
+/// `Rgba16Float` with `SurfaceColorSpace::ExtendedSrgbLinear` when advertised; otherwise falls
+/// back to standard sRGB without changing defaults.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn surface_config_with(
+    surface: &wgpu::Surface,
+    adapter: &wgpu::Adapter,
     (width, height): (u32, u32),
     srgb_blend: bool,
     frame_callback_paced: bool,
+    wide_color: bool,
 ) -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
     let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
     // The surface is asked what it can do once. A Vulkan driver answers each part of that with a
@@ -181,28 +248,18 @@ pub(crate) fn surface_config(
     // such requests and 52 round trips; asked once, after 16 and 32. What follows is
     // `get_default_config`'s answer.
     let caps = surface.get_capabilities(adapter);
+    let (format, view_formats, color_space) =
+        select_surface_format(&caps, srgb_blend, wide_color, cfg!(target_os = "macos"))?;
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: *caps.formats.first()?,
-        color_space: wgpu::SurfaceColorSpace::Auto,
+        format,
+        color_space,
         width,
         height,
-        desired_maximum_frame_latency: 2,
-        present_mode: *caps.present_modes.first()?,
+        desired_maximum_frame_latency: FRAME_LATENCY,
+        present_mode: wgpu::PresentMode::AutoVsync,
         alpha_mode: wgpu::CompositeAlphaMode::Auto,
-        view_formats: vec![],
-    };
-    let srgb = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(config.format);
-    config.format = if srgb_blend {
-        let non_srgb = srgb.remove_srgb_suffix();
-        if caps.formats.contains(&non_srgb) {
-            non_srgb
-        } else {
-            config.view_formats = vec![non_srgb];
-            srgb
-        }
-    } else {
-        srgb
+        view_formats,
     };
     // Backdrop copies read the drawable mid-frame (`ActivePass::split`: backdrop blur, effect
     // backdrops, rune-fx blend modes). On Metal it costs `framebufferOnly`, but without it they
@@ -223,6 +280,13 @@ pub(crate) fn surface_config(
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn reblend_core(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
     renderer: &mut Renderer, alpha: &mut Option<crate::render::surface_alpha::AlphaSurface>, rt: &mut RuntimeCore) -> bool {
+    // Wide-color `Rgba16Float` + `ExtendedSrgbLinear` surfaces always blend in linear light so
+    // out-of-sRGB-gamut channels (negative or > 1.0) are preserved without sRGB clamping.
+    if is_wide_color_config(config) {
+        rt.set_srgb_blend(false);
+        renderer.set_srgb_blend(false);
+        return true;
+    }
     let srgb = rt.srgb_blend();
     let Some((next, _)) = surface_config(
         surface,

@@ -74,6 +74,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) window_backdrop: crate::WindowBackdrop,
     /// Optional macOS swap-chain frame latency (`App::frame_latency`).
     pub(in crate::window) frame_latency: Option<u32>,
+    /// Opt-in wide-color extended-range linear sRGB surface (`App::wide_color`).
+    pub(in crate::window) wide_color: bool,
     /// Last winit theme applied to the live `self.win`, avoiding redundant `set_theme` calls.
     pub(in crate::window) applied_theme: Option<winit::window::Theme>,
     pub(in crate::window) native_handle: WindowHandle,
@@ -236,6 +238,7 @@ struct HostInit {
     color_scheme: crate::ColorScheme,
     window_backdrop: crate::WindowBackdrop,
     frame_latency: Option<u32>,
+    wide_color: bool,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -317,6 +320,7 @@ impl Host {
         let color_scheme = app.color_scheme;
         let window_backdrop = app.window_backdrop;
         let frame_latency = app.frame_latency;
+        let wide_color = app.wide_color;
         let gpu_loss_policy = app.gpu_loss_policy;
         let gpu_loss_latch = app.gpu_loss_latch.take();
         #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -386,6 +390,7 @@ impl Host {
             color_scheme,
             window_backdrop,
             frame_latency,
+            wide_color,
             native_handle,
             on_created,
             on_window,
@@ -446,6 +451,7 @@ impl Host {
             color_scheme,
             window_backdrop,
             frame_latency,
+            wide_color,
             native_handle,
             on_created,
             on_window,
@@ -582,6 +588,7 @@ impl Host {
             color_scheme,
             window_backdrop,
             frame_latency,
+            wide_color,
             applied_theme: None,
             native_handle,
             on_created,

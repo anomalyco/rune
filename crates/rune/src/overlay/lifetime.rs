@@ -641,7 +641,7 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         {
             let wake = self.shared.wake.lock().unwrap().clone();
-            self.panel = Some(crate::platform::macos::Panel::adopt(&window, self.at, self.interactive, &self.options, self.macos_color_space, wake)?);
+            self.panel = Some(crate::platform::macos::Panel::adopt(&window, self.at, self.interactive, &self.options, self.macos_color_space, self.wide_color, wake)?);
             let panel = self.panel.as_ref().unwrap();
             if let Some(level) = self.macos_level { panel.set_level(level); }
             let native = (Some(panel.window_number()), crate::OverlayCapabilities::placed(

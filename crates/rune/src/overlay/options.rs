@@ -187,6 +187,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) frame_latency: Option<u32>,
+    pub(crate) wide_color: bool,
     pub(crate) keyboard_dispatch: crate::KeyboardDispatch,
     pub(crate) on_materials: Option<crate::system_material::OnMaterials>,
     pub(crate) animate_reveal: bool,
@@ -568,6 +569,13 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.frame_latency = Some(latency.clamp(1, 2));
         self
     }
+    /// Opt into wide-color extended-range linear sRGB output on macOS (`Rgba16Float` with
+    /// `kCGColorSpaceExtendedLinearSRGB`), like [`App::wide_color`](crate::App::wide_color).
+    /// Off by default (standard 8-bit sRGB).
+    pub fn wide_color(mut self, enabled: bool) -> Self {
+        self.wide_color = enabled;
+        self
+    }
     /// Controls when this key-taking native overlay drains queued keyboard input
     /// ([`KeyboardDispatch`](crate::KeyboardDispatch)), like
     /// [`App::keyboard_dispatch`](crate::App::keyboard_dispatch).
@@ -644,7 +652,7 @@ impl<T: 'static> OverlaySpec<T> {
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, wheel_glide: None,
             wheel_line: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
-            frame_latency: None, keyboard_dispatch: crate::KeyboardDispatch::Batched, on_materials: None, animate_reveal: false, release_after: None,
+            frame_latency: None, wide_color: false, keyboard_dispatch: crate::KeyboardDispatch::Batched, on_materials: None, animate_reveal: false, release_after: None,
             renderer: crate::RendererKind::Gpu, sizing: crate::ContentSizing::Fixed, min_size: None, max_size: None,
         }
     }

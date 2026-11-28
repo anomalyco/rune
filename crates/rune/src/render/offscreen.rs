@@ -64,7 +64,8 @@ impl Offscreen {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let readback = rune_staging::Readback::new(device, "readback", width, height, 4);
+        let bytes_per_pixel = format.block_copy_size(None).unwrap_or(4);
+        let readback = rune_staging::Readback::new(device, "readback", width, height, bytes_per_pixel);
         Offscreen { texture, view, readback, width, height }
     }
 

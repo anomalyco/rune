@@ -849,6 +849,8 @@ pub(in crate::overlay) struct OverlayCore {
     frame_teardown: crate::render::loss_latch::FrameTeardownState,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
+    /// `ConfiguredOverlay::wide_color`, read when the surface is made.
+    pub(in crate::overlay) wide_color: bool,
     /// `ConfiguredOverlay::keyboard_dispatch`.
     pub(in crate::overlay) keyboard_dispatch: crate::KeyboardDispatch,
     /// `ConfiguredOverlay::on_materials`, called before each present.
@@ -985,6 +987,7 @@ impl OverlayCore {
             terminal_gpu_entered: false,
             frame_teardown: crate::render::loss_latch::FrameTeardownState::Idle,
             frame_latency: None,
+            wide_color: false,
             keyboard_dispatch: crate::KeyboardDispatch::Batched,
             on_materials: None,
             requested_renderer: crate::RendererKind::Gpu,

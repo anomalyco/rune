@@ -99,6 +99,15 @@ pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
     [r.origin.x, r.origin.y, r.size.width, r.size.height]
 }
 
+/// Whether the connected macOS screen matching `id` can represent Display P3.
+pub(crate) fn display_wide_color(id: u32) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|s| screen_id(s) == id)
+        .is_some_and(|s| s.canRepresentDisplayGamut(objc2_app_kit::NSDisplayGamut::P3))
+}
+
 /// Connected macOS displays' global top-left point bounds (`CGDisplayBounds`) and backing scale
 /// factors, plus `NSScreen::mainScreen`'s backing scale as the fallback scale.
 pub(crate) fn screen_bounds() -> (Vec<crate::window::placement::MacScreenBounds>, f64) {
