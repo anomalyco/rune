@@ -304,7 +304,7 @@ impl RuntimeCore {
         {
             let on_pill = input.on_pill_secondary.is_some()
                 && self.pointer.pos.and_then(|(x, y)| self.input_pill_at(i, x, y)).is_some();
-            return if on_pill || self.on_misspelled_word(path) { "app" } else { "field" };
+            return if on_pill || input.field_menu.is_some() || self.on_misspelled_word(path) { "app" } else { "field" };
         }
         "text"
     }

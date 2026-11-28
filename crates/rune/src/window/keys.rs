@@ -307,6 +307,8 @@ mod tests {
             (NamedKey::MediaStop, Key::Media(crate::MediaKey::Stop)),
             (NamedKey::MediaFastForward, Key::Media(crate::MediaKey::FastForward)),
             (NamedKey::MediaRewind, Key::Media(crate::MediaKey::Rewind)),
+            (NamedKey::BrowserBack, Key::BrowserBack),
+            (NamedKey::BrowserForward, Key::BrowserForward),
         ] {
             assert_eq!(map_key(&WKey::Named(named), ModifiersState::empty()).map(|ev| ev.key.clone()), Some(key));
         }

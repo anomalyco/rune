@@ -51,6 +51,7 @@ fn named_navigation_editing_function_and_media_keycodes_map_accurately() {
         (KEYCODE_PAGE_DOWN, Key::PageDown),
         (KEYCODE_ESCAPE, Key::Escape),
         (KEYCODE_INSERT, Key::Insert),
+        (KEYCODE_FORWARD, Key::BrowserForward),
         (KEYCODE_MENU, Key::ContextMenu),
         (KEYCODE_SYSRQ, Key::PrintScreen),
         (KEYCODE_SCROLL_LOCK, Key::ScrollLock),

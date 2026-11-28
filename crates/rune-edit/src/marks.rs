@@ -10,6 +10,7 @@ impl TextEdit {
         self.anchor = Self::clamp_char_boundary(&self.text, self.anchor);
         self.focus = Self::clamp_char_boundary(&self.text, self.focus);
         if self.secure {
+            self.secondary.clear();
             self.marks.clear();
             self.blocks.clear();
             self.soft_breaks.clear();
@@ -33,7 +34,7 @@ impl TextEdit {
         self.soft_breaks.dedup();
         self.soft_breaks.retain(|&idx| idx > 0 && (idx as usize) < line_count);
         self.normalize_marks();
-        self.snap_to_pills();
+        self.normalize_carets();
         let anchor_line = self.line_of_byte(self.anchor);
         if self.typing.at((self.anchor, self.focus)).is_none() || self.blocks.get(anchor_line) == Some(&Block::Code) {
             self.typing = Typing::Inherited;

@@ -26,6 +26,7 @@ mod loop_sleep;
 mod matched_in_place;
 mod matched_scroll;
 mod matched_zoom;
+mod multi_caret;
 mod no_motion;
 mod on_any_press;
 mod on_button;

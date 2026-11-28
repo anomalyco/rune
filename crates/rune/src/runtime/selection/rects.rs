@@ -203,21 +203,29 @@ impl RuntimeCore {
             return Vec::new();
         };
         if !inp.edit.focused || inp.edit.preedit().is_some() { return Vec::new(); }
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
         let (a, b) = inp.edit.range();
-        if a == b { return Vec::new(); }
-        let (da, db) = inp.edit.display_selection_range(a, b);
-        if da >= db { return Vec::new(); }
+        if a != b { ranges.push((a, b)); }
+        for (sa, sf, _) in inp.edit.secondary_carets() {
+            if sa != sf { ranges.push((sa.min(sf), sa.max(sf))); }
+        }
+        if ranges.is_empty() { return Vec::new(); }
+        ranges.sort_unstable();
         let [ox, oy] = self.field_text_origin(nodes, i, inp, spec, laid);
         let flow = laid.view();
         let s = self.env.scale;
         let mut out = Vec::new();
-        for (bb, _) in flow.range_boxes(da, db, true) {
-            out.push([
-                ox + bb.x0 as f32 / s,
-                oy + bb.y0 as f32 / s,
-                (bb.x1 - bb.x0) as f32 / s,
-                (bb.y1 - bb.y0) as f32 / s,
-            ]);
+        for (ra, rb) in ranges {
+            let (da, db) = inp.edit.display_selection_range(ra, rb);
+            if da >= db { continue; }
+            for (bb, _) in flow.range_boxes(da, db, true) {
+                out.push([
+                    ox + bb.x0 as f32 / s,
+                    oy + bb.y0 as f32 / s,
+                    (bb.x1 - bb.x0) as f32 / s,
+                    (bb.y1 - bb.y0) as f32 / s,
+                ]);
+            }
         }
         out
     }

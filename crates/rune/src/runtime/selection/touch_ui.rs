@@ -734,7 +734,7 @@ impl RuntimeCore {
             && self.tree.nodes[i].input.as_deref().is_some_and(|inp| inp.access.is_some() && inp.edit.preedit().is_none())
         {
             let path = self.tree.nodes[i].path.clone();
-            let Some((menu, field)) = self.build_field_menu(app, i, path) else {
+            let Some((menu, field)) = self.build_field_menu(app, i, path, (0.0, 0.0), None) else {
                 return false;
             };
             self.host.popups.push_back(crate::popup_menu::Request {

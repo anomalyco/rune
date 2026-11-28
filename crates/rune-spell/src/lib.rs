@@ -462,13 +462,25 @@ mod worker {
     }
 }
 
-/// The misspelled word of `text` at byte `at` (in it or at its end), once its words are checked.
-#[doc(hidden)]
+/// The misspelled word of `text` at UTF-8 byte offset `at` (inside the word or at its end),
+/// as a `(start, end)` byte range once its words have been checked.
+///
+/// Useful alongside `Tx::text_offset_at` or `El::field_menu` when building custom spelling UI.
+///
+/// ```
+/// assert_eq!(rune_spell::misspelled_at("", 0), None);
+/// ```
 pub fn misspelled_at(text: &str, at: usize) -> Option<(usize, usize)> {
     misspelled(text, None).iter().copied().find(|&(a, b)| a <= at && at <= b)
 }
-/// The checker's suggestions for misspelled `word`, best first.
-#[doc(hidden)]
+
+/// The platform spell checker's replacement suggestions for misspelled `word`, best first
+/// (capped at 5, matching Chromium's context menu). Returns an empty list where no checker or
+/// dictionary is available.
+///
+/// ```
+/// let _suggestions: Vec<String> = rune_spell::suggest("teh");
+/// ```
 pub fn suggest(word: &str) -> Vec<String> {
     let mut found = platform::suggest(word);
     found.retain(|s| s != word);
@@ -476,8 +488,8 @@ pub fn suggest(word: &str) -> Vec<String> {
     found
 }
 
-/// Adds `word` to the user's dictionary, so it's no longer marked anywhere.
-#[doc(hidden)]
+/// Adds `word` to the user's dictionary so the platform spell checker no longer marks it as
+/// misspelled and clears Rune's thread-local spellcheck cache.
 pub fn learn(word: &str) {
     platform::learn(word);
     CHECKED.with_borrow_mut(|(_, checked)| checked.clear());

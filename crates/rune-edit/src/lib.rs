@@ -24,6 +24,7 @@ mod input;
 mod keys;
 mod marks;
 mod model;
+mod multi_caret;
 mod replace;
 mod secure;
 mod typing;
@@ -85,6 +86,7 @@ pub use model::Mark;
 pub use model::MarkRange;
 pub use model::ParagraphInfo;
 pub use model::RichStyle;
+pub use multi_caret::Caret;
 #[doc(hidden)]
 pub use replace::next_char;
 #[doc(hidden)]
@@ -97,6 +99,7 @@ pub use secure::Masking;
 use caret_motion::Column;
 use direction_keys::FieldDir;
 use history::{EditKind, EditedTag, Group};
+use multi_caret::SecondaryCaret;
 use replace::{count_newlines, prev_backspace};
 use secure::LineMode;
 use typing::Typing;
@@ -107,6 +110,8 @@ pub struct TextEdit {
     pub text: String,
     pub anchor: usize,
     pub focus: usize,
+    /// Additional carets/selections for multi-cursor editing; empty in single-caret mode.
+    secondary: Vec<SecondaryCaret>,
     /// The input method's composition (`TextEdit::preedit`).
     composition: ime::Composition,
     pub focused: bool,
@@ -158,6 +163,10 @@ impl std::fmt::Debug for TextEdit {
             s.field("text", &self.text)
                 .field("anchor", &self.anchor)
                 .field("focus", &self.focus);
+            if !self.secondary.is_empty() {
+                let extra: Vec<Caret> = self.secondary.iter().map(SecondaryCaret::as_caret).collect();
+                s.field("secondary", &extra);
+            }
         }
         s.field("focused", &self.focused)
             .field("marks", &self.marks).field("blocks", &self.blocks)
@@ -185,6 +194,13 @@ impl std::hash::Hash for TextEdit {
                 self.text.hash(h);
                 self.anchor.hash(h);
                 self.focus.hash(h);
+                if !self.secondary.is_empty() {
+                    self.secondary.len().hash(h);
+                    for c in &self.secondary {
+                        c.anchor.hash(h);
+                        c.focus.hash(h);
+                    }
+                }
             }
         }
         self.composition.hash(h);
@@ -272,6 +288,7 @@ impl TextEdit {
             text,
             anchor: n,
             focus: n,
+            secondary: Vec::new(),
             composition: ime::Composition::Idle,
             focused: false,
             marks: Vec::new(),
@@ -694,6 +711,7 @@ impl TextEdit {
         self.text = text;
         self.anchor = self.text.len();
         self.focus = self.anchor;
+        self.secondary.clear();
         self.marks.clear();
         self.blocks = vec![Block::Paragraph; line_count];
         self.soft_breaks.clear();
@@ -759,6 +777,7 @@ impl TextEdit {
         let b = Self::clamp_char_boundary(&self.text, byte);
         self.anchor = b;
         self.focus = b;
+        self.secondary.clear();
         self.snap_to_pills();
         self.typing = Typing::Inherited;
         self.column = Column::Free;
@@ -771,6 +790,7 @@ impl TextEdit {
     pub fn set_selection(&mut self, anchor: usize, focus: usize) {
         self.anchor = Self::clamp_char_boundary(&self.text, anchor);
         self.focus = Self::clamp_char_boundary(&self.text, focus);
+        self.secondary.clear();
         self.snap_to_pills();
         self.typing = Typing::Inherited;
         self.column = Column::Free;
@@ -862,6 +882,10 @@ impl TextEdit {
     }
 
     pub fn insert(&mut self, s: &str) {
+        if !self.secondary.is_empty() && !self.secure {
+            self.multi_insert(s, EditKind::Other);
+            return;
+        }
         self.replace(self.range(), s, EditKind::Other);
     }
 

@@ -301,6 +301,8 @@ impl PillStyle {
 }
 pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::ClipboardContent, &mut Tx) -> bool>;
 pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx) -> Option<crate::ClipboardContent>>;
+pub(crate) type FieldMenuBuildFn = Rc<dyn Fn(crate::states::States<'_>, &crate::FieldMenuContext, crate::PopupMenu) -> crate::PopupMenu>;
+pub(crate) type FieldMenuPickFn = Rc<dyn Fn(crate::states::States<'_>, &str, &crate::FieldMenuContext, &mut Tx)>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
 pub(crate) type TextLineFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::TextLine>, &mut Tx)>;

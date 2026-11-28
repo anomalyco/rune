@@ -90,7 +90,7 @@ function isPlainCopyChord(event) {
 
 function browserShortcut(event, inField = false) {
     const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
-    if (event.key === 'F5' || event.key === 'F12') return true;
+    if (event.key === 'F5' || event.key === 'F12' || BROWSER_NAV_KEYS.includes(event.key)) return true;
     if (!chord) return false;
     const k = event.key.toLowerCase();
     // With Alt only the developer tools' chords are the browser's: Ctrl+Alt+W and the like are
@@ -134,6 +134,8 @@ const SCROLL_KEYS = [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'Arrow
 const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
 // Hardware media transport keys Rune parses when opted in via `App::media_keys`.
 const MEDIA_KEYS = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaStop', 'MediaFastForward', 'MediaRewind'];
+// Dedicated browser/history navigation keys; left un-prevented unless a Rune handler consumes them.
+const BROWSER_NAV_KEYS = ['BrowserBack', 'BrowserForward'];
 
 const graphemeSegmenter = typeof Intl?.Segmenter === 'function'
     ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -752,11 +754,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             // focused fields receive them as canvas focus does.
             const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event, inField);
             const mediaKey = h.mediaKeys && MEDIA_KEYS.includes(event.key);
+            const browserNavKey = BROWSER_NAV_KEYS.includes(event.key);
             // When no Rune text field is active, single printable characters are control/shortcut
             // keys (matching canvas focus) rather than text input for the hidden proxy.
             const printableKey = !inField && !chord && typeof event.key === 'string'
                 && Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f-\u009f]/.test(event.key);
-            if (!chord && !functionKey && !mediaKey && !printableKey && !editing.includes(event.key)) return;
+            if (!chord && !functionKey && !mediaKey && !browserNavKey && !printableKey && !editing.includes(event.key)) return;
             if (inField && chord && event.key.toLowerCase() === 'v') return;
             // Browser-reserved chords stay un-prevented unless a Rune handler consumes them
             // synchronously (signaled via `syncKey`), while text-editing chords always preventDefault.

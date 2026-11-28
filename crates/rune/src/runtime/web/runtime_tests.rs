@@ -259,6 +259,25 @@ fn web_key_gates_media_keys_on_opt_in_and_maps_all_w3c_media_names() {
 }
 
 #[test]
+fn web_key_maps_browser_back_and_forward_without_opt_in() {
+    type Seen = Vec<crate::Key>;
+    fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
+    let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
+    rt.on_key = Some(|s, ev, _| { s.push(ev.key.clone()); true });
+    rt.frame(0.0);
+
+    for (dom, expected) in [
+        ("BrowserBack", crate::Key::BrowserBack),
+        ("BrowserForward", crate::Key::BrowserForward),
+    ] {
+        rt.web_key(&json!({"kind":"key", "key":dom, "code":dom}));
+        rt.frame(0.0);
+        assert_eq!(rt.state.last(), Some(&expected), "{dom}");
+    }
+    assert_eq!(rt.state.len(), 2);
+}
+
+#[test]
 fn clearing_text_in_on_input_change_resyncs_mirror_after_each_dom_edit() {
     #[derive(Default)]
     struct S { edit: crate::TextEdit, sent: Vec<String>, copy: bool, blur: bool }

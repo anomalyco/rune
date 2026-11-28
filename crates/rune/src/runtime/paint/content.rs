@@ -446,6 +446,7 @@ impl RuntimeCore {
             }
             // Text fields: selection under the text, placeholder, caret over it.
             let mut caret = None;
+            let mut extra_carets: Vec<[f32; 4]> = Vec::new();
             // The selected display bytes and the ink their `El::selection_style` gives them.
             let mut selected_ink: Option<(usize, usize, [f32; 4])> = None;
             if let Some(inp) = &n.input {
@@ -510,17 +511,38 @@ impl RuntimeCore {
                 }
                 if e.focused && !departing {
                     let (a, b) = e.range();
+                    let (highlight, ink) = inp.selection_style.map_or((inp.selection, None), |st| st.pick(self.host.window_focused != Some(false)));
+                    let hl_premul = premul(highlight, o, srgb);
                     if a != b && e.preedit().is_none() {
                         let (da, db) = e.display_selection_range(a, b);
                         // An inactive window paints a field's selection in its inactive pair, as a browser does.
-                        let (highlight, ink) = inp.selection_style.map_or((inp.selection, None), |st| st.pick(self.host.window_focused != Some(false)));
                         selectable::push_field_selection(&mut self.instances, flow, da.max(shown_a), db.min(shown_b),
-                            origin, tk, premul(highlight, o, srgb), s, clip, fade);
+                            origin, tk, hl_premul, s, clip, fade);
                         selected_ink = ink.map(|c| (da, db, premul(c, o, srgb)));
                     }
                     // A range selection hides the caret, as a browser's field and a native one do.
                     if a == b || e.is_composing() {
                         caret = input_caret;
+                    }
+                    if e.has_extra_carets() && e.preedit().is_none() {
+                        for (sa, sf, aff) in e.secondary_carets() {
+                            if sa != sf {
+                                let (da, db) = e.display_selection_range(sa.min(sf), sa.max(sf));
+                                selectable::push_field_selection(&mut self.instances, flow, da.max(shown_a), db.min(shown_b),
+                                    origin, tk, hl_premul, s, clip, fade);
+                            } else if input_caret.is_some() {
+                                let bb = flow.caret(e.display_index(sf).min(spec.content.len()), aff, 1.5 * s);
+                                let (cx, cy) = (origin[0] + bb.x0 as f32 * tk, origin[1] + bb.y0 as f32 * tk);
+                                let ch = (if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 } else { spec.style.line_px() * s }) * tk;
+                                let (caret_x, caret_w) = if (tk - 1.0).abs() <= 1e-5 {
+                                    let gx = if gliding { pixel_snap::text_glide(r[0]) } else { 0.0 };
+                                    ((cx - gx).round() + gx, (1.5 * s).round().max(1.0))
+                                } else {
+                                    (cx, (1.5 * s * tk).max(1.0))
+                                };
+                                extra_carets.push([caret_x, cy + ch * 0.1, caret_w, ch * 0.8]);
+                            }
+                        }
                     }
                     // The composition's underline: thin under what's composed, thick under the
                     // clause being converted, each clause a point short at both ends so clauses
@@ -1008,16 +1030,24 @@ impl RuntimeCore {
                     self.paint.text_quads.insert(node, piece_index, layout_id, d);
                 }
             }
-            if let Some(c) = caret
-                && c[2] > 0.0 && c[3] > 0.0
-                && c[0] + c[2] > clip[0] && c[0] < clip[2]
-                && c[1] + c[3] > clip[1] && c[1] < clip[3]
-            {
-                let caret_color = match &n.input {
+            let caret_color = if caret.is_some() || !extra_carets.is_empty() {
+                let c = match &n.input {
                     Some(inp) => if inp.caret_inked { inp.caret } else { color },
                     None => spec.cold.caret.unwrap_or(color),
                 };
-                self.instances.push(rect_inst(c, premul(caret_color, o, srgb), 0.0, clip, fade));
+                Some(premul(c, o, srgb))
+            } else {
+                None
+            };
+            if let Some(cc) = caret_color {
+                for c in caret.into_iter().chain(extra_carets) {
+                    if c[2] > 0.0 && c[3] > 0.0
+                        && c[0] + c[2] > clip[0] && c[0] < clip[2]
+                        && c[1] + c[3] > clip[1] && c[1] < clip[3]
+                    {
+                        self.instances.push(rect_inst(c, cc, 0.0, clip, fade));
+                    }
+                }
             }
             if let Some(at) = inline_image_wake {
                 arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);

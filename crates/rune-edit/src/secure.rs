@@ -61,6 +61,7 @@ impl TextEdit {
             if self.group.is_open() {
                 self.group = Group::Unrecorded;
             }
+            self.secondary.clear();
             self.marks.clear();
             self.blocks.clear();
             self.soft_breaks.clear();
