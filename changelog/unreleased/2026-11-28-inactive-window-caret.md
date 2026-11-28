@@ -1,0 +1,1 @@
+- Fixed a focused text field still drawing its caret while its window was inactive, which read as if typing would land there: the caret now goes when the window loses focus and comes back with it, as a native field's does. The field keeps its focus, selection and IME area.
