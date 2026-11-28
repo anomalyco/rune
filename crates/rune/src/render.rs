@@ -593,22 +593,28 @@ impl Renderer {
             }
             let (origin, size) = self.target_frame(target);
             // Scissor to the slot's clip rectangle, so a compositor that ignores `clip` still
-            // stays inside its scroll view or clipped ancestor.
+            // stays inside its scroll view or clipped ancestor. Inside an inline scope, whose
+            // clip is the scissor already set (`draw_layer_range`), both apply: a slot under a
+            // rounded ancestor keeps only that mask in `clip`, its rectangular cut on the scope.
             let c = instance.clip;
             let edge = |v: f32, o: f32, max: u32| (v - o).clamp(0.0, max as f32) as u32;
-            let (x0, y0) = (edge(c[0].floor(), origin[0], size[0]), edge(c[1].floor(), origin[1], size[1]));
-            let (x1, y1) = (edge(c[2].ceil(), origin[0], size[0]), edge(c[3].ceil(), origin[1], size[1]));
+            let (mut x0, mut y0) = (edge(c[0].floor(), origin[0], size[0]), edge(c[1].floor(), origin[1], size[1]));
+            let (mut x1, mut y1) = (edge(c[2].ceil(), origin[0], size[0]), edge(c[3].ceil(), origin[1], size[1]));
+            let outer = pass.scissor();
+            if let Some([ox, oy, ow, oh]) = outer {
+                (x0, y0, x1, y1) = (x0.max(ox), y0.max(oy), x1.min(ox + ow), y1.min(oy + oh));
+            }
             if x1 <= x0 || y1 <= y0 { continue; }
             let backdrop = if instance.params[0] != 0.0 {
                 pass.split_for_backdrop(self, *at, instance, format, origin, size, target.is_some(), hook)
             } else {
                 None
             };
-            pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+            pass.set_scissor(Some([x0, y0, x1 - x0, y1 - y0]), size);
             hook(EffectPhase::Draw(pass), &EffectSite { index: *at, instance, mark: effect_mark(instance), data: instance.uv, scale: instance.params[3],
                 format, origin, size, in_layer: target.is_some(), srgb_blend: self.srgb_blend, backdrop, fade_stops: self.fade_stops });
             pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
-            pass.set_scissor(pass.scissor(), size);
+            pass.set_scissor(outer, size);
         }
         self.draw_instances(pass, format, cursor..range.end, target);
     }

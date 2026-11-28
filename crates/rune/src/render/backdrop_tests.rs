@@ -156,3 +156,35 @@ fn a_blur_alone_pools_a_copy_of_its_region_not_of_the_window() {
     assert_eq!((renderer.backdrops[0].texture.width(), renderer.backdrops[0].texture.height()), size);
     assert_eq!(renderer.backdrops[0].origin, [0, 0]);
 }
+
+/// A slot inside an inline scope (a rectangular cut kept on its own scope under a rounded clip,
+/// `paint/build/layers.rs`) gets the scope's clip too: a compositor painting the whole target
+/// there paints only where the scope shows.
+#[test]
+fn an_effect_slot_inside_an_inline_scope_is_scissored_by_the_scope_too() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut slot = rect([0.0, 0.0, 32.0, 32.0], [0.0, 0.0, 0.0, 1.0]);
+    slot.params = [0.0, KIND_EFFECT, 0.0, 1.0];
+    let scope = Instance::begin_layer([0.0, 0.0, 32.0, 32.0], [0.0, 16.0, 32.0, 32.0], LayerSpec::default());
+    renderer.prepare(device, queue, &mut text.atlas, &[scope, slot, Instance::end_layer()], (32, 32));
+    // What the compositor paints at the slot: red over the whole target.
+    let mut paint = Renderer::new(device, OFFSCREEN_FORMAT);
+    paint.prepare(device, queue, &mut text.atlas, &[rect([0.0, 0.0, 32.0, 32.0], [1.0, 0.0, 0.0, 1.0])], (32, 32));
+    let target = Offscreen::new(device, 32, 32);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut hooks = 0;
+    renderer.draw_with(&mut encoder, &target.view, [0.0; 4], &mut |pass, _| {
+        hooks += 1;
+        paint.draw_range_with(pass, OFFSCREEN_FORMAT, 0..1, &mut |_, _| {});
+    });
+    target.copy(&mut encoder);
+    queue.submit([encoder.finish()]);
+    assert_eq!(hooks, 1);
+    let pixels = target.read(device);
+    let at = |y: usize| &pixels[(y * 32 + 16) * 4..(y * 32 + 16) * 4 + 4];
+    assert_eq!(at(8), &[0, 0, 0, 0], "outside the scope's clip: untouched");
+    assert_eq!(at(24), &[255, 0, 0, 255], "inside it: painted");
+}
