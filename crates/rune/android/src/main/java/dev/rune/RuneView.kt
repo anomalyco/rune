@@ -214,13 +214,24 @@ open class RuneView(
         }
         outAttrs.inputType = imeInputType
         outAttrs.imeOptions = imeOptions
+        val sel = nativeGetSelection()
+        if (sel != null && sel.size >= 2) {
+            outAttrs.initialSelStart = sel[0]
+            outAttrs.initialSelEnd = sel[1]
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            val text = nativeGetWindowText()
+            if (text != null) {
+                outAttrs.setInitialSurroundingText(text)
+            }
+        }
         return RuneInputConnection(this)
     }
 
     /**
      * Called by Rust (UI thread) after frames or lifecycle changes when text input enables,
-     * disables, switches editor kind, resets composition, or re-shows after a tap on a focused
-     * field.
+     * disables, switches editor kind, resets composition (including paragraph changes), or
+     * re-shows after a tap on a focused field.
      */
     fun setImeState(enabled: Boolean, restart: Boolean, inputType: Int, imeOptions: Int) {
         val wasEnabled = imeEnabled
@@ -259,6 +270,17 @@ open class RuneView(
         }
     }
 
+    /**
+     * Called by Rust (UI thread) after frames when the active paragraph window's UTF-16 selection
+     * or composing span changes without requiring `restartInput`.
+     */
+    fun updateImeSelection(selStart: Int, selEnd: Int, composingStart: Int, composingEnd: Int) {
+        if (!imeEnabled) return
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            ?: return
+        imm.updateSelection(this, selStart, selEnd, composingStart, composingEnd)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (dispatchKeyDown(event)) {
             return true
@@ -293,12 +315,44 @@ open class RuneView(
         nativeSetComposingText(text, newCursorPosition)
     }
 
+    internal fun onImeSetComposingRegion(start: Int, end: Int) {
+        nativeSetComposingRegion(start, end)
+    }
+
     internal fun onImeFinishComposingText() {
         nativeFinishComposingText()
     }
 
+    internal fun onImeSetSelection(start: Int, end: Int) {
+        nativeSetSelection(start, end)
+    }
+
     internal fun onImeDeleteSurroundingText(beforeLength: Int, afterLength: Int) {
         nativeDeleteSurroundingText(beforeLength, afterLength)
+    }
+
+    internal fun onImeDeleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) {
+        nativeDeleteSurroundingTextInCodePoints(beforeLength, afterLength)
+    }
+
+    internal fun onImeGetTextBeforeCursor(n: Int): String? {
+        return nativeGetTextBeforeCursor(n)
+    }
+
+    internal fun onImeGetTextAfterCursor(n: Int): String? {
+        return nativeGetTextAfterCursor(n)
+    }
+
+    internal fun onImeGetSelectedText(): String? {
+        return nativeGetSelectedText()
+    }
+
+    internal fun onImeGetWindowText(): String? {
+        return nativeGetWindowText()
+    }
+
+    internal fun onImeGetSelection(): IntArray? {
+        return nativeGetSelection()
     }
 
     internal fun onImeEditorAction(editorAction: Int): Boolean {
@@ -815,8 +869,16 @@ open class RuneView(
     private external fun nativeFilePickError(requestId: Long, message: String)
     private external fun nativeCommitText(text: String)
     private external fun nativeSetComposingText(text: String, newCursorPosition: Int)
+    private external fun nativeSetComposingRegion(start: Int, end: Int)
     private external fun nativeFinishComposingText()
+    private external fun nativeSetSelection(start: Int, end: Int)
     private external fun nativeDeleteSurroundingText(beforeLength: Int, afterLength: Int)
+    private external fun nativeDeleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int)
+    private external fun nativeGetTextBeforeCursor(n: Int): String?
+    private external fun nativeGetTextAfterCursor(n: Int): String?
+    private external fun nativeGetSelectedText(): String?
+    private external fun nativeGetWindowText(): String?
+    private external fun nativeGetSelection(): IntArray?
     private external fun nativeEditorAction(actionCode: Int): Boolean
     private external fun nativeKeyDown(
         keyCode: Int,

@@ -26,11 +26,12 @@ use crate::windows::{AnyWindowSpec, Display, WindowSpec};
 use crate::{Key, KeyEvent};
 
 use super::bridge::{
-    self, call_void_0, call_void_bool_bool_int_int, call_void_long, jni_clear_exception,
-    jni_delete_global_ref, jni_method,
+    self, call_void_0, call_void_4_ints, call_void_bool_bool_int_int, call_void_long,
+    jni_clear_exception, jni_delete_global_ref, jni_method,
 };
 use super::document;
 use super::editor::EditorConfig;
+use super::ime_window::{ImeEdit, ImeWindow, SelectionState};
 use super::input::{self, TextInputAction};
 use super::machine::{self, Effect, Event, State, Surface};
 use super::picker::{PickAnswer, PickRequest, PickStep};
@@ -50,6 +51,7 @@ pub(super) struct ViewBridge {
     post_wake: jmethodID,
     perform_haptic: jmethodID,
     set_ime_state: jmethodID,
+    update_ime_selection: jmethodID,
     schedule_a11y_wake_after: jmethodID,
     cancel_a11y_wake: jmethodID,
     api_level: i32,
@@ -250,14 +252,8 @@ pub unsafe fn jni_on_load(vm: *mut c_void, entry: fn()) -> i32 {
         jni_method(c"nativeFilePickResult", c"(J[Ljava/lang/String;[Ljava/lang/String;)V", document::native_file_pick_result as *const () as *mut c_void),
         jni_method(c"nativeFilePickCancelled", c"(J)V", document::native_file_pick_cancelled as *const () as *mut c_void),
         jni_method(c"nativeFilePickError", c"(JLjava/lang/String;)V", document::native_file_pick_error as *const () as *mut c_void),
-        jni_method(c"nativeCommitText", c"(Ljava/lang/String;)V", input::jni::native_commit_text as *const () as *mut c_void),
-        jni_method(c"nativeSetComposingText", c"(Ljava/lang/String;I)V", input::jni::native_set_composing_text as *const () as *mut c_void),
-        jni_method(c"nativeFinishComposingText", c"()V", input::jni::native_finish_composing_text as *const () as *mut c_void),
-        jni_method(c"nativeDeleteSurroundingText", c"(II)V", input::jni::native_delete_surrounding_text as *const () as *mut c_void),
-        jni_method(c"nativeEditorAction", c"(I)Z", input::jni::native_editor_action as *const () as *mut c_void),
-        jni_method(c"nativeKeyDown", c"(IIIIZ)Z", input::jni::native_key_down as *const () as *mut c_void),
-        jni_method(c"nativeKeyUp", c"(IIII)Z", input::jni::native_key_up as *const () as *mut c_void),
     ];
+    methods.extend(input::jni::native_methods());
     methods.extend(super::a11y::native_methods());
     methods.extend(selection_jni::native_methods());
 
@@ -287,6 +283,8 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         let post_wake = get_method(env, cls, c"postWake".as_ptr(), c"()V".as_ptr());
         let perform_haptic = get_method(env, cls, c"performHaptic".as_ptr(), c"(I)V".as_ptr());
         let set_ime_state = get_method(env, cls, c"setImeState".as_ptr(), c"(ZZII)V".as_ptr());
+        let update_ime_selection =
+            get_method(env, cls, c"updateImeSelection".as_ptr(), c"(IIII)V".as_ptr());
         let schedule_a11y_wake_after =
             get_method(env, cls, c"scheduleA11yWakeAfter".as_ptr(), c"(JJ)V".as_ptr());
         let cancel_a11y_wake = get_method(env, cls, c"cancelA11yWake".as_ptr(), c"()V".as_ptr());
@@ -304,6 +302,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             || post_wake.is_null()
             || perform_haptic.is_null()
             || set_ime_state.is_null()
+            || update_ime_selection.is_null()
             || schedule_a11y_wake_after.is_null()
             || cancel_a11y_wake.is_null()
             || start_document_pick.is_null()
@@ -336,6 +335,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             post_wake,
             perform_haptic,
             set_ime_state,
+            update_ime_selection,
             schedule_a11y_wake_after,
             cancel_a11y_wake,
             api_level,
@@ -416,6 +416,26 @@ pub(super) fn deliver_text_input(env: *mut JNIEnv, action: TextInputAction) -> b
     });
     if accepted { let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut()); }
     accepted
+}
+
+pub(super) fn deliver_ime_edit(env: *mut JNIEnv, edit: ImeEdit) -> bool {
+    let accepted = HOST.with(|slot| {
+        let mut borrow = slot.borrow_mut();
+        let Some(host) = borrow.as_mut() else { return false };
+        if host.state.destroyed { return false; }
+        host.stack.ime_edit(edit)
+    });
+    if accepted { let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut()); }
+    accepted
+}
+
+pub(super) fn query_ime_window<R>(f: impl FnOnce(&ImeWindow) -> R) -> Option<R> {
+    HOST.with(|slot| {
+        let borrow = slot.borrow();
+        let host = borrow.as_ref()?;
+        if host.state.destroyed { return None; }
+        Some(f(host.stack.ime_window()?))
+    })
 }
 
 pub(super) fn deliver_key_up(env: *mut JNIEnv, event: KeyEvent) -> bool {
@@ -537,6 +557,7 @@ fn dispatch(
     let mut consumed_back = false;
     let mut pending_window = pending_window;
     let mut pending_ime: Option<(jobject, jmethodID, Option<EditorConfig>, bool)> = None;
+    let mut pending_selection: Option<(jobject, jmethodID, SelectionState)> = None;
     let mut pending_picks: Vec<(Arc<Mutex<Option<ViewBridge>>>, PickRequest)> = Vec::new();
     let mut shutdown_bridge: Option<ViewBridge> = None;
     let mut pending_ui: Option<(Arc<Mutex<Option<ViewBridge>>>, f32, Presentation)> = None;
@@ -636,8 +657,10 @@ fn dispatch(
                 }
                 Effect::FinishComposition => {
                     host.stack.finish_composition();
+                    host.stack.clear_ime_window();
                 }
                 Effect::SetIme { editor, restart } => {
+                    if editor.is_none() { host.stack.clear_ime_window(); }
                     if let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                         pending_ime = Some((v.obj, v.set_ime_state, editor, restart));
                     }
@@ -657,7 +680,7 @@ fn dispatch(
                     let frame_result = host.surface.as_mut().and_then(|surface| {
                         host.stack.draw_top(surface)
                     });
-                    if let Some((outcome, pending_haptics, pick_step, editor)) = frame_result {
+                    if let Some((outcome, pending_haptics, pick_step, (editor, window_sync))) = frame_result {
                         if !pending_haptics.is_empty()
                             && let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
                         {
@@ -685,7 +708,7 @@ fn dispatch(
                                 animating: needs_redraw,
                                 wake_after_secs: wake,
                                 editor: editor.config,
-                                ime_restart: editor.reset,
+                                ime_restart: editor.reset || window_sync.restart_input,
                                 field_tap: editor.field_tap,
                             },
                         );
@@ -697,6 +720,13 @@ fn dispatch(
                             } else {
                                 apply_view_schedule(env, &host.bridge, next);
                             }
+                        }
+                        if pending_ime.is_none()
+                            && host.state.ime_editor.is_some()
+                            && let Some(sel) = window_sync.update_selection
+                            && let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                        {
+                            pending_selection = Some((v.obj, v.update_ime_selection, sel));
                         }
                         #[cfg(feature = "accessibility")]
                         if let Some(sync) = host.stack.a11y_sync(&mut host.a11y, crate::time::now()) {
@@ -741,8 +771,8 @@ fn dispatch(
         unsafe { selection_jni::apply_presentation_bridge(env, &bridge, scale, p) };
     }
 
-    // Run `setImeState` and SAF pickers after releasing the `HOST` RefCell borrow so
-    // synchronous Java callbacks cannot re-enter a borrowed `HOST`.
+    // Run `setImeState`, `updateImeSelection`, and SAF pickers after releasing the `HOST`
+    // RefCell borrow so synchronous Java callbacks cannot re-enter a borrowed `HOST`.
     if let Some((obj, method, editor, restart)) = pending_ime {
         let (enabled, input_type, ime_options) = match editor {
             Some(cfg) => (true, cfg.input_type, cfg.ime_options),
@@ -751,6 +781,20 @@ fn dispatch(
         // SAFETY: `env` is the UI thread's `JNIEnv*` and `obj` stays live until
         // `shutdown_bridge` is deleted right below.
         unsafe { call_void_bool_bool_int_int(env, obj, method, enabled, restart, input_type, ime_options) };
+    } else if let Some((obj, method, sel)) = pending_selection {
+        // SAFETY: `env` is the UI thread's `JNIEnv*` and `obj` stays live until
+        // `shutdown_bridge` is deleted right below.
+        unsafe {
+            call_void_4_ints(
+                env,
+                obj,
+                method,
+                sel.sel_start,
+                sel.sel_end,
+                sel.composing_start,
+                sel.composing_end,
+            );
+        }
     }
     if let Some(bridge) = shutdown_bridge {
         // SAFETY: `env` is the UI thread's `JNIEnv*` and `bridge.obj` is a live global ref.

@@ -20,6 +20,9 @@ mod editor_tests;
 pub(crate) mod haptics;
 #[cfg(target_os = "android")]
 mod host;
+pub(crate) mod ime_window;
+#[cfg(test)]
+mod ime_window_tests;
 pub(crate) mod input;
 #[cfg(test)]
 mod input_tests;

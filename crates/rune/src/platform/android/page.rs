@@ -30,6 +30,8 @@ use super::editor::{self, EditorSnapshot};
 #[cfg(target_os = "android")]
 use super::host::ViewBridge;
 #[cfg(target_os = "android")]
+use super::ime_window::{self, ImeEdit, ImeWindow, WindowSync};
+#[cfg(target_os = "android")]
 use super::input::{self, TextInputAction};
 #[cfg(target_os = "android")]
 use crate::runtime::selection::touch_ui::{Handle, TouchSelectionSnapshot};
@@ -128,6 +130,8 @@ impl PageEntry {
             clipboard: crate::clipboard::Client::default(),
 
             #[cfg(target_os = "android")]
+            ime_window: ImeWindow::default(),
+            #[cfg(target_os = "android")]
             clock: None,
             #[cfg(target_os = "android")]
             renderer: None,
@@ -177,11 +181,17 @@ pub(super) trait AndroidPage {
     #[cfg(target_os = "android")]
     fn text_input(&mut self, action: TextInputAction, env: StackEnv, wake: &Waker) -> bool;
     #[cfg(target_os = "android")]
+    fn ime_edit(&mut self, edit: ImeEdit, env: StackEnv, wake: &Waker) -> bool;
+    #[cfg(target_os = "android")]
+    fn ime_window(&self) -> &ImeWindow;
+    #[cfg(target_os = "android")]
     fn key_up(&mut self, ev: KeyEvent, env: StackEnv, wake: &Waker) -> bool;
     #[cfg(target_os = "android")]
     fn finish_composition(&mut self);
     #[cfg(target_os = "android")]
-    fn sample_editor(&mut self) -> EditorSnapshot;
+    fn sample_editor(&mut self) -> (EditorSnapshot, WindowSync);
+    #[cfg(target_os = "android")]
+    fn clear_ime_window(&mut self);
     #[cfg(target_os = "android")]
     fn selection_snapshot(&self) -> Option<TouchSelectionSnapshot>;
     #[cfg(target_os = "android")]
@@ -248,6 +258,8 @@ struct TypedPage<S: 'static> {
     #[cfg(target_os = "android")]
     clipboard: crate::clipboard::Client,
 
+    #[cfg(target_os = "android")]
+    ime_window: ImeWindow,
     #[cfg(target_os = "android")]
     clock: Option<FrameClock>,
     #[cfg(target_os = "android")]
@@ -399,6 +411,8 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
                 rt.window_focus(false);
                 rt.set_live_visible(false);
             }
+            #[cfg(target_os = "android")]
+            self.ime_window.clear();
         }
     }
 
@@ -557,6 +571,18 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
     }
 
     #[cfg(target_os = "android")]
+    fn ime_edit(&mut self, edit: ImeEdit, env: StackEnv, wake: &Waker) -> bool {
+        self.ensure_runtime(env, wake);
+        let Some(rt) = &mut self.rt else { return false };
+        ime_window::apply_ime_edit(rt.core_mut(), &mut self.ime_window, edit)
+    }
+
+    #[cfg(target_os = "android")]
+    fn ime_window(&self) -> &ImeWindow {
+        &self.ime_window
+    }
+
+    #[cfg(target_os = "android")]
     fn key_up(&mut self, ev: KeyEvent, env: StackEnv, wake: &Waker) -> bool {
         self.ensure_runtime(env, wake);
         let Some(rt) = &mut self.rt else { return false };
@@ -571,11 +597,24 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
     }
 
     #[cfg(target_os = "android")]
-    fn sample_editor(&mut self) -> EditorSnapshot {
+    fn sample_editor(&mut self) -> (EditorSnapshot, WindowSync) {
         let Some(rt) = &mut self.rt else {
-            return EditorSnapshot::default();
+            self.ime_window.clear();
+            return (EditorSnapshot::default(), WindowSync::NONE);
         };
-        editor::sample_editor(rt.core_mut())
+        let core = rt.core_mut();
+        let editor = editor::sample_editor(core);
+        let ime_allowed = editor.config.is_some();
+        let ime_text = if ime_allowed { core.ime_text() } else { None };
+        let preedit = if ime_allowed { core.focused_preedit() } else { None };
+        let window_sync =
+            self.ime_window.sync_after_frame(ime_allowed, ime_text, preedit, editor.reset);
+        (editor, window_sync)
+    }
+
+    #[cfg(target_os = "android")]
+    fn clear_ime_window(&mut self) {
+        self.ime_window.clear();
     }
 
     #[cfg(target_os = "android")]
