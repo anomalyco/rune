@@ -1,6 +1,6 @@
 name: android
 
-# Cross-check core crates (rune and rune-kit) for Android targets on pull requests and pushes to dev.
+# Cross-check core crates (rune and rune-kit) and package examples/android-hello for Android.
 on:
   push:
     branches: [dev]
@@ -58,3 +58,20 @@ jobs:
           cargo check --target ${{ matrix.target }}
           -p rune -p rune-kit
           --features rune/embedded-fonts,rune/accessibility,rune/tooling,rune/segmenter-dictionaries,rune/svg,rune/avif,rune-kit/markdown,rune-kit/mermaid
+
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-apk-x86_64
+          cache-on-failure: true
+      - name: Build android-hello APK
+        shell: bash
+        run: bash scripts/android-run.sh --build-only --abi x86_64

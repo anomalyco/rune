@@ -458,6 +458,24 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn set_safe_area(&mut self, insets: [f32; 4]) { self.core_mut().set_safe_area(insets); }
+    /// Sets the bottom overlap of an on-screen software keyboard in logical points reported by
+    /// [`Cx::keyboard_inset`](crate::Cx::keyboard_inset) (for example, Android
+    /// `WindowInsets.Type.ime()` under `adjustNothing` or iOS `keyboardLayoutGuide`).
+    ///
+    /// Kept separate from [`Self::set_safe_area`] so hardware edge-drag bands
+    /// ([`El::on_edge_drag`](crate::El::on_edge_drag)) do not expand by the keyboard height.
+    /// When positive, automatic caret reveal scrolls focused fields into the visible band above
+    /// the keyboard. Negative and non-finite values clamp to `0.0`.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// # fn view(_: &f32, cx: &mut Cx<f32>) -> El { let _ = cx.keyboard_inset(); el() }
+    /// let mut rt = Runtime::new(0.0, view, (390.0, 844.0), Env::new(true, 1.0));
+    /// rt.set_keyboard_inset(312.0);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_keyboard_inset(&mut self, points: f32) { self.core_mut().set_keyboard_inset(points); }
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) { self.core_mut().set_caption(caption); }

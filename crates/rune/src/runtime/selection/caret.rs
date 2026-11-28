@@ -305,7 +305,11 @@ impl RuntimeCore {
                 let a = usize::from(!horizontal);
                 let mut start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
                 let mut end = start + (self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
-                if !horizontal && let Some((vis_top, vis_bottom)) = self.host.visual_viewport_y {
+                let visible_y = self.host.visual_viewport_y.or_else(|| {
+                    let kb = self.host.keyboard_inset();
+                    (kb > 0.0).then(|| (0.0, (self.viewport.1 - kb).max(0.0)))
+                });
+                if !horizontal && let Some((vis_top, vis_bottom)) = visible_y {
                     let zoom = self.host.zoom().max(1e-3);
                     let clipped_start = start.max(vis_top / zoom);
                     let clipped_end = end.min(vis_bottom / zoom);

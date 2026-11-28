@@ -401,6 +401,75 @@ fn set_safe_area_expands_edge_band_and_updates_cx_safe_area_and_memos() {
 }
 
 #[test]
+fn keyboard_inset_updates_cx_and_memos_without_inflating_safe_area_or_bottom_edge_drag() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    struct KbS {
+        seen_safe: Rc<Cell<[f32; 4]>>,
+        seen_kb: Rc<Cell<f32>>,
+        memo_builds: Rc<Cell<usize>>,
+        edges: Vec<SwipeEdge>,
+    }
+    fn v(s: &KbS, cx: &mut Cx<KbS>) -> El {
+        s.seen_safe.set(cx.safe_area());
+        s.seen_kb.set(cx.keyboard_inset());
+        let builds = s.memo_builds.clone();
+        let m = crate::memo("kb-box", 0u32, move || {
+            builds.set(builds.get() + 1);
+            el().size(300.0, 600.0)
+        });
+        col().size(300.0, 600.0)
+            .on_edge_drag(SwipeEdge::Bottom, 20.0, |s: &mut KbS, d: &mut Drag, _| {
+                if d.phase == Phase::Up && let Some(e) = d.edge() { s.edges.push(e); }
+            })
+            .child(m)
+    }
+    let seen_safe = Rc::new(Cell::new([0.0; 4]));
+    let seen_kb = Rc::new(Cell::new(0.0));
+    let builds = Rc::new(Cell::new(0));
+    let mut rt = Runtime::new(
+        KbS { seen_safe: seen_safe.clone(), seen_kb: seen_kb.clone(), memo_builds: builds.clone(), edges: Vec::new() },
+        v,
+        (300.0, 600.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_safe_area([24.0, 0.0, 16.0, 0.0]);
+    rt.frame(0.0);
+    assert_eq!(seen_safe.get(), [24.0, 0.0, 16.0, 0.0]);
+    assert_eq!(seen_kb.get(), 0.0);
+    assert_eq!(builds.get(), 1);
+
+    // Opening a 280 pt soft keyboard updates Cx::keyboard_inset and invalidates memos,
+    // while leaving Cx::safe_area untouched.
+    rt.set_keyboard_inset(280.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(seen_kb.get(), 280.0);
+    assert_eq!(seen_safe.get(), [24.0, 0.0, 16.0, 0.0]);
+    assert_eq!(builds.get(), 2, "changing keyboard_inset invalidates memos");
+
+    // Identical keyboard inset does not rebuild memos.
+    rt.set_keyboard_inset(280.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(builds.get(), 2);
+
+    // A touch at y=350 (above bottom safe band [564..600], inside keyboard overlap [320..600])
+    // must NOT trigger SwipeEdge::Bottom because keyboard height is not folded into safe_area.
+    rt.touch(1, TouchPhase::Started, 150.0, 350.0, 0.10);
+    rt.touch(1, TouchPhase::Moved, 150.0, 260.0, 0.12);
+    rt.touch(1, TouchPhase::Ended, 150.0, 260.0, 0.14);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.edges.is_empty(), "keyboard inset must not inflate bottom edge-drag band");
+
+    // Negative and NaN clamp to 0.0.
+    rt.set_keyboard_inset(-40.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(seen_kb.get(), 0.0);
+    rt.set_keyboard_inset(f32::NAN);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(seen_kb.get(), 0.0);
+}
+
+#[test]
 fn multi_edge_corner_disambiguation_rtl_live_only_and_vertical_list_fallthrough() {
     #[derive(Default)]
     struct M {

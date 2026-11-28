@@ -67,6 +67,10 @@ windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Android emulators and older drivers may expose GLES without Vulkan.
+wgpu = { workspace = true, features = ["gles"] }
+
 # wgpu's Vulkan backend everywhere but Windows (D3D12 above) and Apple (Metal above).
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }

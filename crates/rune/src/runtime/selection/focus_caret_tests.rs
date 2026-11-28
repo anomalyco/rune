@@ -589,3 +589,38 @@ fn follow_caret_scrolls_focused_field_into_visual_viewport_above_keyboard() {
     rt.frame(1.0 / 60.0);
     assert!(rt.state.focused);
 }
+
+#[test]
+fn set_keyboard_inset_reveals_focused_field_above_keyboard_without_viewport_resize() {
+    let mut rt = Runtime::new(
+        TextEdit::new("hello"),
+        |e: &TextEdit, _: &mut Cx<TextEdit>| {
+            col().key("vp").w_full().h_full().scroll(ScrollSpec::default())
+                .child(el().w_full().h(500.0))
+                .child(text_input(e, style()).key("lower").label("Lower").w_full().h(48.0)
+                    .on_edit(|s: &mut TextEdit| s))
+                .child(el().w_full().h(400.0))
+        },
+        (390.0, 699.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let (fx, fy) = rt.find("lower").expect("lower field visible in layout viewport");
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused);
+    assert_eq!(scroll_y(&rt, "vp"), 0.0);
+
+    // Soft keyboard rises 337 pt from bottom (leaving 362 pt visible) without resizing viewport.
+    rt.set_keyboard_inset(337.0);
+    rt.frame(1.0 / 60.0);
+    let (_, caret) = caret_and_viewport(&rt, "vp", "lower");
+    assert!(scroll_y(&rt, "vp") > 100.0, "scroll container moved down to reveal lower field: {}", scroll_y(&rt, "vp"));
+    assert!(caret[1] >= 0.0 && caret[1] + caret[3] <= 362.5, "caret {caret:?} must sit above keyboard (<= 362 pt)");
+
+    // Dismissing keyboard preserves focus.
+    rt.set_keyboard_inset(0.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused);
+}

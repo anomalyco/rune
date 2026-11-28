@@ -286,6 +286,9 @@ pub use overlay::sizing::ContentSizing;
 pub use pixels::Pixels;
 pub use platform::accent::SystemAccent;
 pub use platform::accent::system_accent;
+#[cfg(target_os = "android")]
+#[doc(hidden)]
+pub use platform::android as __android;
 pub use platform::app_icon::AppIcon;
 pub use platform::app_icon::set_app_icon;
 pub use platform::app_icon::set_app_icon_choice;
@@ -294,7 +297,7 @@ pub use platform::app_icon::set_app_icon_resource;
 pub use platform::desktop_settings::DesktopSetting;
 pub use platform::desktop_settings::DesktopSettingWatch;
 pub use platform::desktop_settings::desktop_setting;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 pub use platform::embed;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
@@ -536,6 +539,29 @@ pub use windows::WindowSpec;
 pub use windows::WindowsWindowOptions;
 pub use windows::open_window;
 pub use winit::raw_window_handle;
+
+/// Exports the Android JNI entry point (`JNI_OnLoad`) for a Rune app compiled as a `cdylib`.
+///
+/// Pass your app's entry function (typically `main`). When `dev.rune.RuneView` loads your shared
+/// library via `System.loadLibrary`, `JNI_OnLoad` installs logcat forwarding, binds `RuneView`'s
+/// native methods with `RegisterNatives`, and registers `entry` to run when `RuneView` initializes.
+///
+/// Expands to nothing on non-Android targets so the same source compiles on desktop, web and iOS.
+#[macro_export]
+macro_rules! android_main {
+    ($entry:path) => {
+        #[cfg(target_os = "android")]
+        #[allow(unsafe_code)]
+        #[unsafe(no_mangle)]
+        pub extern "system" fn JNI_OnLoad(
+            vm: *mut ::std::ffi::c_void,
+            _reserved: *mut ::std::ffi::c_void,
+        ) -> i32 {
+            // SAFETY: ART passes a valid `JavaVM*` to `JNI_OnLoad` when loading this library.
+            unsafe { $crate::__android::jni_on_load(vm, $entry) }
+        }
+    };
+}
 
 /// The logical clock a scene fn (`AppSpec::scenes`) builds its state against. `--scene` starts
 /// at time zero.

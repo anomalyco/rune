@@ -1,10 +1,17 @@
-//! Embedded `CAMetalLayer` host for UIKit, SwiftUI and AppKit views that own their own window
-//! and event loop (e.g. a `UIViewRepresentable` driven by `CADisplayLink` on iOS).
+//! Embedded GPU surface host for native views that own their own window and frame loop:
+//! `CAMetalLayer` on Apple (UIKit / SwiftUI / AppKit driven by `CADisplayLink`) and
+//! `ANativeWindow` on Android (`SurfaceView` driven by `Choreographer`).
 
 #![allow(unsafe_code)]
 
 use std::ffi::c_void;
-use std::sync::{Arc, OnceLock};
+#[cfg(target_os = "android")]
+use std::ptr::NonNull;
+#[cfg(target_vendor = "apple")]
+use std::sync::OnceLock;
+#[cfg(target_os = "android")]
+use std::sync::Mutex;
+use std::sync::Arc;
 
 use crate::compose::{Compositor, Frame};
 use crate::frame::clock::FrameClock;
@@ -13,19 +20,76 @@ use crate::platform::embed_frame::{self, EmbedSurface, EmbedSurfaceEvent, EmbedS
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{AppDriver, Env, Runtime, RuntimeCore, Waker};
 use crate::time::Instant;
-use crate::tooling::{AppSpec, runtime_for};
+use crate::tooling::AppSpec;
+#[cfg(target_vendor = "apple")]
+use crate::tooling::runtime_for;
+#[cfg(target_os = "android")]
+use crate::tooling::runtime_for_configured;
 use crate::window::Missed;
 
+#[cfg(target_vendor = "apple")]
 static SHARED_GPU: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
 
+#[cfg(target_vendor = "apple")]
 fn shared_gpu() -> Result<Arc<Gpu>, String> {
     SHARED_GPU
         .get_or_init(|| Gpu::try_for_display(Gpu::instance(), wgpu::Features::empty()).map(Arc::new))
         .clone()
 }
 
+#[cfg(target_os = "android")]
+static ANDROID_SHARED_GPU: Mutex<Option<Arc<Gpu>>> = Mutex::new(None);
+
+#[cfg(target_os = "android")]
+unsafe fn create_android_surface(
+    instance: &wgpu::Instance,
+    native_window: *mut c_void,
+) -> Result<wgpu::Surface<'static>, String> {
+    use winit::raw_window_handle::{
+        AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
+    let window = NonNull::new(native_window)
+        .ok_or_else(|| "null ANativeWindow pointer".to_owned())?;
+    let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+        raw_display_handle: Some(RawDisplayHandle::Android(AndroidDisplayHandle::new())),
+        raw_window_handle: RawWindowHandle::AndroidNdk(AndroidNdkWindowHandle::new(window)),
+    };
+    // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*` that outlives
+    // the returned surface until `LayerHost::detach_surface` or `LayerHost` drop.
+    unsafe {
+        instance
+            .create_surface_unsafe(target)
+            .map_err(|e| format!("create_surface_unsafe(AndroidNdk): {e}"))
+    }
+}
+
+#[cfg(target_os = "android")]
+unsafe fn android_gpu_and_surface(
+    native_window: *mut c_void,
+) -> Result<(Arc<Gpu>, wgpu::Surface<'static>), String> {
+    let mut slot = ANDROID_SHARED_GPU
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(gpu) = slot.as_ref() {
+        // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*`.
+        let surface = unsafe { create_android_surface(&gpu.instance, native_window) }?;
+        return Ok((Arc::clone(gpu), surface));
+    }
+    let instance = Gpu::instance();
+    // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*`.
+    let surface = unsafe { create_android_surface(&instance, native_window) }?;
+    let gpu = Arc::new(Gpu::try_with_features(
+        instance,
+        Some(&surface),
+        wgpu::Features::empty(),
+    )?);
+    *slot = Some(Arc::clone(&gpu));
+    Ok((gpu, surface))
+}
+
 /// Warms the shared Metal device and compiles the default `Bgra8Unorm` uber pipeline on a
 /// background thread so the first embedded `LayerHost` opens without shader-compile latency.
+#[cfg(target_vendor = "apple")]
 pub fn prewarm() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
@@ -74,10 +138,14 @@ pub(crate) struct PreparedEmbedFrame {
     format: wgpu::TextureFormat,
 }
 
-struct LayerHostCore {
-    gpu: Arc<Gpu>,
+struct AttachedSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+}
+
+struct LayerHostCore {
+    gpu: Arc<Gpu>,
+    surface: Option<AttachedSurface>,
     renderer: Renderer,
     clock: FrameClock,
     suspended: bool,
@@ -85,7 +153,43 @@ struct LayerHostCore {
 }
 
 impl LayerHostCore {
-    unsafe fn new(layer: *mut c_void, viewport: (f32, f32), scale: f32) -> Result<(Self, (f32, f32), f32, Instant), String> {
+    fn from_gpu_and_surface(
+        gpu: Arc<Gpu>,
+        surface: wgpu::Surface<'static>,
+        viewport: (f32, f32),
+        scale: f32,
+    ) -> Result<(Self, (f32, f32), f32, Instant), String> {
+        let scale = scale.max(1.0);
+        let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
+        let px_w = ((viewport.0.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let px_h = ((viewport.1.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let srgb_blend = true;
+        let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend, false)
+            .ok_or_else(|| "embedded native surface has no supported wgpu surface configuration".to_owned())?;
+        crate::window::configure(&surface, &gpu, &config)?;
+        let target_format = config.format.remove_srgb_suffix();
+        let mut renderer = Renderer::try_new(&gpu.device, target_format)?;
+        renderer.attach_gpu(&gpu);
+        renderer.set_srgb_blend(true);
+        let size = (px_w as f32 / scale, px_h as f32 / scale);
+        let now = crate::time::now();
+        let core = Self {
+            gpu,
+            surface: Some(AttachedSurface { surface, config }),
+            renderer,
+            clock: FrameClock::new(now),
+            suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
+            surface_health: EmbedSurfaceHealth::default(),
+        };
+        Ok((core, size, scale, now))
+    }
+
+    #[cfg(target_vendor = "apple")]
+    unsafe fn from_core_animation_layer(
+        layer: *mut c_void,
+        viewport: (f32, f32),
+        scale: f32,
+    ) -> Result<(Self, (f32, f32), f32, Instant), String> {
         if layer.is_null() {
             return Err("null CAMetalLayer pointer".into());
         }
@@ -96,30 +200,19 @@ impl LayerHostCore {
                 .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
                 .map_err(|e| format!("create_surface_unsafe: {e}"))?
         };
-        let scale = scale.max(1.0);
-        let max_dim = gpu.device.limits().max_texture_dimension_2d.max(1);
-        let px_w = ((viewport.0.max(1.0) * scale).round() as u32).clamp(1, max_dim);
-        let px_h = ((viewport.1.max(1.0) * scale).round() as u32).clamp(1, max_dim);
-        let srgb_blend = true;
-        let (config, _) = crate::window::surface_config(&surface, &gpu.adapter, (px_w, px_h), srgb_blend, false)
-            .ok_or_else(|| "CAMetalLayer has no supported wgpu surface configuration".to_owned())?;
-        crate::window::configure(&surface, &gpu, &config)?;
-        let target_format = config.format.remove_srgb_suffix();
-        let mut renderer = Renderer::try_new(&gpu.device, target_format)?;
-        renderer.attach_gpu(&gpu);
-        renderer.set_srgb_blend(true);
-        let size = (px_w as f32 / scale, px_h as f32 / scale);
-        let now = crate::time::now();
-        let core = Self {
-            gpu,
-            surface,
-            config,
-            renderer,
-            clock: FrameClock::new(now),
-            suspended: viewport.0 <= 0.0 || viewport.1 <= 0.0,
-            surface_health: EmbedSurfaceHealth::default(),
-        };
-        Ok((core, size, scale, now))
+        Self::from_gpu_and_surface(gpu, surface, viewport, scale)
+    }
+
+    #[cfg(target_os = "android")]
+    unsafe fn from_native_window(
+        native_window: *mut c_void,
+        viewport: (f32, f32),
+        scale: f32,
+    ) -> Result<(Self, (f32, f32), f32, Instant), String> {
+        // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*` outliving this surface until detached.
+        let (gpu, surface) = unsafe { android_gpu_and_surface(native_window) }?;
+        Self::from_gpu_and_surface(gpu, surface, viewport, scale)
+
     }
 
     fn configure_runtime(&mut self, rt: &mut RuntimeCore, now: Instant) {
@@ -128,8 +221,52 @@ impl LayerHostCore {
         rt.set_pointer_lock_supported(false);
         rt.wall_start = Some(now);
         rt.frame.set_record_events(false);
-        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
+        if let Some(attached) = &self.surface {
+            let target_format = if rt.srgb_blend() {
+                attached.config.format.remove_srgb_suffix()
+            } else {
+                attached.config.format
+            };
+            crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, target_format, rt);
+        }
+    }
+
+    fn detach_surface(&mut self) {
+        self.surface = None;
+        self.suspended = true;
+    }
+
+    #[cfg(target_os = "android")]
+    unsafe fn attach_native_window(
+        &mut self,
+        rt: &mut RuntimeCore,
+        native_window: *mut c_void,
+        viewport: (f32, f32),
+        scale: f32,
+    ) -> Result<(), String> {
+        // Drop any previous swapchain before creating a new surface.
+        self.surface = None;
+        // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*` outliving this surface until detached.
+        let surface = unsafe { create_android_surface(&self.gpu.instance, native_window) }?;
+        let scale = scale.max(1.0);
+        let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
+        let px_w = ((viewport.0.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let px_h = ((viewport.1.max(1.0) * scale).round() as u32).clamp(1, max_dim);
+        let srgb_blend = rt.srgb_blend();
+        let (config, _) = crate::window::surface_config(&surface, &self.gpu.adapter, (px_w, px_h), srgb_blend, false)
+            .ok_or_else(|| "Android ANativeWindow has no supported wgpu surface configuration".to_owned())?;
+        crate::window::configure(&surface, &self.gpu, &config)?;
+        let target_format = if srgb_blend {
+            config.format.remove_srgb_suffix()
+        } else {
+            config.format
+        };
         crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, target_format, rt);
+        self.surface = Some(AttachedSurface { surface, config });
+        self.surface_health.step(EmbedSurfaceEvent::Resized);
+        self.suspended = viewport.0 <= 0.0 || viewport.1 <= 0.0;
+        rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
+        Ok(())
     }
 
     fn resize(&mut self, rt: &mut RuntimeCore, viewport: (f32, f32), scale: f32) {
@@ -137,17 +274,19 @@ impl LayerHostCore {
             self.suspended = true;
             return;
         }
-        self.suspended = false;
-        self.surface_health.step(EmbedSurfaceEvent::Resized);
         let scale = scale.max(1.0);
         let max_dim = self.gpu.device.limits().max_texture_dimension_2d.max(1);
         let px_w = ((viewport.0 * scale).round() as u32).clamp(1, max_dim);
         let px_h = ((viewport.1 * scale).round() as u32).clamp(1, max_dim);
-        if self.config.width != px_w || self.config.height != px_h {
-            self.config.width = px_w;
-            self.config.height = px_h;
-            if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
-                eprintln!("rune: embedded layer surface refused its new size: {error}");
+        if let Some(attached) = &mut self.surface {
+            self.suspended = false;
+            self.surface_health.step(EmbedSurfaceEvent::Resized);
+            if attached.config.width != px_w || attached.config.height != px_h {
+                attached.config.width = px_w;
+                attached.config.height = px_h;
+                if let Err(error) = crate::window::configure(&attached.surface, &self.gpu, &attached.config) {
+                    eprintln!("rune: embedded layer surface refused its new size: {error}");
+                }
             }
         }
         rt.set_viewport((px_w as f32 / scale, px_h as f32 / scale), scale);
@@ -155,12 +294,15 @@ impl LayerHostCore {
 
     /// Acquires the next drawable, reconfiguring and retrying once on `Outdated`/`Lost`.
     fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
+        let Some(attached) = &self.surface else {
+            return Acquire::Missed(Missed::Unconfigured);
+        };
         let mut retries = 1u8;
         loop {
-            match self.surface.get_current_texture() {
+            match attached.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => return Acquire::Ready(f),
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                    if let Err(error) = crate::window::configure(&self.surface, &self.gpu, &self.config) {
+                    if let Err(error) = crate::window::configure(&attached.surface, &self.gpu, &attached.config) {
                         eprintln!("rune: embedded layer surface refused reconfiguration: {error}");
                         return Acquire::Missed(Missed::Unconfigured);
                     }
@@ -173,17 +315,25 @@ impl LayerHostCore {
     }
 
     fn reblend(&mut self, rt: &mut RuntimeCore) -> bool {
+        let Some(attached) = &mut self.surface else {
+            return false;
+        };
         let mut alpha = None;
-        crate::window::reblend_core(&self.surface, &self.gpu, &mut self.config, &mut self.renderer, &mut alpha, rt)
+        crate::window::reblend_core(&attached.surface, &self.gpu, &mut attached.config, &mut self.renderer, &mut alpha, rt)
     }
 
     fn prepare_draw(&mut self, rt: &mut RuntimeCore, frame: wgpu::SurfaceTexture) -> PreparedEmbedFrame {
-        let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };
+        let attached = self.surface.as_ref().expect("surface attached when drawable was acquired");
+        let target_format = if rt.srgb_blend() {
+            attached.config.format.remove_srgb_suffix()
+        } else {
+            attached.config.format
+        };
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: (target_format != self.config.format).then_some(target_format),
+            format: (target_format != attached.config.format).then_some(target_format),
             ..Default::default()
         });
-        let size = (self.config.width, self.config.height);
+        let size = (attached.config.width, attached.config.height);
         host_step::prepare_gpu_resources(&mut self.renderer, &self.gpu, rt, size, true);
         let encoder = self.gpu.device.create_command_encoder(&Default::default());
         PreparedEmbedFrame { frame, target, encoder, size, format: target_format }
@@ -205,10 +355,12 @@ impl LayerHostCore {
     }
 }
 
-/// Drives one Rune [`Runtime`] and [`Renderer`] directly onto a `CAMetalLayer`.
+/// Drives one Rune [`Runtime`] and [`Renderer`] directly onto an embedded native surface
+/// (`CAMetalLayer` on Apple, `ANativeWindow` on Android).
 ///
-/// Pause display-link calls while the host app is backgrounded on iOS: Metal forbids drawable
-/// acquisition and command-buffer submission after `didEnterBackground`.
+/// Pause frame ticks while the host app is backgrounded or after [`Self::detach_surface`]:
+/// Metal forbids drawable acquisition after `didEnterBackground`, and Android destroys the
+/// underlying `ANativeWindow` across `surfaceDestroyed` / `surfaceCreated`.
 pub struct LayerHost<S: 'static> {
     core: LayerHostCore,
     compositor: Option<Box<dyn Compositor<S>>>,
@@ -220,8 +372,10 @@ impl<S: 'static> LayerHost<S> {
     /// sRGB space (`srgb_blend = true`, matching Apple's native text compositing).
     ///
     /// # Safety
-    /// `layer` must be a valid `CAMetalLayer` pointer that outlives this `LayerHost`, and surface
-    /// creation / presentation must run on a thread allowed to touch that layer (the UI thread).
+    /// `layer` must be a valid `CAMetalLayer` pointer that outlives this `LayerHost` (until
+    /// [`Self::detach_surface`] or drop), and surface creation / presentation must run on a
+    /// thread allowed to touch that layer (the UI thread).
+    #[cfg(target_vendor = "apple")]
     pub unsafe fn from_core_animation_layer(
         layer: *mut c_void,
         spec: &AppSpec<S>,
@@ -231,8 +385,8 @@ impl<S: 'static> LayerHost<S> {
         dark: bool,
         wake: Waker,
     ) -> Result<Self, String> {
-        // SAFETY: caller upholds `from_core_animation_layer`'s safety contract (`layer` is a valid `CAMetalLayer` outliving `LayerHost`, on the UI thread).
-        let (mut core, size, scale, now) = unsafe { LayerHostCore::new(layer, viewport, scale) }?;
+        // SAFETY: caller upholds `from_core_animation_layer`'s safety contract.
+        let (mut core, size, scale, now) = unsafe { LayerHostCore::from_core_animation_layer(layer, viewport, scale) }?;
         #[cfg(target_os = "ios")]
         let text_scale_wake = wake.clone();
         let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
@@ -246,11 +400,86 @@ impl<S: 'static> LayerHost<S> {
         Ok(Self { core, compositor: None, rt })
     }
 
+    /// Attaches a new Rune runtime and GPU surface to an Android `ANativeWindow *`.
+    ///
+    /// # Safety
+    /// `native_window` must be a valid `ANativeWindow` pointer that outlives the attached
+    /// surface (call [`Self::detach_surface`] before `ANativeWindow_release` or returning from
+    /// `SurfaceHolder.Callback.surfaceDestroyed`).
+    #[cfg(target_os = "android")]
+    pub unsafe fn from_native_window(
+        native_window: *mut c_void,
+        spec: &AppSpec<S>,
+        state: S,
+        viewport: (f32, f32),
+        scale: f32,
+        dark: bool,
+        wake: Waker,
+    ) -> Result<Self, String> {
+        // SAFETY: caller upholds `from_native_window`'s safety contract.
+        unsafe { Self::from_native_window_configured(native_window, spec, state, viewport, scale, dark, wake, None) }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) unsafe fn from_native_window_configured(
+        native_window: *mut c_void,
+        spec: &AppSpec<S>,
+        state: S,
+        viewport: (f32, f32),
+        scale: f32,
+        dark: bool,
+        wake: Waker,
+        config: Option<crate::app::RuntimeConfig<S>>,
+    ) -> Result<Self, String> {
+        // SAFETY: caller guarantees `native_window` is a valid `ANativeWindow*` until detached.
+        let (mut core, size, scale, now) = unsafe { LayerHostCore::from_native_window(native_window, viewport, scale) }?;
+        let mut rt = runtime_for_configured(spec, state, size, Env::new(dark, scale), wake, config);
+        rt.set_touch_controls(true);
+        core.configure_runtime(rt.core_mut(), now);
+        Ok(Self { core, compositor: None, rt })
+    }
+
+    /// Detaches and drops the active GPU swapchain surface while keeping the Rune [`Runtime`],
+    /// app state, GPU device, and renderer alive. Call this before the host destroys its native
+    /// surface (for example, inside Android's `surfaceDestroyed` before `ANativeWindow_release`).
+    pub fn detach_surface(&mut self) {
+        self.core.detach_surface();
+    }
+
+    /// Whether a native GPU surface is currently attached.
+    pub fn has_surface(&self) -> bool {
+        self.core.surface.is_some()
+    }
+
+    /// Reattaches a fresh Android `ANativeWindow *` after [`Self::detach_surface`], keeping
+    /// the existing [`Runtime`] and app state intact.
+    ///
+    /// # Safety
+    /// `native_window` must be a valid `ANativeWindow` pointer that outlives the attached
+    /// surface until the next [`Self::detach_surface`] or drop.
+    #[cfg(target_os = "android")]
+    pub unsafe fn attach_native_window(
+        &mut self,
+        native_window: *mut c_void,
+        viewport: (f32, f32),
+        scale: f32,
+    ) -> Result<(), String> {
+        // SAFETY: caller upholds `attach_native_window`'s safety contract.
+        unsafe { self.core.attach_native_window(self.rt.core_mut(), native_window, viewport, scale) }
+    }
+
     /// Attaches a custom [`Compositor`] (e.g. for [`El::effect`](crate::El::effect) shader passes)
     /// and turns on `Runtime::track_marks` so `rt.marks` aligns with `rt.instances`.
     pub fn with_compositor(mut self, compositor: impl Compositor<S>) -> Self {
         self.rt.track_marks = true;
         self.compositor = Some(Box::new(compositor));
+        self
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn with_boxed_compositor(mut self, compositor: Box<dyn Compositor<S>>) -> Self {
+        self.rt.track_marks = true;
+        self.compositor = Some(compositor);
         self
     }
 
@@ -272,14 +501,14 @@ impl<S: 'static> LayerHost<S> {
         self.rt.take_haptics()
     }
 
-    /// Updates the viewport in points and display scale, reconfiguring the Metal swapchain only
-    /// when its clamped device-pixel dimensions change.
+    /// Updates the viewport in points and display scale, reconfiguring the swapchain only when
+    /// a surface is attached and its clamped device-pixel dimensions change.
     pub fn resize(&mut self, viewport: (f32, f32), scale: f32) {
         self.core.resize(self.rt.core_mut(), viewport, scale);
     }
 
-    /// Steps animations and layout to `Instant::now()` and presents one Metal frame, following
-    /// the shared [`crate::frame::host_step`] order.
+    /// Steps animations and layout to `Instant::now()` and presents one frame, following the
+    /// shared [`crate::frame::host_step`] order. Returns `drew: false` when suspended or detached.
     pub fn frame(&mut self) -> EmbedFrame {
         #[cfg(target_os = "ios")]
         self.rt.set_system_text_scale(crate::platform::text_scale::cached());
@@ -291,7 +520,7 @@ impl<S: 'static> EmbedSurface for LayerHost<S> {
     type Drawable = wgpu::SurfaceTexture;
     type Prepared = PreparedEmbedFrame;
 
-    fn suspended(&self) -> bool { self.core.suspended }
+    fn suspended(&self) -> bool { self.core.suspended || self.core.surface.is_none() }
     fn surface_health_mut(&mut self) -> &mut EmbedSurfaceHealth { &mut self.core.surface_health }
     fn renderer_srgb_blend(&self) -> bool { self.core.renderer.srgb_blend() }
     fn rt_srgb_blend(&self) -> bool { self.rt.core().srgb_blend() }
