@@ -1076,20 +1076,9 @@ impl RuntimeCore {
             || follow
     }
 
-    /// Whether any scroll viewport has ongoing scroll motion right now (active touch scroll,
-    /// pending direct scroll, momentum coast, glide, or wheel ease). Unlike [`Self::scrolling`],
-    /// this does not stay true from the one-step `hand.scrolling` latch after a scroll finishes
-    /// and no later frame steps it.
+    /// Whether any scroll viewport has ongoing scroll motion right now.
     pub(crate) fn web_a11y_scroll_active(&self) -> bool {
-        self.pointer.touch_scroll().is_some()
-            || self.scroll.scrolls.values().any(|st| {
-                st.direct()
-                    || st.coast().abs() > 1.0
-                    || st.glide().is_some()
-                    || st.mode.wheel().is_some()
-                    || st.x.coast().abs() > 1.0
-                    || st.x.carried()
-            })
+        self.a11y_scroll_active()
     }
 
     /// Builds the [`schedule::ScheduleEvent::Frame`] input for the web host and tests alike.

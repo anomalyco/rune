@@ -1,9 +1,9 @@
 //! Accessibility on the OS side: each window and overlay gets an AccessKit platform adapter
-//! (UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux). The adapter's
-//! handlers run wherever the OS calls them; they only queue what they heard and wake the host,
-//! whose thread then activates the runtime's tree (`a11y/tree.rs`), runs the actions
-//! and sends tree updates. Until a client asks, the runtime builds nothing.
-#![cfg_attr(not(all(feature = "accessibility", any(target_os = "windows", target_os = "macos", target_os = "linux"))), allow(dead_code))]
+//! (UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux, TalkBack on Android).
+//! The adapter's handlers run wherever the OS calls them; they only queue what they heard and
+//! wake the host, whose thread then activates the runtime's tree (`a11y/tree.rs`), runs the
+//! actions and sends tree updates. Until a client asks, the runtime builds nothing.
+#![cfg_attr(not(all(feature = "accessibility", any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "android"))), allow(dead_code))]
 
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +14,7 @@ use crate::runtime::Runtime;
 pub(crate) mod actions;
 #[cfg(test)]
 mod actions_tests;
+pub(crate) mod android;
 #[cfg(test)]
 mod aria_tests;
 #[cfg(test)]
@@ -112,7 +113,7 @@ impl Shared {
     }
 }
 
-struct Activation(Arc<Shared>);
+pub(super) struct Activation(pub(super) Arc<Shared>);
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         // The host's thread builds the tree on the wake; the adapter answers with a
@@ -122,7 +123,7 @@ impl ActivationHandler for Activation {
     }
 }
 
-struct Actions(Arc<Shared>);
+pub(super) struct Actions(pub(super) Arc<Shared>);
 impl ActionHandler for Actions {
     fn do_action(&mut self, request: ActionRequest) {
         self.0.push(|i| i.actions.push(request));
@@ -144,7 +145,7 @@ impl DeactivationHandler for Deactivation {
 /// its own client asks, and the update then holds the whole tree. Tests drive one in place of
 /// an OS adapter.
 pub struct AccessibilityLink {
-    shared: Arc<Shared>,
+    pub(super) shared: Arc<Shared>,
     adopted: bool,
 }
 
@@ -190,7 +191,7 @@ impl AccessibilityLink {
         self.receive(rt, name)
     }
 
-    fn receive(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
+    pub(super) fn receive(&mut self, rt: &mut crate::runtime::RuntimeCore, name: &str) -> bool {
         self.adopt(rt);
         let inbox = self.take();
         let mut queued = false;
@@ -224,7 +225,7 @@ impl AccessibilityLink {
         queued
     }
 
-    fn update(&mut self, rt: &mut crate::runtime::RuntimeCore) -> Option<TreeUpdate> {
+    pub(super) fn update(&mut self, rt: &mut crate::runtime::RuntimeCore) -> Option<TreeUpdate> {
         self.adopt(rt);
         let started = log().then(crate::time::now);
         let update = rt.a11y_update()?;

@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -20,6 +22,9 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewConfiguration
 import android.view.WindowInsets
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityNodeProvider
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
@@ -44,7 +49,44 @@ open class RuneView(
     private var imeEnabled = false
     private val wakeRunnable = Runnable { nativeWake() }
     private val timerWakeRunnable = Runnable { nativeWake() }
+    private var a11yWakeRunnable: Runnable? = null
     private val clipboard: RuneClipboard
+    private val accessibilityManager: AccessibilityManager? =
+        context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+    private val tmpRect = Rect()
+    private val tmpLocation = IntArray(2)
+
+    private val a11yProvider = object : AccessibilityNodeProvider() {
+        override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+            val info = nativeA11yCreateNodeInfo(virtualViewId) ?: return null
+            if (virtualViewId == HOST_VIEW_ID) {
+                makeRootPassive(info)
+            } else {
+                applyNodeFlags(info)
+            }
+            return info
+        }
+
+        override fun findFocus(focus: Int): AccessibilityNodeInfo? {
+            val info = nativeA11yFindFocus(focus) ?: return null
+            applyNodeFlags(info)
+            return info
+        }
+
+        override fun performAction(
+            virtualViewId: Int,
+            action: Int,
+            arguments: Bundle?,
+        ): Boolean {
+            if (virtualViewId == HOST_VIEW_ID &&
+                (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS ||
+                    action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+            ) {
+                return false
+            }
+            return nativeA11yPerformAction(virtualViewId, action, arguments)
+        }
+    }
 
     /**
      * Optional launcher for Android Storage Access Framework document pickers
@@ -63,6 +105,7 @@ open class RuneView(
         holder.addCallback(this)
         isFocusable = true
         isFocusableInTouchMode = true
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         setOnApplyWindowInsetsListener { _, insets ->
             dispatchInsets(insets)
         }
@@ -73,6 +116,78 @@ open class RuneView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         requestApplyInsets()
+    }
+
+    override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = a11yProvider
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        makeRootPassive(info)
+    }
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        if (accessibilityManager?.isTouchExplorationEnabled == true &&
+            nativeA11yHover(event.actionMasked, event.x, event.y)
+        ) {
+            return true
+        }
+        return super.dispatchHoverEvent(event)
+    }
+
+    private fun makeRootPassive(info: AccessibilityNodeInfo) {
+        info.isFocusable = false
+        info.isFocused = false
+        info.isClickable = false
+        info.isLongClickable = false
+        info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+        info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+        info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+        info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+        if (Build.VERSION.SDK_INT >= 28) {
+            info.isScreenReaderFocusable = false
+            val title = info.contentDescription
+            if (!title.isNullOrEmpty() && info.paneTitle.isNullOrEmpty()) {
+                info.paneTitle = title
+            }
+        }
+        info.contentDescription = null
+    }
+
+    private fun applyNodeFlags(info: AccessibilityNodeInfo) {
+        if (Build.VERSION.SDK_INT < 28) return
+        val cls = info.className?.toString() ?: return
+        if (cls != "android.widget.TextView" &&
+            cls != "android.view.View" &&
+            cls != "android.widget.ImageView"
+        ) {
+            return
+        }
+        tmpRect.setEmpty()
+        info.getBoundsInScreen(tmpRect)
+        val hasBounds =
+            tmpRect.left != 0 || tmpRect.top != 0 || tmpRect.right != 0 || tmpRect.bottom != 0
+        getLocationOnScreen(tmpLocation)
+        val clickable =
+            info.actionList.contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+        val flags = nativeA11yNodeFlags(
+            cls,
+            tmpRect.left - tmpLocation[0],
+            tmpRect.top - tmpLocation[1],
+            tmpRect.right - tmpLocation[0],
+            tmpRect.bottom - tmpLocation[1],
+            hasBounds,
+            info.contentDescription?.toString(),
+            info.text?.toString(),
+            info.childCount,
+            info.isFocusable,
+            clickable,
+        )
+        if ((flags and FLAG_SCREEN_READER_FOCUSABLE) != 0) {
+            info.isScreenReaderFocusable = true
+        }
+        if ((flags and FLAG_HEADING) != 0) {
+            info.isHeading = true
+        }
     }
 
     override fun onCheckIsTextEditor(): Boolean = imeEnabled
@@ -390,12 +505,30 @@ open class RuneView(
         }
         mainHandler.removeCallbacks(wakeRunnable)
         mainHandler.removeCallbacks(timerWakeRunnable)
+        cancelA11yWake()
     }
 
     /** Called by Rust (UI thread) when a runtime timer needs a wake after [delayMs] ms. */
     fun scheduleWakeAfter(delayMs: Long) {
         mainHandler.removeCallbacks(timerWakeRunnable)
         mainHandler.postDelayed(timerWakeRunnable, delayMs.coerceAtLeast(1L))
+    }
+
+    /** Called by Rust (UI thread) when scroll-paced accessibility sync needs a delayed wake. */
+    fun scheduleA11yWakeAfter(attempt: Long, delayMs: Long) {
+        cancelA11yWake()
+        val runnable = Runnable {
+            a11yWakeRunnable = null
+            nativeA11yWake(attempt)
+        }
+        a11yWakeRunnable = runnable
+        mainHandler.postDelayed(runnable, delayMs.coerceAtLeast(1L))
+    }
+
+    /** Called by Rust (UI thread) to cancel any pending scroll-paced accessibility wake. */
+    fun cancelA11yWake() {
+        a11yWakeRunnable?.let { mainHandler.removeCallbacks(it) }
+        a11yWakeRunnable = null
     }
 
     /** Called by Rust from any thread (via JNI) when a [Waker] or [AppHandle] wakes the app. */
@@ -651,9 +784,33 @@ open class RuneView(
         unicodeChar: Int,
         unmodifiedChar: Int,
     ): Boolean
+    private external fun nativeA11yCreateNodeInfo(virtualViewId: Int): AccessibilityNodeInfo?
+    private external fun nativeA11yFindFocus(focusType: Int): AccessibilityNodeInfo?
+    private external fun nativeA11yPerformAction(
+        virtualViewId: Int,
+        action: Int,
+        arguments: Bundle?,
+    ): Boolean
+    private external fun nativeA11yHover(action: Int, x: Float, y: Float): Boolean
+    private external fun nativeA11yWake(attempt: Long)
+    private external fun nativeA11yNodeFlags(
+        className: String,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        hasBounds: Boolean,
+        contentDescription: String?,
+        text: String?,
+        childCount: Int,
+        focusable: Boolean,
+        clickable: Boolean,
+    ): Int
 
     private companion object {
         /** API 33+ MotionEvent.FLAG_CANCELED, safe to mask on API 26+. */
         private const val FLAG_CANCELED: Int = 0x20
+        private const val FLAG_SCREEN_READER_FOCUSABLE = 1 shl 0
+        private const val FLAG_HEADING = 1 shl 1
     }
 }

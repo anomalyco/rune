@@ -662,6 +662,23 @@ impl RuntimeCore {
         self.scroll.scrolls.values().any(|st| st.direct() || st.moving())
     }
 
+    /// Whether any scroll viewport has ongoing scroll motion right now (active touch scroll,
+    /// pending direct scroll, momentum coast, glide, or wheel ease). Unlike [`Self::scrolling`],
+    /// this does not stay true from the one-step `hand.scrolling` latch after a scroll finishes
+    /// and no later frame steps it.
+    #[cfg_attr(not(any(target_arch = "wasm32", target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn a11y_scroll_active(&self) -> bool {
+        self.pointer.touch_scroll().is_some()
+            || self.scroll.scrolls.values().any(|st| {
+                st.direct()
+                    || st.coast().abs() > 1.0
+                    || st.glide().is_some()
+                    || st.mode.wheel().is_some()
+                    || st.x.coast().abs() > 1.0
+                    || st.x.carried()
+            })
+    }
+
     /// Queues `on_layout` and `on_screen_layout` for elements whose laid-out rect changed (or
     /// that were just laid out).
     pub(super) fn report_layout(&mut self) {
