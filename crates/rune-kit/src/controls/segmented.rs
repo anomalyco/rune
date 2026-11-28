@@ -28,6 +28,11 @@ struct Segment {
 
 type Pick = Box<dyn Fn(usize) -> Box<dyn FnOnce(El) -> El>>;
 
+/// The type segment labels are set in.
+fn label_font(k: &Kit) -> TextStyle {
+    TextStyle { line_height: 13.0, ..k.ty.ui }
+}
+
 /// A horizontal row of mutually exclusive segments with a sliding raised indicator.
 ///
 /// Builds a WAI-ARIA `radiogroup` of `radio` segments by default, or a `tablist` of `tab`
@@ -87,7 +92,10 @@ impl SegmentedControl {
         self.label = Some(l.into());
         self
     }
-    /// Width in points (default 232); `None` fills the parent.
+    /// Width in points (default 232); `None` fills the parent. The segments share a width in
+    /// points equally, unless a share would cut a label that the width still holds: then each
+    /// segment is as wide as its label needs, plus an equal share of what is left (a long
+    /// translation beside short ones). Whether they hold is [`Self::labels_fit`].
     pub fn width(mut self, w: Option<f32>) -> Self {
         self.width = w.map_or(Width::Fill, Width::Points);
         self
@@ -277,7 +285,56 @@ impl SegmentedControl {
         self
     }
 
+    /// Whether every label reads whole at this width, in equal or label-sized segments
+    /// ([`Self::width`]); when not, the labels are cut short with an ellipsis, so a caller can
+    /// show icons instead ([`Self::icon`], [`Self::help`]). Always true for [`Self::fit`] and for
+    /// a width that fills the parent.
+    pub fn labels_fit(&self, k: &Kit) -> bool {
+        match self.width {
+            Width::Points(w) => self.needs(k).is_none_or(|need| need.iter().sum::<f32>() <= self.room(k, w) + 0.01),
+            Width::Fill | Width::Fit => true,
+        }
+    }
+
+    /// The room a width in points leaves the segments, inside the groove and between the gaps.
+    fn room(&self, k: &Kit, w: f32) -> f32 {
+        let m = k.segmented_metrics();
+        (w - 2.0 * m.inset - m.gap * (self.labels.len().max(1) - 1) as f32).max(0.0)
+    }
+
+    /// The width each segment needs for its icon and label, or `None` when one has a trailing
+    /// element (its width is unknown until layout).
+    fn needs(&self, k: &Kit) -> Option<Vec<f32>> {
+        if self.segments.iter().any(|s| s.trailing.is_some()) {
+            return None;
+        }
+        let m = k.segmented_metrics();
+        let font = label_font(k);
+        Some(self.labels.iter().enumerate().map(|(i, l)| {
+            let glyph = self.segments.get(i).is_some_and(|s| s.icon.is_some());
+            let label = if l.is_empty() { 0.0 } else { rune::text::measure(l, &[], font, None).0 };
+            2.0 * m.padding_x + if glyph { 14.0 } else { 0.0 } + if glyph && !l.is_empty() { 6.0 } else { 0.0 } + label
+        }).collect())
+    }
+
+    /// Label-sized segments for a width in points, when an equal share would cut a label and
+    /// the labels together still fit; `None` for equal segments.
+    fn sized(&self, k: &Kit, w: f32) -> Option<Vec<f32>> {
+        let room = self.room(k, w);
+        let n = self.labels.len().max(1) as f32;
+        let need = self.needs(k)?;
+        let total: f32 = need.iter().sum();
+        if need.iter().all(|&x| x <= room / n) || total > room {
+            return None;
+        }
+        Some(need.iter().map(|x| x + (room - total) / n).collect())
+    }
+
     pub fn build(self, k: &Kit) -> El {
+        let sized = match self.width {
+            Width::Points(w) => self.sized(k, w),
+            _ => None,
+        };
         let c = &k.c;
         let m = k.segmented_metrics();
         let (height, radius, padding_x) = (m.height, m.radius, m.padding_x);
@@ -285,7 +342,7 @@ impl SegmentedControl {
         let (inset, gap) = (m.inset, m.gap);
         let (inner_h, inner_r) = (height - 2.0 * inset, (radius - inset).max(0.0));
         let n = self.labels.len().max(1);
-        let font = TextStyle { line_height: 13.0, ..k.ty.ui };
+        let font = label_font(k);
         let mut root = row()
             .role(if self.as_tabs { "tablist" } else { "radiogroup" })
             .focus_group()
@@ -322,8 +379,13 @@ impl SegmentedControl {
         };
         match (self.selected, self.width) {
             (Some(sel), Width::Points(w)) => {
-                let seg = ((w - 2.0 * inset - gap * (n - 1) as f32) / n as f32).max(0.0);
-                let x = inset + (seg + gap) * sel as f32;
+                let (x, seg) = match &sized {
+                    Some(ws) => (inset + ws[..sel].iter().sum::<f32>() + gap * sel as f32, ws[sel]),
+                    None => {
+                        let seg = ((w - 2.0 * inset - gap * (n - 1) as f32) / n as f32).max(0.0);
+                        (inset + (seg + gap) * sel as f32, seg)
+                    }
+                };
                 root = root.child(indicator().w(seg).absolute(x, inset));
             }
             // The indicator shares the selected segment's cell and slides between cells.
@@ -354,13 +416,16 @@ impl SegmentedControl {
                 .focus_selected(on)
                 .disabled(st == State::Disabled)
                 .position_in_set(i + 1, n)
-                .grow(1.0)
                 .shrink()
                 .h(inner_h)
                 .px(padding_x)
                 .gap(6.0)
                 .center()
                 .radius(inner_r);
+            seg = match &sized {
+                Some(ws) => seg.w(ws[i]),
+                None => seg.grow(1.0),
+            };
             if let Some(name) = a11y_name {
                 seg = seg.label(name);
             }

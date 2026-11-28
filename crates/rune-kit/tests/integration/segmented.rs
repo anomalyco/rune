@@ -26,6 +26,47 @@ fn fitted_segments_share_the_widest_labels_width_and_the_indicator_slides_betwee
     assert!((indicator[0] - target[0]).abs() < 0.01 && (indicator[2] - target[2]).abs() < 0.01);
 }
 
+fn translated(selected: &usize, _: &mut Cx<usize>) -> El {
+    // One long word beside short ones, as a translation makes them: "Balanced" in Russian.
+    rune::row().child(
+        SegmentedControl::new(&["Без потерь", "Сбалансированное", "Максимум"], Some(*selected))
+            .width(Some(392.0))
+            .build(&Kit::neutral(true))
+            .key("seg"),
+    )
+}
+
+#[test]
+fn a_long_label_takes_the_room_short_ones_leave_and_the_indicator_follows() {
+    let k = Kit::neutral(true);
+    let labels = ["Без потерь", "Сбалансированное", "Максимум"];
+    assert!(SegmentedControl::new(&labels, None).width(Some(392.0)).labels_fit(&k));
+    assert!(!SegmentedControl::new(&labels, None).width(Some(240.0)).labels_fit(&k), "too narrow for all three");
+    let mut rt = Runtime::new(1usize, translated, (600.0, 100.0), Env::new(true, 1.0));
+    for _ in 0..60 { rt.frame(1.0 / 60.0); }
+    let els = rt.elements();
+    for l in labels {
+        let label = els.iter().find(|e| e.text.as_deref() == Some(l)).unwrap();
+        assert!(!label.text_cut, "{l} reads whole: {:?}", label.rect);
+    }
+    let widths: Vec<f32> = (0..3).map(|i| rect(&rt, &format!("segment{i}"))[2]).collect();
+    assert!(widths[1] > widths[0] && widths[1] > widths[2], "the long label's segment is the widest: {widths:?}");
+    assert!((widths.iter().sum::<f32>() - 392.0).abs() < 0.05, "they fill the width: {widths:?}");
+    let (indicator, target) = (rect(&rt, "indicator"), rect(&rt, "segment1"));
+    assert!((indicator[0] - target[0]).abs() < 0.05 && (indicator[2] - target[2]).abs() < 0.05, "{indicator:?} vs {target:?}");
+}
+
+#[test]
+fn labels_that_fit_equal_shares_keep_equal_segments() {
+    fn view(_: &usize, _: &mut Cx<usize>) -> El {
+        rune::row().child(SegmentedControl::new(&["A", "Longer", "C"], Some(0)).width(Some(300.0)).build(&Kit::neutral(true)).key("seg"))
+    }
+    let mut rt = Runtime::new(0usize, view, (600.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let widths: Vec<f32> = (0..3).map(|i| rect(&rt, &format!("segment{i}"))[2]).collect();
+    assert!(widths.iter().all(|w| (w - 100.0).abs() < 0.01), "equal: {widths:?}");
+}
+
 fn pickable(selected: &usize, _: &mut Cx<usize>) -> El {
     rune::row().child(
         SegmentedControl::new(&["Left", "Either", "Right"], Some(*selected))
