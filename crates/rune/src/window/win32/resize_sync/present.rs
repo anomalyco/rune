@@ -209,6 +209,10 @@ impl DragSeam for Win32DragSeam<'_> {
         Ok(release_value)
     }
 
+    fn dwm_frame_count(&mut self) -> Option<u64> {
+        crate::platform::win32::dwm_composed_frame()
+    }
+
     fn detach_dcomp(&mut self) -> Result<(), String> {
         if *self.dcomp_detached {
             return Ok(());

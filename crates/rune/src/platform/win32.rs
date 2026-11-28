@@ -41,6 +41,7 @@ pub(crate) use dpi_drag::in_size_move;
 pub(crate) use dpi_drag::register_resize_sync;
 pub(crate) use dpi_drag::run_in_paint;
 pub(crate) use dpi_drag::set_resize_sync_active;
+pub(crate) use dpi_drag::set_resize_sync_tick;
 pub(crate) use dpi_drag::take_resize_sync_signal;
 pub(crate) use frame::CustomFrame;
 pub(crate) use frame::DragHitSync;
@@ -98,6 +99,19 @@ pub(crate) fn set_window_rect(window: &winit::window::Window, origin: (i32, i32)
     // SAFETY: live window owned by this thread; `SWP_NOZORDER | SWP_NOACTIVATE` moves and resizes atomically.
     unsafe {
         SetWindowPos(hwnd, std::ptr::null_mut(), origin.0, origin.1, size.0.max(1) as i32, size.1.max(1) as i32, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+/// DWM's monotonically increasing desktop composition count (`DWM_TIMING_INFO::cFrame`), or
+/// `None` when DWM timing is unavailable.
+#[allow(unsafe_code)]
+pub(crate) fn dwm_composed_frame() -> Option<u64> {
+    use windows_sys::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};
+    // SAFETY: plain out-parameter with `cbSize` set; `hwnd` must be NULL on Windows 8.1+.
+    unsafe {
+        let mut t: DWM_TIMING_INFO = std::mem::zeroed();
+        t.cbSize = size_of::<DWM_TIMING_INFO>() as u32;
+        (DwmGetCompositionTimingInfo(std::ptr::null_mut(), &mut t) >= 0).then_some(t.cFrame)
     }
 }
 

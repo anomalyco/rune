@@ -13,7 +13,8 @@
 /// `Handover`), Rune releases any active video layers, renders drag frames into a capacited
 /// 2-slot D3D12 shared texture ring, synchronizes via shared fences into a D3D11
 /// `DXGI_SWAP_EFFECT_DISCARD` copy-model HWND swap chain presented inside `WM_PAINT`
-/// (`BeginPaint`/`EndPaint`), detaches the DirectComposition root (`IDCompositionTarget::SetRoot`),
+/// (`BeginPaint`/`EndPaint`), detaches the DirectComposition root (`IDCompositionTarget::SetRoot`)
+/// once DWM has composed two frames after the first drag present,
 /// and pairs with `WM_NCCALCSIZE` `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression so content
 /// stays in step with left- and top-edge drags with zero presents to the hidden D3D12
 /// composition swap chain. On `WM_EXITSIZEMOVE`, one normal D3D12 flip-model frame completes

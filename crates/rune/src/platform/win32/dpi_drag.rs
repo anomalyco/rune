@@ -22,12 +22,16 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, UpdateWindow};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IsWindow, NCCALCSIZE_PARAMS, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_DPICHANGED,
-    WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_NCCALCSIZE, WM_NCDESTROY, WM_PAINT,
-    WVR_VALIDRECTS,
+    IsWindow, KillTimer, NCCALCSIZE_PARAMS, SWP_NOACTIVATE, SWP_NOZORDER, SetTimer, SetWindowPos,
+    WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_NCCALCSIZE, WM_NCDESTROY,
+    WM_PAINT, WM_TIMER, WVR_VALIDRECTS,
 };
 
 const SUBCLASS: usize = 0x5255_4e44;
+/// Timer ID for modal size-move drag ticks (DComp priming completion and live drag animations).
+const DRAG_TICK_TIMER: usize = 0x5255_4e54;
+/// Requested `WM_TIMER` cadence in milliseconds while priming or animating inside a modal drag.
+const DRAG_TICK_INTERVAL_MS: u32 = 8;
 
 /// Pending modal size-move edge transitions captured by the Win32 subclass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -41,6 +45,7 @@ struct SyncEntry {
     hwnd: usize,
     wake: Rc<dyn Fn()>,
     active: bool,
+    tick_active: bool,
     entered: bool,
     exited: bool,
     destroyed: bool,
@@ -85,6 +90,7 @@ pub(crate) fn register_resize_sync(window: &winit::window::Window, wake: impl Fn
                 hwnd: key,
                 wake,
                 active: false,
+                tick_active: false,
                 entered: false,
                 exited: false,
                 destroyed: false,
@@ -94,13 +100,53 @@ pub(crate) fn register_resize_sync(window: &winit::window::Window, wake: impl Fn
 }
 
 /// Toggles `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression for `hwnd` during an active drag.
+/// Disabling also stops any armed modal-loop drag tick timer.
 pub(crate) fn set_resize_sync_active(hwnd: HWND, active: bool) {
     let key = hwnd as usize;
+    let mut kill_timer = false;
     SYNC.with(|list| {
         if let Some(entry) = list.borrow_mut().iter_mut().find(|e| e.hwnd == key) {
             entry.active = active;
+            if !active && entry.tick_active {
+                entry.tick_active = false;
+                kill_timer = true;
+            }
         }
     });
+    if kill_timer {
+        // SAFETY: `hwnd` is a live window owned by this thread; kills our timer ID.
+        unsafe { KillTimer(hwnd, DRAG_TICK_TIMER); }
+    }
+}
+
+/// Arms or disarms the modal size-move `WM_TIMER` that drives DComp priming completion and
+/// live animations while the user holds a resize border still. Only calls `SetTimer` /
+/// `KillTimer` on state edges so rapid resize steps never reset an already-running timer.
+pub(crate) fn set_resize_sync_tick(hwnd: HWND, wanted: bool) {
+    let key = hwnd as usize;
+    let in_loop = moving(hwnd);
+    let mut start = false;
+    let mut stop = false;
+    SYNC.with(|list| {
+        if let Some(entry) = list.borrow_mut().iter_mut().find(|e| e.hwnd == key) {
+            let next = wanted && entry.active && in_loop;
+            if next && !entry.tick_active {
+                entry.tick_active = true;
+                start = true;
+            } else if !next && entry.tick_active {
+                entry.tick_active = false;
+                stop = true;
+            }
+        }
+    });
+    // SAFETY: `hwnd` is a live window owned by this thread.
+    unsafe {
+        if start {
+            SetTimer(hwnd, DRAG_TICK_TIMER, DRAG_TICK_INTERVAL_MS, None);
+        } else if stop {
+            KillTimer(hwnd, DRAG_TICK_TIMER);
+        }
+    }
 }
 
 /// Drains pending `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE` / `WM_NCDESTROY` flags for `hwnd`.
@@ -124,6 +170,11 @@ pub(crate) fn take_resize_sync_signal(hwnd: HWND) -> ResizeSyncSignal {
 pub(super) fn wants_valid_rects(hwnd: HWND) -> bool {
     let key = hwnd as usize;
     SYNC.with(|list| list.borrow().iter().any(|e| e.hwnd == key && e.active))
+}
+
+fn wants_drag_tick(hwnd: HWND) -> bool {
+    let key = hwnd as usize;
+    SYNC.with(|list| list.borrow().iter().any(|e| e.hwnd == key && e.active && e.tick_active))
 }
 
 /// Writes `WVR_VALIDRECTS` destination (`rgrc[1]`) and source (`rgrc[2]`) rectangles from the
@@ -190,16 +241,32 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
         }
         WM_EXITSIZEMOVE => {
             MOVING.with(|m| m.borrow_mut().retain(|&h| h != key));
-            let wake = SYNC.with(|list| {
-                list.borrow_mut().iter_mut().find(|e| e.hwnd == key).map(|entry| {
+            let (wake, kill_timer) = SYNC.with(|list| {
+                list.borrow_mut().iter_mut().find(|e| e.hwnd == key).map_or((None, false), |entry| {
+                    let kill = std::mem::take(&mut entry.tick_active);
                     entry.active = false;
                     entry.exited = true;
-                    entry.wake.clone()
+                    (Some(entry.wake.clone()), kill)
                 })
             });
+            if kill_timer {
+                // SAFETY: `hwnd` is live on this thread; stops our modal drag tick timer.
+                unsafe { KillTimer(hwnd, DRAG_TICK_TIMER); }
+            }
             if let Some(wake) = wake {
                 wake();
             }
+        }
+        WM_TIMER if wparam == DRAG_TICK_TIMER => {
+            if moving(hwnd) && wants_drag_tick(hwnd) {
+                // SAFETY: `hwnd` is live on this thread; invalidates without background erase so
+                // the modal size-move loop delivers `WM_PAINT` -> winit `RedrawRequested`.
+                unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); }
+            } else {
+                // SAFETY: `hwnd` is live on this thread; stops stale drag tick timer.
+                unsafe { KillTimer(hwnd, DRAG_TICK_TIMER); }
+            }
+            return 0;
         }
         // Standard-frame windows (`!frame::installed`): return `WVR_VALIDRECTS` while drag-sync
         // is active. Custom-frame windows apply the same helper inside `frame::subclass`.
@@ -249,7 +316,16 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
         },
         WM_NCDESTROY => {
             MOVING.with(|m| m.borrow_mut().retain(|&h| h != key));
-            SYNC.with(|list| list.borrow_mut().retain(|e| e.hwnd != key));
+            let kill_timer = SYNC.with(|list| {
+                let mut list = list.borrow_mut();
+                let had = list.iter().any(|e| e.hwnd == key && e.tick_active);
+                list.retain(|e| e.hwnd != key);
+                had
+            });
+            if kill_timer {
+                // SAFETY: `hwnd` is being destroyed on this thread; stops our timer if armed.
+                unsafe { KillTimer(hwnd, DRAG_TICK_TIMER); }
+            }
             PAINT_ACTION.with(|slot| {
                 if slot.borrow().as_ref().is_some_and(|p| p.hwnd == key) {
                     *slot.borrow_mut() = None;
