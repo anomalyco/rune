@@ -32,12 +32,13 @@ use super::bridge::{
 use super::document;
 use super::editor::EditorConfig;
 use super::input::{self, TextInputAction};
-use super::machine::{self, Effect, Event, State};
+use super::machine::{self, Effect, Event, State, Surface};
 use super::picker::{PickAnswer, PickRequest, PickStep};
+use super::selection::{self, HandleKind, Presentation};
+use super::selection_jni;
 use super::stack::{BackOutcome, PageStack};
 use super::surface::AndroidSurface;
 use super::{haptics, logcat};
-
 static APP_ENTRY: OnceLock<fn()> = OnceLock::new();
 
 /// JNI global reference to the live `dev.rune.RuneView` instance and its cached Java callbacks.
@@ -54,6 +55,7 @@ pub(super) struct ViewBridge {
     api_level: i32,
     pub(super) start_document_pick: jmethodID,
     pub(super) open_document_fd: jmethodID,
+    pub(super) update_selection_ui: jmethodID,
 }
 
 // SAFETY: JNI global references and `jmethodID`s are process-wide and safe to pass across threads
@@ -64,6 +66,8 @@ unsafe impl Sync for ViewBridge {}
 
 pub(super) struct Host {
     state: State,
+    selection: selection::State,
+    started_at: std::time::Instant,
     pub(super) stack: PageStack,
     surface: Option<AndroidSurface>,
     native_window: *mut ndk_sys::ANativeWindow,
@@ -83,6 +87,8 @@ impl Host {
         let a11y = crate::a11y::android::Adapter::new(waker.clone());
         Self {
             state: State::default(),
+            selection: selection::State::default(),
+            started_at: std::time::Instant::now(),
             stack,
             surface: None,
             native_window: ptr::null_mut(),
@@ -90,6 +96,17 @@ impl Host {
             waker,
             #[cfg(feature = "accessibility")]
             a11y,
+        }
+    }
+
+    fn now_secs(&self) -> f64 {
+        self.started_at.elapsed().as_secs_f64()
+    }
+
+    fn current_scale(&self) -> f32 {
+        match self.state.surface {
+            Surface::Attached { scale, .. } if scale.is_finite() && scale > 0.0 => scale,
+            _ => 1.0,
         }
     }
 
@@ -242,6 +259,7 @@ pub unsafe fn jni_on_load(vm: *mut c_void, entry: fn()) -> i32 {
         jni_method(c"nativeKeyUp", c"(IIII)Z", input::jni::native_key_up as *const () as *mut c_void),
     ];
     methods.extend(super::a11y::native_methods());
+    methods.extend(selection_jni::native_methods());
 
     // SAFETY: `env` is a valid JNIEnv for the thread running `JNI_OnLoad`.
     if !unsafe { bridge::register_natives(env, c"dev/rune/RuneView", &methods) } {
@@ -299,6 +317,8 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         if open_url.is_null() { jni_clear_exception(env); }
         let get_clipboard = get_method(env, cls, c"getClipboard".as_ptr(), c"()Ldev/rune/RuneClipboard;".as_ptr());
         if get_clipboard.is_null() { jni_clear_exception(env); }
+        let update_selection_ui = get_method(env, cls, c"updateSelectionUi".as_ptr(), selection_jni::UPDATE_SELECTION_UI_SIG.as_ptr());
+        if update_selection_ui.is_null() { jni_clear_exception(env); }
         if let Some(del) = (**env).DeleteLocalRef { del(env, cls); }
         if !open_url.is_null() { bridge::set_link_target(env, view, open_url); }
         if !get_clipboard.is_null() { bridge::init_clipboard(env, view, get_clipboard); }
@@ -321,6 +341,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             api_level,
             start_document_pick,
             open_document_fd,
+            update_selection_ui,
         })
     }
 }
@@ -401,12 +422,110 @@ pub(super) fn deliver_key_up(env: *mut JNIEnv, event: KeyEvent) -> bool {
     let (consumed, needs_frame) = HOST.with(|slot| {
         let mut borrow = slot.borrow_mut();
         let Some(host) = borrow.as_mut() else { return (false, false) };
-        if host.state.destroyed { return (false, false); }
+        if host.state.destroyed { return (false, false) };
         if matches!(event.key, Key::Media(_)) && !host.stack.media_keys() { return (false, false); }
         (true, host.stack.key_up(event))
     });
     if needs_frame { let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut()); }
     consumed
+}
+
+fn step_selection(host: &mut Host, event: selection::Event) -> (Option<Presentation>, bool) {
+    let mut latest: Option<Presentation> = None;
+    let mut needs_frame = false;
+    let mut pending_events = vec![event];
+    let mut depth = 0u8;
+    while let Some(ev) = pending_events.pop() {
+        depth += 1;
+        if depth > 4 {
+            break;
+        }
+        for eff in selection::step(&mut host.selection, ev) {
+            match eff {
+                selection::Effect::GrabHandle { handle, x, y } => {
+                    if host.stack.handle_grab(handle.to_runtime(), x, y) {
+                        needs_frame = true;
+                    }
+                }
+                selection::Effect::MoveHandle { x, y } => {
+                    let _ = host.stack.handle_drag(x, y);
+                    needs_frame = true;
+                }
+                selection::Effect::ReleaseHandle => {
+                    host.stack.handle_release();
+                    needs_frame = true;
+                }
+                selection::Effect::ResolveTextMenu(picked) => {
+                    host.stack.resolve_text_menu(picked);
+                    needs_frame = true;
+                }
+                selection::Effect::RequestTextMenu => {
+                    if host.stack.open_selection_text_menu() {
+                        let snap = host.stack.selection_snapshot();
+                        let menu = host.stack.take_text_menu(snap.is_some_and(|s| s.can_select_all));
+                        let now = host.now_secs();
+                        pending_events.push(selection::Event::Sync { now, snapshot: snap, menu });
+                        needs_frame = true;
+                    }
+                }
+                selection::Effect::Apply(p) => {
+                    latest = Some(p);
+                }
+            }
+        }
+    }
+    (latest, needs_frame)
+}
+
+fn dispatch_selection_jni(env: *mut JNIEnv, make_event: impl FnOnce(&Host) -> Option<selection::Event>) {
+    let mut pending_ui: Option<(Arc<Mutex<Option<ViewBridge>>>, f32, Presentation)> = None;
+    let mut needs_frame = false;
+    HOST.with(|slot| {
+        let mut borrow = slot.borrow_mut();
+        let Some(host) = borrow.as_mut() else { return };
+        if host.state.destroyed { return; }
+        let Some(ev) = make_event(host) else { return };
+        let (apply, frame) = step_selection(host, ev);
+        needs_frame = frame;
+        if let Some(p) = apply {
+            pending_ui = Some((Arc::clone(&host.bridge), host.current_scale(), p));
+        }
+    });
+    if let Some((bridge, scale, p)) = pending_ui {
+        // SAFETY: `env` is the UI thread's `JNIEnv*` and `HOST` is not borrowed.
+        unsafe { selection_jni::apply_presentation_bridge(env, &bridge, scale, p) };
+    }
+    if needs_frame {
+        let _ = dispatch(env, ptr::null_mut(), Event::Wake, ptr::null_mut());
+    }
+}
+
+pub(super) fn handle_selection_grab(env: *mut JNIEnv, handle: HandleKind, x_px: f32, y_px: f32) {
+    dispatch_selection_jni(env, |host| {
+        let s = host.current_scale();
+        Some(selection::Event::HandleGrab { handle, x: x_px / s, y: y_px / s })
+    });
+}
+
+pub(super) fn handle_selection_move(env: *mut JNIEnv, x_px: f32, y_px: f32) {
+    dispatch_selection_jni(env, |host| {
+        let s = host.current_scale();
+        Some(selection::Event::HandleMove { x: x_px / s, y: y_px / s })
+    });
+}
+
+pub(super) fn handle_selection_release(env: *mut JNIEnv) {
+    dispatch_selection_jni(env, |host| Some(selection::Event::HandleRelease { now: host.now_secs() }));
+}
+
+pub(super) fn handle_selection_caret_tap(env: *mut JNIEnv) {
+    dispatch_selection_jni(env, |host| Some(selection::Event::CaretHandleTapped { now: host.now_secs() }));
+}
+
+pub(super) fn handle_selection_toolbar_action(env: *mut JNIEnv, code: i32) {
+    dispatch_selection_jni(env, |host| {
+        Some(selection::Event::ToolbarAction { code, now: host.now_secs() })
+    });
 }
 
 fn dispatch(
@@ -420,12 +539,21 @@ fn dispatch(
     let mut pending_ime: Option<(jobject, jmethodID, Option<EditorConfig>, bool)> = None;
     let mut pending_picks: Vec<(Arc<Mutex<Option<ViewBridge>>>, PickRequest)> = Vec::new();
     let mut shutdown_bridge: Option<ViewBridge> = None;
+    let mut pending_ui: Option<(Arc<Mutex<Option<ViewBridge>>>, f32, Presentation)> = None;
     #[cfg(feature = "accessibility")]
     let mut queued_a11y_events: Option<accesskit_android::QueuedEvents> = None;
+    let is_suspend = matches!(event, Event::Paused | Event::SurfaceDestroyed | Event::Destroy);
+    let is_resume = matches!(event, Event::Resumed | Event::SurfaceCreated { .. });
 
     HOST.with(|slot| {
         let mut borrow = slot.borrow_mut();
         let Some(host) = borrow.as_mut() else { return };
+        if is_suspend {
+            let (apply, _) = step_selection(host, selection::Event::Suspend);
+            if let Some(p) = apply {
+                pending_ui = Some((Arc::clone(&host.bridge), host.current_scale(), p));
+            }
+        }
         let effects = machine::step(&mut host.state, event);
         let mut shutdown = false;
 
@@ -542,11 +670,20 @@ fn dispatch(
                             PickStep::Refused => needs_redraw = true,
                             PickStep::Start(req) => pending_picks.push((Arc::clone(&host.bridge), req)),
                         }
+                        let now = host.now_secs();
+                        let snap = host.stack.selection_snapshot();
+                        let menu = host.stack.take_text_menu(snap.is_some_and(|s| s.can_select_all));
+                        let (apply, sel_frame) = step_selection(host, selection::Event::Sync { now, snapshot: snap, menu });
+                        if let Some(p) = apply {
+                            pending_ui = Some((Arc::clone(&host.bridge), host.current_scale(), p));
+                        }
+                        needs_redraw |= sel_frame;
+                        let wake = selection_jni::merge_wake(outcome.wake_after_secs, host.selection.wake_after_secs(now));
                         let follow = machine::step(
                             &mut host.state,
                             Event::FrameDone {
                                 animating: needs_redraw,
-                                wake_after_secs: outcome.wake_after_secs,
+                                wake_after_secs: wake,
                                 editor: editor.config,
                                 ime_restart: editor.reset,
                                 field_tap: editor.field_tap,
@@ -579,6 +716,12 @@ fn dispatch(
                 }
             }
         }
+        if !shutdown && is_resume && host.state.resumed && matches!(host.state.surface, Surface::Attached { .. }) {
+            let (apply, _) = step_selection(host, selection::Event::Resume);
+            if let Some(p) = apply {
+                pending_ui = Some((Arc::clone(&host.bridge), host.current_scale(), p));
+            }
+        }
         if shutdown {
             shutdown_bridge = host.take_bridge_for_shutdown(env);
             *borrow = None;
@@ -592,6 +735,11 @@ fn dispatch(
     }
     #[cfg(not(feature = "accessibility"))]
     let _ = view_obj;
+
+    if let Some((bridge, scale, p)) = pending_ui {
+        // SAFETY: `env` is the UI thread's `JNIEnv*` and `HOST` is not borrowed.
+        unsafe { selection_jni::apply_presentation_bridge(env, &bridge, scale, p) };
+    }
 
     // Run `setImeState` and SAF pickers after releasing the `HOST` RefCell borrow so
     // synchronous Java callbacks cannot re-enter a borrowed `HOST`.
@@ -730,14 +878,24 @@ unsafe extern "system" fn native_long_press_timeout(env: *mut JNIEnv, this: jobj
 }
 
 unsafe extern "system" fn native_wake(env: *mut JNIEnv, this: jobject) {
+    let mut pending_ui: Option<(Arc<Mutex<Option<ViewBridge>>>, f32, Presentation)> = None;
     HOST.with(|slot| {
         if let Some(host) = slot.borrow_mut().as_mut() {
             let _ = host.stack.pump();
             #[cfg(feature = "accessibility")]
             let _ = host.stack.a11y_receive(&mut host.a11y);
             if !host.state.resumed { let _ = host.stack.take_haptics(); }
+            let now = host.now_secs();
+            let (apply, _) = step_selection(host, selection::Event::Tick { now });
+            if let Some(p) = apply {
+                pending_ui = Some((Arc::clone(&host.bridge), host.current_scale(), p));
+            }
         }
     });
+    if let Some((bridge, scale, p)) = pending_ui {
+        // SAFETY: `env` is the UI thread's `JNIEnv*` and `HOST` is not borrowed.
+        unsafe { selection_jni::apply_presentation_bridge(env, &bridge, scale, p) };
+    }
     let _ = dispatch(env, this, Event::Wake, ptr::null_mut());
 }
 

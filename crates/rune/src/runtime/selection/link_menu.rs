@@ -200,6 +200,7 @@ impl RuntimeCore {
                 _ => {}
             }),
             field: None,
+            text_menu: false,
         });
         true
     }

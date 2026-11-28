@@ -53,6 +53,7 @@ open class RuneView(
     private val timerWakeRunnable = Runnable { nativeWake() }
     private var a11yWakeRunnable: Runnable? = null
     private val clipboard: RuneClipboard
+    private val selectionOverlay: RuneSelectionOverlay
     private val accessibilityManager: AccessibilityManager? =
         context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
     private val tmpRect = Rect()
@@ -104,6 +105,14 @@ open class RuneView(
     init {
         System.loadLibrary(libName)
         clipboard = RuneClipboard.getOrCreate(context)
+        selectionOverlay = RuneSelectionOverlay(
+            hostView = this,
+            onHandleGrab = { kind, xPx, yPx -> nativeSelectionHandleGrab(kind, xPx, yPx) },
+            onHandleMove = { xPx, yPx -> nativeSelectionHandleMove(xPx, yPx) },
+            onHandleRelease = { nativeSelectionHandleRelease() },
+            onCaretTap = { nativeSelectionCaretTap() },
+            onToolbarAction = { action -> nativeSelectionToolbarAction(action) },
+        )
         holder.addCallback(this)
         isFocusable = true
         isFocusableInTouchMode = true
@@ -118,6 +127,11 @@ open class RuneView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         requestApplyInsets()
+    }
+
+    override fun onDetachedFromWindow() {
+        selectionOverlay.dismissAll()
+        super.onDetachedFromWindow()
     }
 
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = a11yProvider
@@ -487,6 +501,7 @@ open class RuneView(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        selectionOverlay.dismissAll()
         cancelFrame()
         nativeSurfaceDestroyed()
     }
@@ -716,6 +731,7 @@ open class RuneView(
     }
 
     fun onPause() {
+        selectionOverlay.dismissAll()
         cancelFrame()
         nativePause()
     }
@@ -727,7 +743,31 @@ open class RuneView(
     /** Returns true if Rune consumed Back (routed as Escape); false lets the Activity go back. */
     fun handleBack(): Boolean = nativeBack()
 
+    /**
+     * Called by Rust (UI thread) to position or hide native selection handles, the drag magnifier,
+     * and the floating `ActionMode` toolbar in view-local pixels.
+     */
+    @Suppress("LongParameterList")
+    fun updateSelectionUi(
+        hasStart: Boolean, startX: Float, startTop: Float, startBottom: Float,
+        hasEnd: Boolean, endX: Float, endTop: Float, endBottom: Float,
+        hasCaret: Boolean, caretX: Float, caretTop: Float, caretBottom: Float,
+        hasMagnifier: Boolean, magX: Float, magY: Float,
+        toolbarActions: Int,
+        rectLeft: Float, rectTop: Float, rectRight: Float, rectBottom: Float,
+    ) {
+        selectionOverlay.update(
+            hasStart, startX, startTop, startBottom,
+            hasEnd, endX, endTop, endBottom,
+            hasCaret, caretX, caretTop, caretBottom,
+            hasMagnifier, magX, magY,
+            toolbarActions,
+            rectLeft, rectTop, rectRight, rectBottom,
+        )
+    }
+
     fun onDestroy() {
+        selectionOverlay.dismissAll()
         cancelFrame()
         nativeDestroy()
     }
@@ -813,6 +853,11 @@ open class RuneView(
         focusable: Boolean,
         clickable: Boolean,
     ): Int
+    private external fun nativeSelectionHandleGrab(kind: Int, xPx: Float, yPx: Float)
+    private external fun nativeSelectionHandleMove(xPx: Float, yPx: Float)
+    private external fun nativeSelectionHandleRelease()
+    private external fun nativeSelectionCaretTap()
+    private external fun nativeSelectionToolbarAction(action: Int)
 
     private companion object {
         /** API 33+ MotionEvent.FLAG_CANCELED, safe to mask on API 26+. */

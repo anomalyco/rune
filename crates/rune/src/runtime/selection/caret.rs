@@ -48,6 +48,11 @@ pub(crate) struct TextInputState {
     pub(super) links: links::LinkState,
     /// Multi-click and drag selection state for `text_input`.
     pub(in crate::runtime) input_click: input_click::InputClick,
+    /// Native touch selection handle drag state (`touch_ui`).
+    pub(in crate::runtime) handle_drag: super::touch_ui::HandleDrag,
+    /// Monotonic counter bumped on touch taps / field-menu opens / caret-handle releases so the
+    /// touch selection host knows when to show the 4-second caret handle.
+    pub(in crate::runtime) touch_selection_rev: u64,
     /// Sideways scroll of focused single-line fields, in points, keyed by node path.
     pub(crate) input_scroll: HashMap<String, f32>,
     /// The focused field's caret (path, window rect) the next view sees through `Cx::caret`.
@@ -102,6 +107,8 @@ impl TextInputState {
             sel_heard: Default::default(),
             links: Default::default(),
             input_click: Default::default(),
+            handle_drag: Default::default(),
+            touch_selection_rev: 0,
             input_scroll: HashMap::default(),
             caret: None,
             caret_watch: false,
@@ -198,6 +205,11 @@ impl TextInputState {
     #[inline]
     pub(in crate::runtime) fn set_shift(&mut self, shift: bool) {
         self.selectable.shift = shift;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn bump_touch_selection_rev(&mut self) {
+        self.touch_selection_rev = self.touch_selection_rev.wrapping_add(1);
     }
 }
 

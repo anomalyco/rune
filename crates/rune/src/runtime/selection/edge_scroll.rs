@@ -30,6 +30,9 @@ const MIN_PAST: f32 = 8.0;
 const MAX_SPEED: f32 = 4000.0;
 /// How far inside the edge still counts as at it, in points.
 const AT: f32 = 1.0;
+/// Vertical edge band (in points) for a dragged touch selection handle, so holding a handle at
+/// the top or bottom of a viewport (or flush with the screen edge) scrolls it smoothly.
+const HANDLE_EDGE_MARGIN: f32 = 24.0;
 /// The longest a step covers, so a late frame doesn't jump.
 const MAX_STEP: f64 = 0.05;
 
@@ -255,29 +258,43 @@ impl caret::TextInputState {
         self.input_click.drop_drag();
     }
 
-    /// Updates input-click state for a focus change and stops any edge scroll if the dragged
-    /// field lost focus.
+    /// Updates input-click and handle-drag state for a focus change and stops any edge scroll if
+    /// the dragged field lost focus.
     #[inline]
     pub(in crate::runtime) fn on_input_focus_change(&mut self, focused: Option<&str>) {
         let was = self.input_click.dragging_path().is_some();
         self.input_click.on_focus_change(focused);
-        if was && self.input_click.dragging_path().is_none() { self.stop_edge_scroll(); }
+        let dropped_handle = self.handle_drag.field_path().is_some_and(|p| Some(p) != focused);
+        if dropped_handle {
+            self.handle_drag = super::touch_ui::HandleDrag::Idle;
+        }
+        if (was && self.input_click.dragging_path().is_none()) || dropped_handle {
+            self.stop_edge_scroll();
+        }
     }
 }
 
 impl RuntimeCore {
-    /// Whether a held press is actively extending a selection, in `El::selectable` text or a
-    /// `text_input`.
+    /// Whether a held press or a native touch selection handle is actively extending a selection,
+    /// in `El::selectable` text or a `text_input`.
     fn dragging_selection(&self) -> bool {
-        self.edit.selectable.phase.dragging() || self.edit.input_click.dragging_path().is_some()
+        self.edit.selectable.phase.dragging()
+            || self.edit.input_click.dragging_path().is_some()
+            || self.edit.handle_drag.is_active()
+    }
+
+    /// Position in view points currently driving edge scroll (a dragged touch handle, else a held
+    /// pointer).
+    fn edge_scroll_pos(&self) -> Option<(f32, f32)> {
+        self.edit.handle_drag.pos().or_else(|| self.pointer.pressing().then_some(self.pointer.pos).flatten())
     }
 
     /// The node holding the active selection drag: a selectable text or a multiline `text_input`.
     fn drag_holder(&self) -> Option<usize> {
-        if self.edit.selectable.phase.dragging() {
+        if self.edit.handle_drag.is_selectable() || self.edit.selectable.phase.dragging() {
             return self.selection_holder();
         }
-        let path = self.edit.input_click.dragging_path()?;
+        let path = self.edit.handle_drag.field_path().or_else(|| self.edit.input_click.dragging_path())?;
         self.live(path).filter(|&i| self.tree.nodes[i].input.as_ref().is_some_and(|inp| !inp.single_line))
     }
 
@@ -294,7 +311,7 @@ impl RuntimeCore {
     /// Takes the step due by this frame.
     pub(in crate::runtime) fn fire_edge_scroll(&mut self) {
         let Some(attempt) = self.edit.selectable.edge.attempt() else { return };
-        let edge = self.pointer.pos.and_then(|(x, y)| self.edge_at(x, y));
+        let edge = self.edge_scroll_pos().and_then(|(x, y)| self.edge_at(x, y));
         let effects = self.edit.selectable.edge.step(Event::Due { attempt, now: self.clock, edge });
         self.carry_edge_scroll(effects);
     }
@@ -317,7 +334,7 @@ impl RuntimeCore {
         if self.scroll.scrolls.get(&scroll.id).is_some_and(|st| if scroll.horizontal { st.x.max } else { st.max } == max) {
             return EdgeLaid::default();
         }
-        let edge = self.pointer.pos.and_then(|(x, y)| self.edge_at(x, y));
+        let edge = self.edge_scroll_pos().and_then(|(x, y)| self.edge_at(x, y));
         self.edge_step_heard(app, Event::Extent { now: self.clock, edge })
     }
 
@@ -343,8 +360,13 @@ impl RuntimeCore {
         for effect in effects {
             match effect {
                 Effect::Scroll { scroll, by } => self.edge_scroll_by(scroll, by),
-                Effect::Extend => if let Some((x, y)) = self.pointer.pos {
-                    if self.edit.selectable.phase.dragging() {
+                Effect::Extend => if let Some((x, y)) = self.edge_scroll_pos() {
+                    if self.edit.handle_drag.is_selectable() {
+                        self.drag_selectable_handle_view(x, y);
+                    } else if self.edit.handle_drag.field_path().is_some() {
+                        self.frame.queue.push(Action::HandleDrag(x, y));
+                        queued = true;
+                    } else if self.edit.selectable.phase.dragging() {
                         self.selection_drag(x, y);
                     } else if self.edit.input_click.dragging_path().is_some() {
                         let before = self.frame.queue.len();
@@ -387,7 +409,9 @@ impl RuntimeCore {
     /// scroll that way, then the innermost horizontal one's left or right (as drawn, inside its
     /// clips and the window), how fast that scrolls, and how far it still can.
     fn edge_at(&self, x: f32, y: f32) -> Option<Edge> {
-        if !self.dragging_selection() || !self.pointer.pressing() { return None; }
+        if !self.edit.handle_drag.is_active() && (!self.dragging_selection() || !self.pointer.pressing()) {
+            return None;
+        }
         let holder = self.drag_holder()?;
         let innermost = |horizontal: bool| {
             std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
@@ -406,14 +430,25 @@ impl RuntimeCore {
         let id = self.tree.nodes[i].id;
         let st = self.scroll.scrolls.get(&id)?;
         let clip = self.screen_clip_of_parent(self.tree.nodes[i].parent).map(|v| v / self.env.scale);
-        let [left, top, right, bottom] = intersect(intersect(self.drawn_edges(i), clip), [0.0, 0.0, self.viewport.0, self.viewport.1]);
+        let vis_h = if !horizontal && self.edit.handle_drag.is_active() {
+            let kb = self.host.keyboard_inset();
+            if kb > 0.0 { (self.viewport.1 - kb / self.host.zoom.k.max(1e-3)).max(0.0) } else { self.viewport.1 }
+        } else {
+            self.viewport.1
+        };
+        let [left, top, right, bottom] = intersect(intersect(self.drawn_edges(i), clip), [0.0, 0.0, self.viewport.0, vis_h]);
         let (lo, hi) = if horizontal { (left, right) } else { (top, bottom) };
-        if hi - lo <= 2.0 * AT { return None; }
+        let margin = if !horizontal && self.edit.handle_drag.is_active() {
+            HANDLE_EDGE_MARGIN.min((hi - lo) * 0.2).max(AT)
+        } else {
+            AT
+        };
+        if hi - lo <= 2.0 * margin { return None; }
         // Positive past the bottom or right edge.
-        let toward = if at >= hi - AT {
-            speed(at - (hi - AT))
-        } else if at <= lo + AT {
-            -speed(lo + AT - at)
+        let toward = if at >= hi - margin {
+            speed(at - (hi - margin))
+        } else if at <= lo + margin {
+            -speed(lo + margin - at)
         } else {
             return None;
         };

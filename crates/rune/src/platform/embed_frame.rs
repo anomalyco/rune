@@ -233,10 +233,12 @@ pub(crate) fn run_embed_frame<E: EmbedSurface>(surface: &mut E) -> FrameSummary 
 /// `LayerHost::take_haptics()`.
 pub(crate) fn flush_requests_with(rt: &mut RuntimeCore, app: &mut dyn AppDriver, preserve_shell: bool) {
     crate::clipboard::flush_memory(rt);
-    if rt.popup_menu_fallback_active(app) {
+    if rt.front_is_text_menu() {
+        // Left for the embedding host (e.g. Android's floating ActionMode) via `take_text_menu`.
+    } else if rt.popup_menu_fallback_active(app) {
         let _ = rt.deliver_popup_menu_fallback_from_host(app);
     } else if rt.popup_menu().is_some() {
-        rt.cancel_popups(app);
+        rt.cancel_non_text_popups(app);
     }
     if !rt.host.file_dialogs {
         rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");

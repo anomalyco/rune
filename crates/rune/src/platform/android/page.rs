@@ -32,7 +32,11 @@ use super::host::ViewBridge;
 #[cfg(target_os = "android")]
 use super::input::{self, TextInputAction};
 #[cfg(target_os = "android")]
+use crate::runtime::selection::touch_ui::{Handle, TouchSelectionSnapshot};
+#[cfg(target_os = "android")]
 use super::picker::{self, PickAnswer, PickStep};
+#[cfg(target_os = "android")]
+use super::selection::ToolbarActions;
 #[cfg(target_os = "android")]
 use super::surface::AndroidSurface;
 
@@ -178,6 +182,20 @@ pub(super) trait AndroidPage {
     fn finish_composition(&mut self);
     #[cfg(target_os = "android")]
     fn sample_editor(&mut self) -> EditorSnapshot;
+    #[cfg(target_os = "android")]
+    fn selection_snapshot(&self) -> Option<TouchSelectionSnapshot>;
+    #[cfg(target_os = "android")]
+    fn take_text_menu(&mut self, can_select_all: bool) -> Option<ToolbarActions>;
+    #[cfg(target_os = "android")]
+    fn resolve_text_menu(&mut self, picked: Option<&str>);
+    #[cfg(target_os = "android")]
+    fn open_selection_text_menu(&mut self) -> bool;
+    #[cfg(target_os = "android")]
+    fn handle_grab(&mut self, handle: Handle, x: f32, y: f32) -> bool;
+    #[cfg(target_os = "android")]
+    fn handle_drag(&mut self, x: f32, y: f32) -> bool;
+    #[cfg(target_os = "android")]
+    fn handle_release(&mut self);
     #[cfg(all(target_os = "android", feature = "accessibility"))]
     fn a11y_receive(&mut self, a11y: &mut crate::a11y::android::Adapter) -> bool;
     #[cfg(all(target_os = "android", feature = "accessibility"))]
@@ -298,6 +316,7 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
         {
             rt.core_mut().host.open_urls_natively = true;
             rt.core_mut().host.file_dialogs = true;
+            rt.core_mut().host.text_menus = true;
         }
         let now = crate::time::now();
         rt.core_mut().wall_start = Some(now);
@@ -557,6 +576,51 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
             return EditorSnapshot::default();
         };
         editor::sample_editor(rt.core_mut())
+    }
+
+    #[cfg(target_os = "android")]
+    fn selection_snapshot(&self) -> Option<TouchSelectionSnapshot> {
+        self.rt.as_ref()?.core().touch_selection_snapshot()
+    }
+
+    #[cfg(target_os = "android")]
+    fn take_text_menu(&mut self, can_select_all: bool) -> Option<ToolbarActions> {
+        let show = self.rt.as_mut()?.core_mut().take_text_menu()?;
+        Some(ToolbarActions::from_popup_menu(&show.menu, can_select_all))
+    }
+
+    #[cfg(target_os = "android")]
+    fn resolve_text_menu(&mut self, picked: Option<&str>) {
+        if let Some(rt) = &mut self.rt {
+            let (core, mut app) = rt.split_mut();
+            let _ = core.resolve_popup(&mut app, picked);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn open_selection_text_menu(&mut self) -> bool {
+        let Some(rt) = &mut self.rt else { return false };
+        let (core, mut app) = rt.split_mut();
+        core.open_selection_text_menu(&mut app)
+    }
+
+    #[cfg(target_os = "android")]
+    fn handle_grab(&mut self, handle: Handle, x: f32, y: f32) -> bool {
+        self.rt.as_mut().is_some_and(|rt| rt.core_mut().touch_handle_grab(handle, x, y))
+    }
+
+    #[cfg(target_os = "android")]
+    fn handle_drag(&mut self, x: f32, y: f32) -> bool {
+        let Some(rt) = &mut self.rt else { return false };
+        let (core, mut app) = rt.split_mut();
+        core.touch_handle_drag(&mut app, x, y)
+    }
+
+    #[cfg(target_os = "android")]
+    fn handle_release(&mut self) {
+        if let Some(rt) = &mut self.rt {
+            rt.core_mut().touch_handle_release();
+        }
     }
 
     #[cfg(all(target_os = "android", feature = "accessibility"))]

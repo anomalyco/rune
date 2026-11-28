@@ -32,6 +32,11 @@ mod page;
 pub(crate) mod picker;
 #[cfg(test)]
 mod picker_tests;
+pub(crate) mod selection;
+#[cfg(target_os = "android")]
+mod selection_jni;
+#[cfg(test)]
+mod selection_tests;
 pub(crate) mod stack;
 #[cfg(test)]
 mod stack_tests;

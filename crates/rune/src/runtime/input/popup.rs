@@ -69,6 +69,44 @@ impl RuntimeCore {
     /// The pop-up menu showing, or the next to show, from [`Tx::popup_menu`].
     pub(crate) fn popup_menu(&self) -> Option<&PopupMenu> { self.host.popups.front().map(|r| &r.menu) }
 
+    /// Whether this host serves text menus natively (`host.text_menus`) and the front queued or
+    /// open pop-up is a text menu (a text field's menu or selectable text's Copy menu).
+    pub(crate) fn front_is_text_menu(&self) -> bool {
+        self.host.text_menus && self.host.popups.front().is_some_and(|r| r.text_menu)
+    }
+
+    /// Takes the next queued text menu for a host with `host.text_menus`, marking it open.
+    /// Returns `None` when no text menu is waiting or one is already open.
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn take_text_menu(&mut self) -> Option<Show> {
+        if !self.host.text_menus || self.host.popups.is_open() {
+            return None;
+        }
+        if !self.host.popups.front().is_some_and(|r| r.text_menu) {
+            return None;
+        }
+        self.take_popup().flatten()
+    }
+
+    /// Cancels non-text pop-ups queued at the front of `self.host.popups` while leaving any
+    /// text menu intact when `self.host.text_menus` is enabled.
+    #[cfg_attr(not(any(target_vendor = "apple", target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn cancel_non_text_popups(&mut self, app: &mut dyn AppDriver) {
+        if !self.host.text_menus {
+            self.cancel_popups(app);
+            return;
+        }
+        self.host.popup_fallback = popup_fallback::PopupFallbackState::Idle;
+        for _ in 0..64 {
+            if self.front_is_text_menu() || self.host.popups.is_empty() {
+                return;
+            }
+            if self.resolve_popup(app, None).is_err() {
+                return;
+            }
+        }
+    }
+
     /// Answers the pop-up menu showing (or next to show) as if the user picked `picked`, or
     /// dismissed it with `None`. Its callback runs now and the next frame commits it, as for
     /// [`Runtime::update`]. For tests and headless drivers; native menus answer themselves.
