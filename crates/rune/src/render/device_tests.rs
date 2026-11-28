@@ -86,6 +86,21 @@ fn dx12_presentation_system_env_override_selects_hwnd_or_visual() {
 }
 
 #[test]
+fn dx12_compiler_is_dxc_only_by_full_path_beside_the_executable() {
+    let dir = std::env::temp_dir().join(format!("rune-dxc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(matches!(Gpu::dx12_compiler(None), wgpu::Dx12Compiler::Fxc));
+    assert!(matches!(Gpu::dx12_compiler(Some(&dir)), wgpu::Dx12Compiler::Fxc), "no dxcompiler.dll there: FXC");
+    let dll = dir.join("dxcompiler.dll");
+    std::fs::write(&dll, b"").unwrap();
+    match Gpu::dx12_compiler(Some(&dir)) {
+        wgpu::Dx12Compiler::DynamicDxc { dxc_path } => assert_eq!(std::path::Path::new(&dxc_path), dll, "the full path, never a bare name"),
+        other => panic!("expected DXC, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn select_wgpu_instance_keeps_compliant_when_adapters_exist() {
     let mut built = Vec::new();
     let chosen = Gpu::select_wgpu_instance(

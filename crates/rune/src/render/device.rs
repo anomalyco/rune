@@ -206,6 +206,20 @@ impl Gpu {
         wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env()
     }
 
+    /// DX12's shader compiler: DXC when the app ships `dxcompiler.dll` in `exe_dir` (its
+    /// executable's folder), loaded by that full path; otherwise FXC, which ships with Windows
+    /// (d3dcompiler_47.dll in System32). DXC builds pipelines several times faster and compiles
+    /// compute shaders FXC gets wrong (vello's never finished a frame of a large map on Intel UHD
+    /// Graphics). Never by bare name, as wgpu's default does: that searches PATH, where another
+    /// app's incompatible copy crashes the first shader compile (Hex #587).
+    pub(crate) fn dx12_compiler(exe_dir: Option<&std::path::Path>) -> wgpu::Dx12Compiler {
+        let dll = exe_dir.map(|d| d.join("dxcompiler.dll")).filter(|p| p.is_file());
+        match dll.as_deref().and_then(std::path::Path::to_str) {
+            Some(path) => wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_owned() },
+            None => wgpu::Dx12Compiler::Fxc,
+        }
+    }
+
     /// Whether this process has fallen back from direct Linux Vulkan driver loading to an
     /// unlimited instance with all installed drivers.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -537,10 +551,9 @@ impl Gpu {
         // A window waits for room in its swap chain itself, in the loop rather than in
         // `acquire` (`window::slot`).
         descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
-        // FXC ships with Windows (d3dcompiler_47.dll in System32). wgpu's default looks for
-        // dxcompiler.dll on PATH, where another app's incompatible copy crashes the first
-        // shader compile (Hex #587).
-        descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+        // DXC from beside the executable, else FXC (`dx12_compiler`).
+        let exe_dir = if cfg!(windows) { std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) } else { None };
+        descriptor.backend_options.dx12.shader_compiler = Self::dx12_compiler(exe_dir.as_deref());
         descriptor
     }
 
