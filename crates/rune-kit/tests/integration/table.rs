@@ -734,6 +734,51 @@ fn table_virtual_overscan_forwards_and_reduces_mounted_nodes() {
     assert_eq!(grid["name"], "Signals");
 }
 
+#[test]
+fn table_stick_bottom_virtual_overscan_drops_pinned_row_floor() {
+    struct App {
+        table: TableState,
+        overscan: Option<(f32, f32)>,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = Kit::neutral(true);
+        let mut t = Table::new(
+            |s: &App| &s.table,
+            |s: &mut App| &mut s.table,
+            |_: &App| 500,
+            |_: &App, i| Cow::Owned(format!("r{i}")),
+        )
+        .stick_bottom(true)
+        .column(TableColumn::new("id", "ID").width(120.0))
+        .cell(|_: &App, i, _| Cell::text(format!("row-{i}")));
+        if let Some((o, e)) = s.overscan {
+            t = t.virtual_overscan(o, e);
+        }
+        col().size(300.0, 220.0).child(t.build(s, &k).h(220.0))
+    }
+
+    let run = |overscan| {
+        let mut rt = Runtime::new(
+            App { table: TableState::new(), overscan },
+            view,
+            (300.0, 220.0),
+            Env::new(true, 1.0),
+        );
+        for _ in 0..30 {
+            if !rt.frame(1.0 / 60.0) && rt.wake_deadline().is_none() { break; }
+        }
+        assert!(!rt.frame(1.0 / 60.0), "pinned table overscan={overscan:?} must settle idle");
+        rt.elements().into_iter().filter(|e| e.role == "row" && e.key.as_deref() != Some("header")).count()
+    };
+
+    let def_rows = run(None);
+    let tight_rows = run(Some((0.5, 0.25)));
+    let zero_rows = run(Some((0.0, 0.0)));
+    assert_eq!(def_rows, 32, "default pinned table keeps 32-row floor");
+    assert!(tight_rows < 20, "tight pinned table mounts far fewer than 32 rows, got {tight_rows}");
+    assert!(zero_rows < tight_rows, "zero pinned table ({zero_rows}) mounts fewer than tight ({tight_rows})");
+}
+
 // Benchmark ---------------------------------------------------------------------------------
 
 fn percentile(v: &mut [f64], p: f64) -> f64 {

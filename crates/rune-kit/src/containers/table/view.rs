@@ -608,8 +608,8 @@ impl<S: 'static> Table<S> {
     ///
     /// Smaller values mount fewer offscreen rows and reduce per-frame scroll work at the cost of
     /// more frequent window-move commits while scrolling; larger values commit less often while
-    /// keeping more offscreen nodes mounted. Clamping and non-finite handling follow
-    /// [`El::virtual_overscan`].
+    /// keeping more offscreen nodes mounted. Clamping, non-finite handling, and disabling the
+    /// default 32-row `stick_bottom` pinned floor follow [`El::virtual_overscan`].
     ///
     /// ```
     /// use std::borrow::Cow;

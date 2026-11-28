@@ -487,8 +487,9 @@ policy changes are applied in the same mutation phase.
   `.virtual_overscan(0.5, 0.25)` for long fixed-height tables): smaller values mount fewer
   offscreen rows and cut per-frame scroll work at the cost of more frequent window-move commits,
   while larger values commit less often at the cost of more mounted nodes (`overscan` clamps to
-  `0.0..=8.0`, `edge` clamps strictly below `overscan` when `overscan > 0.0`, and non-finite
-  values are ignored).
+  `0.0..=8.0`, `edge` clamps strictly below `overscan` when `overscan > 0.0`, non-finite
+  values are ignored, and setting `virtual_overscan` disables the default 32-row pinned-end floor
+  in `stick_bottom` viewports so small lists mount only their viewport plus overscan).
   `tx.scroll_into_view(key)` reveals a row, including one outside the realized window.
   `tx.scroll_page(key, pages)` pages the viewport keyed `key` (or containing it) by `pages` × 90%
   of its height, as Page Up and Page Down do; a `stick_bottom` viewport that lands on its end
