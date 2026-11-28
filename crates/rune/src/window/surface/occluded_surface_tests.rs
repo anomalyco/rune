@@ -46,7 +46,7 @@ fn an_occluded_surface_never_asks_wgpu_and_draws_once_visible() {
         Ok(gpu) => gpu,
         Err(error) => return eprintln!("skipped: {error}"),
     };
-    let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false) else {
+    let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false, false) else {
         return eprintln!("skipped: the adapter can't present to a Metal layer");
     };
     surface.configure(&gpu.device, &config);
@@ -117,7 +117,7 @@ fn a_presumed_shown_surface_gets_its_first_drawable_while_reported_covered() {
         Ok(gpu) => gpu,
         Err(error) => return eprintln!("skipped: {error}"),
     };
-    let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false) else {
+    let Some((config, _)) = surface_config(&surface, &gpu.adapter, (64, 64), false, false) else {
         return eprintln!("skipped: the adapter can't present to a Metal layer");
     };
     surface.configure(&gpu.device, &config);

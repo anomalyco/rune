@@ -768,7 +768,7 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
                 return Ok(SetupOutcome::SoftwareDeferred);
             }
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
-            let (config, _) = surface_config(surface, &gpu.adapter, size, srgb)
+            let (config, _) = surface_config(surface, &gpu.adapter, size, srgb, false)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
             configure_checked(surface, gpu, &config).map_err(|error| SurfaceSetupError::from_configure("", error))?;
             let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };

@@ -237,6 +237,7 @@ impl Host {
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
         let frame_latency = crate::window::frame_latency(self.frame_latency);
+        let frame_callback_paced = self.wayland;
         let features = self.app.compositor_features();
         let transparent = self.options.transparent;
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
@@ -268,7 +269,7 @@ impl Host {
         };
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| -> Result<_, SurfaceSetupError> {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
-            let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
+            let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend, frame_callback_paced)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
             config.desired_maximum_frame_latency = frame_latency;
             #[cfg(target_os = "macos")]
@@ -748,6 +749,7 @@ impl Host {
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
         let frame_latency = crate::window::frame_latency(self.frame_latency);
+        let frame_callback_paced = self.wayland;
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance| {
             #[cfg(target_os = "windows")]
@@ -759,7 +761,7 @@ impl Host {
         };
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| {
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-            let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
+            let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend, frame_callback_paced)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
             config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {

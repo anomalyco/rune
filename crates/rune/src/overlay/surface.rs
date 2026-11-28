@@ -249,9 +249,18 @@ impl OverlayCore {
         let srgb_blend = app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
         let frame_latency = crate::window::frame_latency(self.frame_latency);
+        // Layer-shell overlays gate every present on `wl_surface.frame` (`layer.request_frame()`
+        // + `Turn::AwaitingFrame`). Window-backed overlays (including Wayland toplevel fallbacks)
+        // and XWayland surfaces draw through `about_to_wait` and rely on `AutoVsync`.
+        let frame_callback_paced = {
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            { matches!(backing, Backing::Layer(_)) }
+            #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+            { false }
+        };
         let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
-            let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
+            let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend, frame_callback_paced)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
             config.desired_maximum_frame_latency = frame_latency;
             let info = gpu.adapter.get_info();

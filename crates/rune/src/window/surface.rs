@@ -65,6 +65,9 @@ mod backoff_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "surface/occluded_surface_tests.rs"]
 mod occluded_surface_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "surface/present_mode_tests.rs"]
+mod present_mode_tests;
 
 /// Frames a window's swap chain may hold that the compositor hasn't shown. Windows: one, so a
 /// frame shows at the first composition after it's done, and the window waits for room itself
@@ -132,11 +135,40 @@ pub(in crate::window) fn drawable_size(current: Option<(u32, u32)>, reported: (u
     }
 }
 
-/// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
-/// first alpha mode it supports that composites translucent pixels.
+/// Picks the swap-chain presentation mode from the surface's advertised `modes`.
+///
+/// Surfaces that already pace every commit on Wayland's `wl_surface.frame` callback
+/// (`frame_callback_paced == true`) prefer [`wgpu::PresentMode::Mailbox`] when offered: Wayland
+/// compositors latch buffers atomically and never tear, and `Mailbox` stops the Vulkan WSI driver
+/// from adding a `wp_fifo_v1` FIFO barrier on top of the frame callback (which can stall commits
+/// mid-animation until unrelated compositor activity on compositors such as Mutter). Surfaces
+/// without frame-callback pacing, or drivers that do not advertise `Mailbox`, keep
+/// [`wgpu::PresentMode::AutoVsync`].
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
-    -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
+pub(crate) fn present_mode(
+    modes: &[wgpu::PresentMode],
+    frame_callback_paced: bool,
+) -> wgpu::PresentMode {
+    if frame_callback_paced && modes.contains(&wgpu::PresentMode::Mailbox) {
+        wgpu::PresentMode::Mailbox
+    } else {
+        wgpu::PresentMode::AutoVsync
+    }
+}
+
+/// A vsynced sRGB (or non-sRGB when `srgb_blend` is set) configuration for the surface, and the
+/// first alpha mode it supports that composites translucent pixels. `frame_callback_paced` is true
+/// when the surface paces every frame on Wayland's `wl_surface.frame` callback so
+/// [`present_mode`] can pick `Mailbox` when offered instead of stacking a `wp_fifo_v1` barrier on
+/// top of it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn surface_config(
+    surface: &wgpu::Surface,
+    adapter: &wgpu::Adapter,
+    (width, height): (u32, u32),
+    srgb_blend: bool,
+    frame_callback_paced: bool,
+) -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
     let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
     // The surface is asked what it can do once. A Vulkan driver answers each part of that with a
     // call of its own, and Mesa's Wayland surfaces answer each call by asking the compositor for
@@ -175,7 +207,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     // A frame that redrew part of itself is copied in whole from the one the renderer keeps
     // (`render::damaged`).
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
-    config.present_mode = wgpu::PresentMode::AutoVsync;
+    config.present_mode = present_mode(&caps.present_modes, frame_callback_paced);
     config.desired_maximum_frame_latency = FRAME_LATENCY;
     Some((config, crate::render::translucency::mode_of(&caps, adapter)))
 }
@@ -188,7 +220,13 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
 pub(crate) fn reblend_core(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu::SurfaceConfiguration,
     renderer: &mut Renderer, alpha: &mut Option<crate::render::surface_alpha::AlphaSurface>, rt: &mut RuntimeCore) -> bool {
     let srgb = rt.srgb_blend();
-    let Some((next, _)) = surface_config(surface, &gpu.adapter, (config.width, config.height), srgb) else { return false };
+    let Some((next, _)) = surface_config(
+        surface,
+        &gpu.adapter,
+        (config.width, config.height),
+        srgb,
+        config.present_mode == wgpu::PresentMode::Mailbox,
+    ) else { return false };
     if (config.format, &config.view_formats) != (next.format, &next.view_formats) {
         (config.format, config.view_formats) = (next.format, next.view_formats);
         if let Err(error) = configure(surface, gpu, config) {
