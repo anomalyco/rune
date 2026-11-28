@@ -35,6 +35,17 @@ impl DrawingModel {
     /// [`Self::labels`]. A hover copy uses the same marks as the label underneath it.
     pub fn draw(&self, marks: impl Fn(&str) -> Vec<TextHighlight>) -> Drawing {
         let (el, size) = self.scene.drawing(&self.style, Some(&marks));
-        Drawing { el, size, surface: self.style.surface, surface_border: self.style.surface_border }
+        Drawing::new(el, size, self.scene.clone(), self.style)
+    }
+
+    /// Serializes this laid-out diagram as a static, self-contained framed-card SVG document
+    /// (surface fill, border, padding, title, fitted scale, paths, and measured `<text>` labels).
+    pub fn to_svg(&self) -> String {
+        super::svg::render(&self.scene, &self.style, true)
+    }
+
+    /// Like [`Self::to_svg`], without the surrounding surface card frame or card padding.
+    pub fn to_svg_bare(&self) -> String {
+        super::svg::render(&self.scene, &self.style, false)
     }
 }

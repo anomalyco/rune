@@ -69,7 +69,8 @@ pub fn shape_key(text: &str, spans: &[Span], style: TextStyle, scale: f32, wrap_
 /// per-paragraph cache keying so both invalidate identically when a pill's geometry changes.
 pub(crate) fn hash_pill_layout(p: &PillChip, h: &mut impl Hasher) {
     let nonneg_bits = |v: f32| (if v.is_finite() && v > 0.0 { v } else { 0.0 }).to_bits();
-    let replace = |r: &crate::Replace| [r.width, r.ascent, r.descent].map(f32::to_bits);
+    let finite_bits = |v: f32| (if v.is_finite() && v != 0.0 { v } else { 0.0 }).to_bits();
+    let replace = |r: &crate::Replace| [r.width, r.ascent, r.descent, r.rise].map(finite_bits);
     (
         p.start,
         p.end,

@@ -6,6 +6,7 @@ mod ink;
 pub(crate) mod parts;
 pub(crate) mod scenes;
 pub(crate) mod shape;
+pub(crate) mod svg;
 
 use rune::{Align, Color, El, LineCap, Shape, TextHighlight, TextStyle, Transition, canvas, col, el, text};
 
@@ -14,7 +15,7 @@ use hover::{Hover, Spot, Trace};
 use parts::{LabelKey, Mark, Names, Piece, pieces};
 
 /// The card's padding on each side.
-const CARD_PAD: f32 = 16.0;
+pub(crate) const CARD_PAD: f32 = 16.0;
 
 type Marks<'a> = Option<&'a dyn Fn(&str) -> Vec<TextHighlight>>;
 
@@ -288,8 +289,8 @@ impl Canvas {
             label_keys,
             hovers,
             lit,
-            #[cfg(test)]
             ops: self.ops,
+            ops_offset: [pad - b[0], pad - b[1]],
         })
     }
 }
@@ -312,8 +313,9 @@ pub(crate) struct Scene {
     /// The hover colour.
     lit: Color,
     /// What the pieces draw, in the diagram's own points.
-    #[cfg(test)]
     pub(crate) ops: Vec<Op>,
+    /// Translation from `ops` coordinates into `0..full` coordinates.
+    pub(crate) ops_offset: [f32; 2],
 }
 
 impl Scene {
@@ -420,9 +422,9 @@ impl Scene {
 }
 
 /// Points between a diagram's title and its drawing.
-const TITLE_GAP: f32 = 12.0;
+pub(crate) const TITLE_GAP: f32 = 12.0;
 
-fn title_font(paint: &DiagramStyle) -> TextStyle {
+pub(crate) fn title_font(paint: &DiagramStyle) -> TextStyle {
     TextStyle { size: paint.font.size + 1.0, line_height: paint.font.line_height + 2.0, weight: 600.0, ..paint.font }
 }
 

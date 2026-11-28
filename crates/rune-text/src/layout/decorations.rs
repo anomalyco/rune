@@ -362,7 +362,7 @@ fn push_highlight_boxes(
     out: &mut Vec<PaintedDeco>,
 ) {
     let mut last: Option<(usize, usize)> = None;
-    let mut last_line_metrics: Option<(usize, (f32, f32))> = None;
+    let mut last_line_metrics: Option<(usize, Option<(f32, f32)>)> = None;
     for (bb, line_idx) in boxes {
         let w = (bb.x1 - bb.x0) as f32;
         if w <= 0.0 {
@@ -371,20 +371,19 @@ fn push_highlight_boxes(
         let x0 = origin[0] + bb.x0 as f32;
         let (mut top, mut bot) = ((origin[1] + bb.y0 as f32).round(), (origin[1] + bb.y1 as f32).round());
         if let Some(l) = layout.get(line_idx) {
-            let base = origin[1] + l.metrics().baseline;
-            let (asc, desc) = if let Some((_, m)) = last_line_metrics.filter(|&(li, _)| li == line_idx) {
+            let span_y = if let Some((_, m)) = last_line_metrics.filter(|&(li, _)| li == line_idx) {
                 m
             } else {
                 let m = match cache.as_deref_mut() {
-                    Some(c) => c.metrics(&l, para_idx, line_idx, range.clone()),
-                    None => scan_highlight_line(&l, range.clone()),
+                    Some(c) => c.metrics(layout, &l, para_idx, line_idx, range.clone()),
+                    None => scan_highlight_line(layout, &l, range.clone()),
                 };
                 last_line_metrics = Some((line_idx, m));
                 m
             };
-            if asc > 0.0 || desc > 0.0 {
-                top = (base - asc - vpad).round();
-                bot = (base + desc + vpad).round();
+            if let Some((y0, y1)) = span_y {
+                top = (origin[1] + y0 - vpad).round();
+                bot = (origin[1] + y1 + vpad).round();
             } else if let Some(b) = blank {
                 let bbase = origin[1] + b[0];
                 top = (bbase - b[1] - vpad).round();
@@ -528,6 +527,7 @@ fn scan_line_deco(line: &parley::Line<'_, Ink>, a: usize, b: usize, bx0: f32, bx
     for item in line.items() {
         count_visit(Visit::StrikeItem);
         let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+        if is_hidden_size(gr.run().font_size()) { continue; }
         let run = gr.run().text_range();
         if run.end <= a || b <= run.start { continue; }
         let overlap = (gr.offset() + gr.advance()).min(bx1) - gr.offset().max(bx0);
@@ -549,6 +549,7 @@ impl StrikeLine {
         for (order, item) in line.items().enumerate() {
             count_visit(Visit::StrikeItem);
             let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+            if is_hidden_size(gr.run().font_size()) { continue; }
             let r = gr.run().text_range();
             let (x0, x1) = (gr.offset(), gr.offset() + gr.advance());
             if x0 < prev_x0 { sorted = false; }
@@ -627,33 +628,69 @@ impl StrikeSpanIndex {
     }
 }
 
-fn scan_highlight_line(l: &parley::Line<'_, Ink>, range: std::ops::Range<usize>) -> (f32, f32) {
-    let (mut asc, mut desc) = (0.0f32, 0.0f32);
+fn scan_highlight_line(layout: &Layout<Ink>, l: &parley::Line<'_, Ink>, range: std::ops::Range<usize>) -> Option<(f32, f32)> {
+    let base = l.metrics().baseline;
+    let (mut y0, mut y1) = (f32::INFINITY, f32::NEG_INFINITY);
     for run in l.runs() {
         count_visit(Visit::HighlightRun);
+        if is_hidden_size(run.font_size()) { continue; }
         let r = run.text_range();
         if (r.start < range.end && range.start < r.end) || (range.is_empty() && r.end == range.end) {
             let fm = run.font_metrics();
-            (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+            y0 = y0.min(base - fm.ascent);
+            y1 = y1.max(base + fm.descent.abs());
         }
     }
-    (asc, desc)
+    if layout.inline_boxes().next().is_some() {
+        for item in l.items() {
+            if let PositionedLayoutItem::InlineBox(ib) = item
+                && ib.id & PILL_BOX != 0
+                && ib.id & 1 == 0
+                && ib.width > 0.0
+                && let Some(meta) = layout.inline_boxes().find(|b| b.id == ib.id && b.baseline.is_some())
+            {
+                let end_idx = layout.inline_boxes().find(|t| t.id == (ib.id | 1)).map_or(meta.index + 1, |t| t.index);
+                if (meta.index < range.end && range.start < end_idx) || (range.is_empty() && end_idx == range.end) {
+                    y0 = y0.min(ib.y);
+                    y1 = y1.max(ib.y + ib.height);
+                }
+            }
+        }
+    }
+    (y0 <= y1).then_some((y0, y1))
 }
 
-struct HighlightRun { start: usize, end: usize, max_end: usize, asc: f32, desc: f32 }
+struct HighlightRun { start: usize, end: usize, max_end: usize, y0: f32, y1: f32 }
 struct HighlightLine { runs: Vec<HighlightRun>, cursor: usize }
 
 impl HighlightLine {
-    fn new(l: &parley::Line<'_, Ink>) -> Self {
+    fn new(layout: &Layout<Ink>, l: &parley::Line<'_, Ink>) -> Self {
+        let base = l.metrics().baseline;
         let mut runs = Vec::new();
         let (mut sorted, mut prev_start) = (true, 0usize);
         for run in l.runs() {
             count_visit(Visit::HighlightRun);
+            if is_hidden_size(run.font_size()) { continue; }
             let r = run.text_range();
             if r.start < prev_start { sorted = false; }
             prev_start = r.start;
             let fm = run.font_metrics();
-            runs.push(HighlightRun { start: r.start, end: r.end, max_end: r.end, asc: fm.ascent, desc: fm.descent.abs() });
+            runs.push(HighlightRun { start: r.start, end: r.end, max_end: r.end, y0: base - fm.ascent, y1: base + fm.descent.abs() });
+        }
+        if layout.inline_boxes().next().is_some() {
+            for item in l.items() {
+                if let PositionedLayoutItem::InlineBox(ib) = item
+                    && ib.id & PILL_BOX != 0
+                    && ib.id & 1 == 0
+                    && ib.width > 0.0
+                    && let Some(meta) = layout.inline_boxes().find(|b| b.id == ib.id && b.baseline.is_some())
+                {
+                    let end_idx = layout.inline_boxes().find(|t| t.id == (ib.id | 1)).map_or(meta.index + 1, |t| t.index);
+                    if meta.index < prev_start { sorted = false; }
+                    prev_start = meta.index;
+                    runs.push(HighlightRun { start: meta.index, end: end_idx, max_end: end_idx, y0: ib.y, y1: ib.y + ib.height });
+                }
+            }
         }
         if !sorted { runs.sort_unstable_by_key(|r| r.start); }
         let mut max_end = 0usize;
@@ -661,25 +698,25 @@ impl HighlightLine {
         Self { runs, cursor: 0 }
     }
 
-    fn metrics(&mut self, range: std::ops::Range<usize>) -> (f32, f32) {
-        let (mut asc, mut desc) = (0.0f32, 0.0f32);
+    fn metrics(&mut self, range: std::ops::Range<usize>) -> Option<(f32, f32)> {
+        let (mut y0, mut y1) = (f32::INFINITY, f32::NEG_INFINITY);
         if range.is_empty() {
             let pos = range.end;
             let first = self.runs.partition_point(|r| { count_visit(Visit::HighlightRun); r.max_end < pos });
             for r in &self.runs[first..] {
                 if r.start > pos { break; }
                 count_visit(Visit::HighlightRun);
-                if r.end == pos { (asc, desc) = (asc.max(r.asc), desc.max(r.desc)); }
+                if r.end == pos { y0 = y0.min(r.y0); y1 = y1.max(r.y1); }
             }
-            return (asc, desc);
+            return (y0 <= y1).then_some((y0, y1));
         }
         let first = seek_cursor(&self.runs, &mut self.cursor, Visit::HighlightRun, |r| r.max_end <= range.start);
         for r in &self.runs[first..] {
             if r.start >= range.end { break; }
             count_visit(Visit::HighlightRun);
-            if r.end > range.start { (asc, desc) = (asc.max(r.asc), desc.max(r.desc)); }
+            if r.end > range.start { y0 = y0.min(r.y0); y1 = y1.max(r.y1); }
         }
-        (asc, desc)
+        (y0 <= y1).then_some((y0, y1))
     }
 }
 
@@ -689,8 +726,8 @@ struct HighlightLineCache {
 }
 
 impl HighlightLineCache {
-    fn metrics(&mut self, l: &parley::Line<'_, Ink>, para_idx: usize, line_idx: usize, range: std::ops::Range<usize>) -> (f32, f32) {
-        self.lines.entry((para_idx, line_idx)).or_insert_with(|| HighlightLine::new(l)).metrics(range)
+    fn metrics(&mut self, layout: &Layout<Ink>, l: &parley::Line<'_, Ink>, para_idx: usize, line_idx: usize, range: std::ops::Range<usize>) -> Option<(f32, f32)> {
+        self.lines.entry((para_idx, line_idx)).or_insert_with(|| HighlightLine::new(layout, l)).metrics(range)
     }
 }
 

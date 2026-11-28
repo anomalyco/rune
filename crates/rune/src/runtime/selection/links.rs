@@ -106,6 +106,9 @@ fn link_hit_candidates<'a>(
                 out.push(LinkHitCandidate::WholeLine(piece, lr.start, lr.end));
             }
             for run in line.runs() {
+                if crate::text::is_hidden_size(run.font_size()) {
+                    continue;
+                }
                 let mut cx = (m.inline_min_coord
                     + run.visual_clusters().next().and_then(|c| c.visual_offset()).unwrap_or(m.offset)) as f64;
                 for cl in run.visual_clusters() {
@@ -114,6 +117,18 @@ fn link_hit_candidates<'a>(
                         out.push(LinkHitCandidate::ShapedByte(piece, cl.text_range().start));
                     }
                     cx += adv;
+                }
+            }
+            if !plain {
+                for item in line.items() {
+                    if let parley::PositionedLayoutItem::InlineBox(ib) = item
+                        && crate::text::replaced_pill_index(ib.id).is_some()
+                        && ib.width > 0.0
+                        && near_x(ib.x as f64, (ib.x + ib.width) as f64)
+                        && let Some(meta) = piece.layout.inline_boxes().find(|b| b.id == ib.id && b.baseline.is_some())
+                    {
+                        out.push(LinkHitCandidate::ShapedByte(piece, meta.index));
+                    }
                 }
             }
             if line.break_reason() == parley::BreakReason::Explicit && lr.end > lr.start {
@@ -293,7 +308,7 @@ impl RuntimeCore {
     pub(crate) fn inline_icon_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         let n = &self.tree.nodes[i];
         let (Some(spec), Some(laid)) = (n.text.as_deref(), n.text_layout.as_ref()) else { return Vec::new() };
-        let said = |p: &crate::text::PillChip| p.bare.as_deref().is_some_and(|b| b.label.is_some() || b.help.is_some());
+        let said = |p: &crate::text::PillChip| p.bare.as_deref().is_some_and(|b| b.replace.is_none() && (b.label.is_some() || b.help.is_some()));
         if !spec.cold.pills.iter().any(said) { return Vec::new(); }
         let flow = laid.view();
         let s = self.env.scale;

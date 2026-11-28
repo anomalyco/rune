@@ -139,6 +139,7 @@ fn scan_line_metrics(line: &parley::Line<'_, Ink>, a: u32, b: u32) -> (f32, f32)
     for run in line.runs() {
         #[cfg(test)]
         count_link_bg_run_visit();
+        if crate::text::is_hidden_size(run.font_size()) { continue; }
         let r = run.text_range();
         if r.start < b as usize && (a as usize) < r.end {
             let fm = run.font_metrics();
@@ -168,12 +169,13 @@ impl LineMetricsCache {
             return m;
         }
         let runs = self.lines.entry(line).or_insert_with(|| {
-            let mut v: Vec<LineRun> = l.runs().map(|run| {
+            let mut v: Vec<LineRun> = l.runs().filter_map(|run| {
                 #[cfg(test)]
                 count_link_bg_run_visit();
+                if crate::text::is_hidden_size(run.font_size()) { return None; }
                 let r = run.text_range();
                 let fm = run.font_metrics();
-                LineRun { start: r.start, end: r.end, max_end: r.end, asc: fm.ascent, desc: fm.descent.abs() }
+                Some(LineRun { start: r.start, end: r.end, max_end: r.end, asc: fm.ascent, desc: fm.descent.abs() })
             }).collect();
             v.sort_unstable_by_key(|r| r.start);
             let mut max_end = 0;

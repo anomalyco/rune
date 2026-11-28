@@ -97,8 +97,8 @@ impl TextSystem {
         struct ShapedPill {
             idx: usize,
             range: std::ops::Range<usize>,
-            lead: u32,
-            trail: u32,
+            lead: f32,
+            trail: f32,
             stands: Option<(f32, f32)>,
             bare_icon: bool,
         }
@@ -109,16 +109,23 @@ impl TextSystem {
                 let range = (p.start as usize).min(text.len())..(p.end as usize).min(text.len());
                 let replace = p.bare.as_ref().and_then(|b| b.replace);
                 let bare_icon = p.bare.is_some() && replace.is_none();
-                let (lead, trail) = match (&p.bare, replace) {
-                    (_, Some(r)) => (r.width, 0.0),
-                    (Some(b), None) => (b.size + b.gap, 0.0),
+                let (lead, trail, stands) = match (&p.bare, replace) {
+                    (_, Some(r)) => {
+                        let w = if r.width.is_finite() { (r.width * scale).clamp(0.0, 1e7) } else { 0.0 };
+                        let asc = if r.ascent.is_finite() { r.ascent.max(0.0) } else { 0.0 };
+                        let desc = if r.descent.is_finite() { r.descent.max(0.0) } else { 0.0 };
+                        let rise = if r.rise.is_finite() { r.rise } else { 0.0 };
+                        let h = ((asc + desc) * scale).clamp(0.0, 1e7);
+                        let base = ((asc + rise) * scale).clamp(-1e7, 1e7);
+                        (w, 0.0, Some((h, base)))
+                    }
+                    (Some(b), None) => (((b.size + b.gap) * scale).round().max(0.0), 0.0, None),
                     (None, None) => {
                         let m = pm.for_chip(p);
-                        (m.lead(p.has_lead_visual()), m.trail())
+                        ((m.lead(p.has_lead_visual()) * scale).round().max(0.0), (m.trail() * scale).round().max(0.0), None)
                     }
                 };
-                let stands = replace.map(|r| (((r.ascent + r.descent) * scale).round(), (r.ascent * scale).round()));
-                ShapedPill { idx, range, lead: (lead * scale).round() as u32, trail: (trail * scale).round() as u32, stands, bare_icon }
+                ShapedPill { idx, range, lead, trail, stands, bare_icon }
             })
             .filter(|p| {
                 !p.range.is_empty()
@@ -510,7 +517,7 @@ impl TextSystem {
                         id: PILL_BOX | bare_bit | (p.idx as u64) << 1 | side,
                         kind: parley::InlineBoxKind::InFlow,
                         index,
-                        width: width as f32,
+                        width,
                         height,
                         baseline,
                         vertical_align: parley::VerticalAlign::BASELINE,

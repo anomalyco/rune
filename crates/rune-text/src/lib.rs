@@ -185,6 +185,10 @@ pub use layout::span::TextHighlight;
 #[doc(hidden)]
 pub use layout::span::flatten_spans;
 #[doc(hidden)]
+pub use layout::span::is_hidden_size;
+#[doc(hidden)]
+pub use layout::span::replaced_pill_index;
+#[doc(hidden)]
 pub use layout::tabular::TabularGlyphs;
 #[doc(hidden)]
 pub use layout::underline::line_end;
@@ -207,6 +211,8 @@ pub use measure::lend;
 #[doc(hidden)]
 pub use measure::line_starts;
 pub use measure::measure;
+#[doc(hidden)]
+pub use measure::measure_lines;
 pub use measure::measure_inline;
 pub use measure::measure_inline_with;
 pub use measure::measure_with;
@@ -275,7 +281,7 @@ use layout::cache::STALE_BYTES;
 use layout::decorations::Decoration;
 use layout::id::LayoutIds;
 use layout::rich::mono_tab_stops;
-use layout::span::{HIDDEN_SIZE, PILL_BARE, PILL_BOX, SPAN_BOX, is_hidden_size, pill_index};
+use layout::span::{HIDDEN_SIZE, PILL_BARE, PILL_BOX, SPAN_BOX, pill_index};
 use layout::{cursor, hash, line_break, line_metrics, span};
 use raster::{macos, support, windfoil, windows};
 

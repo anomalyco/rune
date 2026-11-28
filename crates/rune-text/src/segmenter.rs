@@ -103,3 +103,30 @@ pub fn non_complex_word_starts(words: &str, max_byte: usize) -> Vec<u8> {
         .map(|w| w as u8)
         .collect()
 }
+
+/// Word start character indices (indices into `lengths`, `< 256`) for `text`, where `lengths`
+/// partitions `text` into UTF-8 chunks summing to `text.len()`.
+#[doc(hidden)]
+pub fn word_starts_for_lengths(text: &str, lengths: &[u8]) -> Vec<u8> {
+    let wb_seg = const {
+        icu_segmenter::WordSegmenter::new_for_non_complex_scripts(
+            icu_segmenter::options::WordBreakInvariantOptions::default(),
+        )
+    };
+    let mut out = Vec::new();
+    let mut byte_pos = 0usize;
+    let mut char_idx = 0usize;
+    for w in wb_seg.segment_str(text) {
+        if w == 0 || w >= text.len() {
+            continue;
+        }
+        while char_idx < lengths.len() && byte_pos < w {
+            byte_pos += usize::from(lengths[char_idx]);
+            char_idx += 1;
+        }
+        if byte_pos == w && char_idx < lengths.len() && char_idx < 256 {
+            out.push(char_idx as u8);
+        }
+    }
+    out
+}

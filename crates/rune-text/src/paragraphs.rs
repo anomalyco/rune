@@ -693,17 +693,40 @@ impl<'a> TextFlow<'a> {
                 let (mut y0, mut y1) = (bb.y0, bb.y1);
                 if let Some(line) = l.get(line_idx) {
                     let base = line.metrics().baseline;
-                    let (mut asc, mut desc) = (0.0f32, 0.0f32);
+                    let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
                     for run in line.runs() {
+                        if is_hidden_size(run.font_size()) {
+                            continue;
+                        }
                         let r = run.text_range();
                         if r.start < sb && sa < r.end {
                             let fm = run.font_metrics();
-                            (asc, desc) = (asc.max(fm.ascent), desc.max(fm.descent.abs()));
+                            min_y = min_y.min(base - fm.ascent);
+                            max_y = max_y.max(base + fm.descent.abs());
                         }
                     }
-                    if asc > 0.0 || desc > 0.0 {
-                        y0 = f64::from(base - asc);
-                        y1 = f64::from(base + desc);
+                    if l.inline_boxes().next().is_some() {
+                        for item in line.items() {
+                            if let PositionedLayoutItem::InlineBox(ib) = item
+                                && ib.id & PILL_BOX != 0
+                                && ib.id & 1 == 0
+                                && ib.width > 0.0
+                                && let Some(meta) = l.inline_boxes().find(|b| b.id == ib.id && b.baseline.is_some())
+                            {
+                                let end_idx = l
+                                    .inline_boxes()
+                                    .find(|t| t.id == (ib.id | 1))
+                                    .map_or(meta.index + 1, |t| t.index);
+                                if meta.index < sb && sa < end_idx {
+                                    min_y = min_y.min(ib.y);
+                                    max_y = max_y.max(ib.y + ib.height);
+                                }
+                            }
+                        }
+                    }
+                    if min_y <= max_y {
+                        y0 = f64::from(min_y);
+                        y1 = f64::from(max_y);
                     }
                 }
                 out.push(parley::BoundingBox::new(bb.x0, y0 + y_off, bb.x1, y1 + y_off));

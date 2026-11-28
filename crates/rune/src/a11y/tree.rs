@@ -578,9 +578,9 @@ impl RuntimeCore {
         let Some(name) = spoken.entry(c).or_insert_with(|| self.a11y_control_words(c, slot.role)).as_deref() else { return false };
         match n.text.as_deref() {
             Some(t) => {
-                let words = t.source_text();
-                let words = words.trim();
-                let named_icon = t.cold.pills.iter().any(|p| p.bare.as_deref().is_some_and(|b| b.label.is_some()));
+                let spoken = super::text::spoken_text(t);
+                let words = spoken.trim();
+                let named_icon = t.cold.pills.iter().any(|p| p.bare.as_deref().is_some_and(|b| b.replace.is_none() && b.label.is_some()));
                 !words.is_empty() && t.cold.links.is_empty() && !named_icon && name.contains(words)
             }
             None => n.label.as_deref().is_none_or(|l| l.trim().is_empty() || name.contains(l.trim())) && n.vis.grid.is_none(),

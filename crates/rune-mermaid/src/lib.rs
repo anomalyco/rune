@@ -247,14 +247,50 @@ pub struct Drawing {
     /// The fill and border of the card it would draw in, for the viewer's frame.
     pub surface: Color,
     pub surface_border: Color,
+    scene: std::rc::Rc<Scene>,
+    style: DiagramStyle,
+}
+
+impl Drawing {
+    pub(crate) fn new(el: El, size: [f32; 2], scene: std::rc::Rc<Scene>, style: DiagramStyle) -> Self {
+        Self { el, size, surface: style.surface, surface_border: style.surface_border, scene, style }
+    }
+
+    /// Serializes this already-laid-out diagram (including its fitted scale, title, paths, and
+    /// measured `<text>` labels) as a static, self-contained framed-card SVG document.
+    pub fn to_svg(&self) -> String {
+        canvas::svg::render(&self.scene, &self.style, true)
+    }
+
+    /// Like [`Self::to_svg`], without the surrounding surface card frame or card padding.
+    pub fn to_svg_bare(&self) -> String {
+        canvas::svg::render(&self.scene, &self.style, false)
+    }
 }
 
 /// [`render_with_hover`]'s title and drawing alone, laid out and fitted for `style.max_width`
 /// as its card would be.
 pub fn render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<Drawing> {
     let hover = (hover != Hover::Off).then_some((hover, color));
-    let (el, size) = scenes::built(src, style, hover, None).0?.drawing(style, None);
-    Some(Drawing { el, size, surface: style.surface, surface_border: style.surface_border })
+    let scene = scenes::built(src, style, hover, None).0?;
+    let (el, size) = scene.drawing(style, None);
+    Some(Drawing::new(el, size, scene, *style))
+}
+
+/// Renders `src` in `style` as a static, self-contained framed-card SVG document (surface fill,
+/// border, padding, title, fitted scale/viewBox, paths, and measured `<text>` labels, with no
+/// scripts, images, external fonts, or `url()` references), or `None` when `src` is outside the
+/// supported subset.
+pub fn render_svg(src: &str, style: &DiagramStyle) -> Option<String> {
+    let scene = scenes::built(src, style, None, None).0?;
+    Some(canvas::svg::render(&scene, style, true))
+}
+
+/// Like [`render_svg`], emitting only the title and fitted diagram without the card frame or
+/// card padding.
+pub fn render_svg_bare(src: &str, style: &DiagramStyle) -> Option<String> {
+    let scene = scenes::built(src, style, None, None).0?;
+    Some(canvas::svg::render(&scene, style, false))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
