@@ -82,7 +82,7 @@ impl Toast {
                 row()
                     .key("close")
                     .role("button")
-                    .label("Close")
+                    .label(rune::labels::label(rune::Label::Close))
                     .size(20.0, 20.0)
                     .center()
                     .radius(4.0)

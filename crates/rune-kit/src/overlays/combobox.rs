@@ -274,7 +274,7 @@ impl ComboboxCore {
             options: Rc::new(options.to_vec()),
             current: None,
             placeholder: String::new(),
-            search_placeholder: "Search".into(),
+            search_placeholder: rune::labels::label(rune::Label::Search(None)),
             search_label: None,
             empty: "No results".into(),
             width: 280.0,
@@ -313,7 +313,7 @@ impl ComboboxCore {
         // caret shows its focus.
         let search_label = self.search_label
             .filter(|l| !l.trim().is_empty())
-            .unwrap_or_else(|| if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") });
+            .unwrap_or_else(|| rune::labels::label(rune::Label::Search(Some(name.as_str()).filter(|n| !n.is_empty()))));
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
             .width(None).placeholder(self.search_placeholder).label(search_label)
             .auto_complete(rune::AutoComplete::List)

@@ -42,7 +42,7 @@ impl Spinner {
         // Desktop's dots do: each is an SVG on a composited layer, which the browser draws where
         // layout puts it without rounding to the device grid. Snapped, a 1.75 px dot on a
         // 2.625 px pitch (14 points at 1x) rounds to bars and gaps of 1 and 2 px.
-        let mut e = el().role("progressbar").label("Loading").size(self.size, self.size).pixel_snap(false);
+        let mut e = el().role("progressbar").label(rune::labels::label(rune::Label::Loading)).size(self.size, self.size).pixel_snap(false);
         for (i, d) in radar::dots().iter().enumerate() {
             let side = d.size * u;
             let dot = el().key(format!("d{i}")).absolute(d.x * u, d.y * u).size(side, side).radius(side * 0.24).fill(ink).a11y_hidden();
@@ -97,7 +97,7 @@ impl Loader {
     pub fn build(self, k: &Kit) -> El {
         let ink = self.color.unwrap_or(k.c.icon_muted);
         el().role("progressbar")
-            .label("Loading")
+            .label(rune::labels::label(rune::Label::Loading))
             .size(self.size, self.size)
             .child(icon(&RING, self.size).absolute(0.0, 0.0).color(ink).opacity(0.2))
             .child(icon(&ARC, self.size).absolute(0.0, 0.0).color(ink).looping(rune_motion::LoopSpec::rotation(0.9)))

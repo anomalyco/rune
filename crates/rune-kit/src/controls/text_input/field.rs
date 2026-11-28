@@ -169,7 +169,7 @@ impl TextField {
             let mut b = row()
                 .key("copy")
                 .role("button")
-                .label("Copy")
+                .label(rune::labels::label(rune::Label::Copy))
                 .size(24.0, 24.0)
                 .center()
                 .radius(k.radius.md)

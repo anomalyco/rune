@@ -355,7 +355,7 @@ impl PreviewCore {
             natural,
             image,
             icons: None,
-            labels: ["Zoom out".into(), "Zoom to fit".into(), "Zoom in".into(), "Close".into()],
+            labels: [rune::labels::label(rune::Label::ZoomOut), rune::labels::label(rune::Label::ZoomToFit), rune::labels::label(rune::Label::ZoomIn), rune::labels::label(rune::Label::Close)],
             format: |n| format!("{n}%"),
             controls: None,
             pan_cursors: true,

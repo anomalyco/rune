@@ -587,12 +587,12 @@ impl SidebarRow {
         let focusable = !renaming && !self.select_only;
         // The row's name and description say what its texts, badge and status mark show.
         let status_words = match &self.status {
-            Some(RowStatus::Busy) => Some("Working"),
-            Some(RowStatus::Attention) => Some("Needs attention"),
-            Some(RowStatus::Unread) => Some("Unread"),
+            Some(RowStatus::Busy) => Some(rune::labels::label(rune::Label::Working)),
+            Some(RowStatus::Attention) => Some(rune::labels::label(rune::Label::NeedsAttention)),
+            Some(RowStatus::Unread) => Some(rune::labels::label(rune::Label::Unread)),
             _ => None,
         };
-        let said: Vec<&str> = [self.detail.as_deref(), self.badge.as_deref(), status_words].into_iter().flatten().collect();
+        let said: Vec<&str> = [self.detail.as_deref(), self.badge.as_deref(), status_words.as_deref()].into_iter().flatten().collect();
         let mut r = row()
             .label(name)
             .description(said.join(", "))
@@ -679,7 +679,7 @@ impl SidebarRow {
                 slot = slot.child(if self.close.is_some() { st.group_opacity(1.0, 0.0) } else { st });
             }
             if let Some(bind) = self.close {
-                let close = IconButton::new(k.glyph.close).control_size(ControlSize::Small).variant(IconButtonVariant::GhostMuted).label("Close").build(k);
+                let close = IconButton::new(k.glyph.close).control_size(ControlSize::Small).variant(IconButtonVariant::GhostMuted).label(rune::labels::label(rune::Label::Close)).build(k);
                 // Pointer only, like the row's other hover controls: the list's arrows step rows.
                 slot = slot.child(bind(close).key("close").absolute(0.0, 0.0).group_opacity(0.0, 1.0).focusable(false));
             }
