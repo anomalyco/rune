@@ -1,0 +1,1 @@
+- Memo / Virtual lists: a kept `region` now keeps its `virtual_rows` mounted rows across unrelated commits when the list is the region's root element, when a text input or other non-reusable sibling lives in the same region, or when keyboard focus or a text selection rests in an already-mounted row.

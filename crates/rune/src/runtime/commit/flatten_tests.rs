@@ -57,6 +57,7 @@ fn run_flatten<E: FlattenEl>(el: E, foreground: Option<Color>) -> (Vec<Node>, La
         old_cursor: 0,
         committing: true,
         committed: &committed,
+        committed_lists: &committed,
         pending: Vec::new(),
         reused: Vec::new(),
         taken_paths: Vec::new(),

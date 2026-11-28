@@ -77,7 +77,7 @@ pub use items::VirtualItems;
 pub use layout::PathBind;
 pub use pills::{InlineIcon, InlineImage};
 pub use rare::OptionAsAlt;
-pub(crate) use rare::{ElCold, ElFlags, RoleTag};
+pub(crate) use rare::{ElCold, ElFlags, RoleTag, VirtualFlat};
 pub use rune_motion::Cycle;
 pub(crate) use scroll::FadeStyle;
 pub use scroll::ScrollFade;

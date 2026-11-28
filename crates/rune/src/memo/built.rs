@@ -52,7 +52,7 @@ impl El {
         let whole = !self.flags.has(ElFlags::MEMO_EXTENDED);
         self.flags.set(ElFlags::MEMO_EXTENDED, false);
         if let Some(built) = self.memo.take() {
-            if built.children.has_virtual {
+            if built.children.has_virtual || built.root.flags.has(ElFlags::HAS_VIRTUAL) {
                 self.flags.set(ElFlags::HAS_VIRTUAL, true);
                 // Its virtual lists mount their rows into the copy: flattening records the copy
                 // as the memo's nodes, so a later commit whose windows match keeps them.
@@ -67,7 +67,7 @@ impl El {
     }
 }
 
-fn el_flatten_reusable(e: &El) -> bool {
+pub(crate) fn el_flatten_reusable(e: &El) -> bool {
     let c = &*e.cold;
     // A list whose rows `virtual_rows` builds is reused with them while it mounts the same rows
     // (`Measurement::keeps_windows`); one built from children isn't.
@@ -166,7 +166,7 @@ impl Built {
             let has_pixels = children.iter().any(el_has_pixels);
             Rc::new(Shared { children, focused_input, duplicate_keys, has_virtual, reusable, has_path_bind, has_pixels })
         };
-        el.flags.set(ElFlags::HAS_VIRTUAL, el.cold.virtual_estimate.is_some());
+        el.flags.set(ElFlags::HAS_VIRTUAL, el.cold.virtual_estimate.is_some() || el.cold.virtual_items.is_some());
         let reusable = shared.reusable && !shared.duplicate_keys && el_flatten_reusable(&el);
         let has_path_bind = shared.has_path_bind || el.cold.get().is_some_and(|c| c.on_path.is_some());
         let has_pixels = shared.has_pixels || own_has_pixels(&el);

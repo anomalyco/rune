@@ -693,15 +693,37 @@ fn flatten_node<E: FlattenEl>(
     {
         return (slot, false);
     }
+    if let crate::el::VirtualFlat::Reuse(list_id) = el_ref.cold.virtual_flat {
+        if parent_sx.is_none()
+            && let Some(slot) = memo_reuse::try_reuse_virtual_list(el_ref, list_id.get(), parent, path_buf, index, motion, in_row, scale, taffy, nodes, memo_ctx)
+        {
+            return (slot, false);
+        }
+        memo_ctx.missed_virtual_memo = true;
+    }
     if el_ref.flags.has(ElFlags::HAS_VIRTUAL) && el_ref.memo.is_some() {
         memo_ctx.missed_virtual_memo = true;
     }
-    let record_built = parent_sx.is_none().then(|| {
-        let built = el_ref.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, false))
-            .or_else(|| el_ref.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, true)))?;
-        let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
-        Some((built.id, inherited, hover_within))
-    }).flatten();
+    let (record_built, record_list) = if parent_sx.is_none() {
+        let built_pair = el_ref.memo_built().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, false))
+            .map(|b| (b.id, false))
+            .or_else(|| el_ref.cold.expanded_memo.as_ref().filter(|b| b.reusable && memo_reuse::same_root_el(el_ref, b, true)).map(|b| (b.id, true)));
+        let list_id = match el_ref.cold.virtual_flat {
+            crate::el::VirtualFlat::Record(id) => Some(id.get()),
+            _ => None,
+        };
+        if built_pair.is_some() || list_id.is_some() {
+            let (inherited, hover_within) = memo_reuse::inherited_for(parent, nodes, motion, in_row, scale, memo_ctx.foreground);
+            (
+                built_pair.map(|(id, expanded)| (id, expanded, inherited, hover_within.clone())),
+                list_id.map(|id| (id, inherited, hover_within)),
+            )
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
     let prev_len = path_buf.len();
     push_segment(path_buf, el_ref.key.as_deref(), index);
     let me = nodes.len();
@@ -868,10 +890,19 @@ fn flatten_node<E: FlattenEl>(
     path_buf.truncate(prev_len);
     let (slot, dirty) = taffy.sync_node(id.0, me as u32, style.into_owned(), measure, secure_measure, child_mark, children_dirty);
     nodes[me].taffy = slot;
-    if let Some((built_id, inherited, hover_within)) = record_built {
-        memo_ctx.pending.push(memo_reuse::PendingFlat {
-            built_id, start: me, len: nodes.len() - me, inherited, hover_within,
-        });
+    let needs_row_check = record_list.is_some() || record_built.as_ref().is_some_and(|(_, expanded, ..)| *expanded);
+    let rows_reusable = !needs_row_check || memo_reuse::nodes_reusable(&nodes[me..]);
+    if rows_reusable {
+        if let Some((built_id, _, inherited, hover_within)) = record_built {
+            memo_ctx.pending.push(memo_reuse::PendingFlat {
+                built_id, is_list: false, start: me, len: nodes.len() - me, inherited, hover_within,
+            });
+        }
+        if let Some((list_id, inherited, hover_within)) = record_list {
+            memo_ctx.pending.push(memo_reuse::PendingFlat {
+                built_id: list_id, is_list: true, start: me, len: nodes.len() - me, inherited, hover_within,
+            });
+        }
     }
     (slot, dirty)
 }

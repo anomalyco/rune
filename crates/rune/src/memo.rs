@@ -65,6 +65,7 @@ mod tests;
 pub(crate) use built::Built;
 #[cfg(test)]
 pub(crate) use built::Shared;
+pub(crate) use built::el_flatten_reusable;
 pub(crate) use built::el_has_pixels;
 pub(crate) use built::has_focused_input;
 pub(crate) use reads::Reads;
@@ -109,6 +110,7 @@ struct Entry {
 pub(crate) struct MemoCache {
     entries: HashMap<Rc<str>, Entry>,
     pub(crate) flattened: crate::runtime::HashMap<u64, crate::runtime::memo_reuse::FlattenedMemo>,
+    pub(crate) flattened_lists: crate::runtime::HashMap<u64, crate::runtime::memo_reuse::FlattenedMemo>,
     pub(crate) pending_scratch: Vec<crate::runtime::memo_reuse::PendingFlat>,
     pub(crate) reused_scratch: Vec<crate::runtime::memo_reuse::ReusedSpan>,
     pub(crate) skip_scratch: Vec<crate::runtime::memo_reuse::CleanApplySpan>,
@@ -128,6 +130,7 @@ impl MemoCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.flattened.clear();
+        self.flattened_lists.clear();
         self.present_len = 0;
     }
 
@@ -146,6 +149,7 @@ impl MemoCache {
         }
         shrink_map(&mut self.entries, 64);
         shrink_map(&mut self.flattened, 64);
+        shrink_map(&mut self.flattened_lists, 32);
         self.pending_scratch.clear();
         self.reused_scratch.clear();
         self.skip_scratch.clear();
@@ -190,6 +194,7 @@ impl MemoCache {
         if self.entries.len() < before {
             let live: crate::runtime::HashSet<u64> = self.entries.values().map(|e| e.built.id).collect();
             self.flattened.retain(|id, _| live.contains(id));
+            self.flattened_lists.clear();
         }
     }
 
@@ -717,6 +722,10 @@ fn keep_nested_rows(cache: &mut MemoCache, ids: &mut Vec<(Rc<str>, u64)>, pass: 
 /// Whether the memo built as `id` is in the last commit's nodes, so its subtree can be reused.
 pub(crate) fn flattened(id: u64) -> bool {
     SCOPES.with_borrow(|scopes| scopes.last().is_some_and(|s| s.cache.flattened.contains_key(&id)))
+}
+
+pub(crate) fn flattened_list(id: u64) -> bool {
+    SCOPES.with_borrow(|scopes| scopes.last().is_some_and(|s| s.cache.flattened_lists.contains_key(&id)))
 }
 
 /// Marks the memos `virtual_rows` rows tagged `tags` built as used this pass, with the memos
