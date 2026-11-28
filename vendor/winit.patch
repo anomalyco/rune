@@ -3299,3 +3299,43 @@ index f73e50056..9342b0286 100644
      pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
          self.control_flow.set(control_flow)
      }
+diff --git a/src/platform_impl/linux/wayland/seat/mod.rs b/src/platform_impl/linux/wayland/seat/mod.rs
+index eaecd93b3..1ecf2dbd5 100644
+--- a/src/platform_impl/linux/wayland/seat/mod.rs
++++ b/src/platform_impl/linux/wayland/seat/mod.rs
+@@ -158,10 +158,6 @@ impl SeatHandler for WinitState {
+             },
+         };
+ 
+-        if let Some(text_input) = seat_state.text_input.take() {
+-            text_input.destroy();
+-        }
+-
+         match capability {
+             SeatCapability::Touch => {
+                 if let Some(touch) = seat_state.touch.take() {
+@@ -214,12 +210,23 @@ impl SeatHandler for WinitState {
+         _queue_handle: &QueueHandle<Self>,
+         seat: WlSeat,
+     ) {
+-        let _ = self.seats.remove(&seat.id());
++        // Rune: `zwp_text_input_v3` belongs to the `wl_seat`, not to any individual capability,
++        // so keep it alive across capability changes and destroy it only when the seat is removed.
++        if let Some(text_input) = self.seats.remove(&seat.id()).and_then(|seat| seat.text_input) {
++            self.on_text_input_destroy(&text_input);
++            text_input.destroy();
++        }
+         self.on_keyboard_destroy(&seat.id());
+     }
+ }
+ 
+ impl WinitState {
++    fn on_text_input_destroy(&mut self, text_input: &ZwpTextInputV3) {
++        for window in self.windows.get_mut().values() {
++            window.lock().unwrap().text_input_left(text_input);
++        }
++    }
++
+     fn on_keyboard_destroy(&mut self, seat: &ObjectId) {
+         for (window_id, window) in self.windows.get_mut() {
+             let mut window = window.lock().unwrap();
