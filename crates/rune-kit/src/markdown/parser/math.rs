@@ -5,9 +5,15 @@
 //! [`Style::Math`]: the renderer sets its bitmap over it once ready, and until then (or when
 //! it fails) the source shows as it is.
 //!
-//! A first pass over pulldown's events finds where math may be: runs of inline text, less code
-//! spans, raw HTML and autolinks, and never across an emphasis or link's edge. The walk then
-//! hands [`Math::claim`] each event before its own handling.
+//! Multi-line display equations (`$$`, `$`, or `\[` alone on a line through their closer) are
+//! found first and masked in-place (exact byte length preserved) before pulldown-cmark parses the
+//! document, so TeX lines like `=`, `---`, `- x`, or `> 0` cannot split an equation into Setext
+//! headings, lists, or quotes. A second pass over the masked parse finds single-line `$$…$$`
+//! paragraphs and inline math runs (less code spans, raw HTML, and autolinks, and never across an
+//! emphasis or link's edge). The walk then hands [`Math::claim`] each event before its own
+//! handling.
+
+use std::borrow::Cow;
 
 use pulldown_cmark::LinkType;
 
@@ -15,25 +21,43 @@ use super::super::*;
 use super::builder::{Builder, Fence};
 use super::{SpanMap, Tail};
 
+/// One display equation claimed from the event walk.
+struct DisplayBlock {
+    /// For a masked multi-line equation, the opener token range replaced with `a`s; for a
+    /// single-line `$$…$$` paragraph, the paragraph's source range.
+    opener: Range<usize>,
+    /// True when produced by [`mask_display_blocks`] (may arrive as a `Paragraph` or a tight list
+    /// item's `Text`).
+    masked: bool,
+    /// Source ranges of each TeX body line in the original source.
+    lines: Vec<Range<usize>>,
+}
+
 /// The math found in a document, and the walk's place in it.
 #[derive(Default)]
 pub(super) struct Math {
     /// Inline math, in source order: each source range, and whether the walk set it down yet.
     spans: Vec<(Range<usize>, bool)>,
-    /// Paragraphs that are one display equation: each one's source, and its TeX's source lines.
-    blocks: Vec<(Range<usize>, Vec<Range<usize>>)>,
+    /// Display equations: each one's opener range, masking flag, and TeX source lines.
+    blocks: Vec<DisplayBlock>,
     /// The TeX lines of the display equation the walk is inside.
     block: Option<Vec<Range<usize>>>,
+    /// Start of an unclosed multi-line display equation open at EOF, so incremental parsing keeps
+    /// its cut at the opener line until the closing delimiter (or a blank line) arrives.
+    open_display_from: Option<usize>,
 }
 
 impl Math {
-    pub(super) fn find(src: &str, opts: Options) -> Math {
+    /// Prepares `src` for parsing: masks any closed multi-line display equations (preserving all
+    /// byte offsets) and finds all display and inline math ranges.
+    pub(super) fn prepare<'a>(src: &'a str, opts: Options) -> (Cow<'a, str>, Math) {
         if !crate::math::may_have_inline_math(src) {
-            return Math::default();
+            return (Cow::Borrowed(src), Math::default());
         }
+        let (parse_src, mut blocks, open_display_from) = mask_display_blocks(src, opts);
         let mut found = Found::default();
         let mut code = 0usize;
-        for (ev, r) in Parser::new_ext(src, opts).into_offset_iter() {
+        for (ev, r) in Parser::new_ext(&parse_src, opts).into_offset_iter() {
             let inline = match &ev {
                 Event::Start(Tag::CodeBlock(_)) => {
                     code += 1;
@@ -65,9 +89,9 @@ impl Math {
                 Event::End(TagEnd::Paragraph) => {
                     found.end_run();
                     if let Some(events) = found.para.take()
-                        && let Some(lines) = block_lines(src, &events)
+                        && let Some(lines) = block_lines(&parse_src, &events)
                     {
-                        found.blocks.push((r, lines));
+                        found.blocks.push(DisplayBlock { opener: r, masked: false, lines });
                     }
                     continue;
                 }
@@ -83,18 +107,28 @@ impl Math {
             }
         }
         found.end_run();
-        let Found { runs, opaque, elements, blocks, .. } = found;
+        let Found { runs, opaque, elements, blocks: single_blocks, .. } = found;
         let mut spans = Vec::new();
         for run in runs {
-            if !blocks.iter().any(|(p, _)| p.start <= run.start && run.end <= p.end) {
-                scan(src, run, &opaque, &mut spans);
+            if !single_blocks.iter().any(|b| b.opener.start <= run.start && run.end <= b.opener.end) {
+                scan(&parse_src, run, &opaque, &mut spans);
             }
         }
+        blocks.extend(single_blocks);
         // Never across an emphasis or link's edge: only around one, or inside one.
         let apart = |a: &Range<usize>, b: &Range<usize>| a.end <= b.start || b.end <= a.start;
         let holds = |a: &Range<usize>, b: &Range<usize>| a.start <= b.start && b.end <= a.end;
         spans.retain(|m| elements.iter().all(|e| apart(e, m) || holds(m, e) || holds(e, m)));
-        Math { spans: spans.into_iter().map(|m| (m, false)).collect(), blocks, block: None }
+        (
+            parse_src,
+            Math { spans: spans.into_iter().map(|m| (m, false)).collect(), blocks, block: None, open_display_from },
+        )
+    }
+
+    /// Whether an incremental parse cut at `at` should be suppressed because an unclosed display
+    /// equation opened earlier is still waiting for its closer at EOF.
+    pub(super) fn holds_cut(&self, at: usize) -> bool {
+        self.open_display_from.is_some_and(|start| at > start)
     }
 
     /// Takes event `ev` at source `r` when it is math's: true when the walk should do nothing
@@ -107,11 +141,26 @@ impl Math {
             return true;
         }
         if matches!(ev, Event::Start(Tag::Paragraph))
-            && let Some(i) = self.blocks.iter().position(|(p, _)| p.start == r.start)
+            && let Some(i) = self.blocks.iter().position(|blk| {
+                if blk.masked {
+                    r.start <= blk.opener.start && blk.opener.end <= r.end
+                } else {
+                    blk.opener.start == r.start
+                }
+            })
         {
             b.flush_inline();
             b.tail = Tail::Code;
-            self.block = Some(self.blocks.swap_remove(i).1);
+            self.block = Some(self.blocks.swap_remove(i).lines);
+            return true;
+        }
+        if matches!(ev, Event::Text(_))
+            && let Some(i) = self.blocks.iter().position(|blk| blk.masked && blk.opener == *r)
+        {
+            b.flush_inline();
+            b.tail = Tail::Code;
+            let lines = self.blocks.swap_remove(i).lines;
+            push_block(b, src, &lines);
             return true;
         }
         if self.spans.is_empty() {
@@ -174,7 +223,358 @@ struct Found {
     elements: Vec<Range<usize>>,
     /// The paragraph being read: each event's range and whether it breaks a line.
     para: Option<Vec<(bool, Range<usize>)>>,
-    blocks: Vec<(Range<usize>, Vec<Range<usize>>)>,
+    blocks: Vec<DisplayBlock>,
+}
+
+/// Container prefix shape of a display equation: `quote_depth` blockquote markers (`>`), up to
+/// `pre_quote_indent` columns of list indent before a `>` (for blockquotes nested inside list
+/// items), and up to `post_quote_indent` columns of list indent after the last `>`.
+#[derive(Clone, Copy)]
+struct Prefix {
+    quote_depth: usize,
+    pre_quote_indent: usize,
+    post_quote_indent: usize,
+}
+
+enum ScanBlock {
+    Closed {
+        opener: Range<usize>,
+        blanks: Vec<Range<usize>>,
+        body: Vec<Range<usize>>,
+        end: usize,
+    },
+    Unclosed {
+        stop: usize,
+        at_eof: bool,
+    },
+    Empty,
+}
+
+/// Finds closed multi-line display equations (`$$`, `$`, or `\[` alone on a line through their
+/// matching closer) outside code and HTML blocks, and masks each one in-place (same byte length:
+/// opener bytes replaced with `a`, body and closer bytes replaced with spaces, keeping container
+/// prefixes and line breaks intact) so CommonMark block rules (`=`, `---`, `- `, `> `, `# `)
+/// cannot break an equation apart.
+fn mask_display_blocks<'a>(src: &'a str, opts: Options) -> (Cow<'a, str>, Vec<DisplayBlock>, Option<usize>) {
+    if !src.contains('\n') || !(src.contains('$') || src.contains("\\[")) {
+        return (Cow::Borrowed(src), Vec::new(), None);
+    }
+    let mut code = 0usize;
+    let mut containers: Vec<(Range<usize>, bool)> = Vec::new();
+    let mut item_first = false;
+    let mut claimed_until = 0usize;
+    // Per closer (`$$`, `$`, `\]`): `(quote_depth, stop)` where no closer exists before `stop`.
+    let mut no_close = [(0usize, 0usize); 3];
+    let mut masked_ranges: Vec<(Range<usize>, Vec<Range<usize>>)> = Vec::new();
+    let mut blocks: Vec<DisplayBlock> = Vec::new();
+    let mut open_display_from: Option<usize> = None;
+
+    for (ev, r) in Parser::new_ext(src, opts).into_offset_iter() {
+        match &ev {
+            Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock) => {
+                code += 1;
+                item_first = false;
+                continue;
+            }
+            Event::End(TagEnd::CodeBlock | TagEnd::HtmlBlock) => {
+                code = code.saturating_sub(1);
+                continue;
+            }
+            _ if code > 0 => continue,
+            Event::Start(Tag::BlockQuote(_)) => {
+                item_first = false;
+                containers.push((r, false));
+                continue;
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                containers.pop();
+                continue;
+            }
+            Event::Start(Tag::Item) => {
+                item_first = true;
+                containers.push((r, true));
+                continue;
+            }
+            Event::End(TagEnd::Item) => {
+                item_first = false;
+                containers.pop();
+                continue;
+            }
+            _ => {}
+        }
+        let cand = match &ev {
+            Event::Start(Tag::Paragraph | Tag::Heading { .. }) => {
+                item_first = false;
+                Some(r.start)
+            }
+            Event::Text(_) if item_first => {
+                item_first = false;
+                Some(if src[..r.start].ends_with('\\') { r.start - 1 } else { r.start })
+            }
+            Event::Start(_) | Event::Rule | Event::TaskListMarker(_) => {
+                item_first = false;
+                None
+            }
+            _ => None,
+        };
+        let Some(pos) = cand.filter(|&p| p >= claimed_until) else { continue };
+        let line_start = src[..pos].rfind('\n').map_or(0, |i| i + 1);
+        let limit = containers.last().map_or(src.len(), |(c, _)| c.end);
+        let in_item = containers.iter().any(|(_, is_item)| *is_item);
+        let quote_depth = containers.iter().filter(|(_, is_item)| !*is_item).count();
+
+        // Scan this block and any back-to-back display equation immediately following its closer.
+        let mut cur_line_start = line_start;
+        let mut cur_pos = Some(pos);
+        let mut prefix = Prefix { quote_depth, pre_quote_indent: 0, post_quote_indent: 0 };
+        loop {
+            let line_nl = src[cur_line_start..limit].find('\n').map_or(limit, |d| cur_line_start + d);
+            let line_end = strip_cr(src, cur_line_start, line_nl);
+            let first_in_chain = cur_pos.is_some();
+            let content_start = match cur_pos.take() {
+                Some(p) => p,
+                None => {
+                    let Some(after_q) = strip_quotes(src, cur_line_start, line_end, prefix.quote_depth, prefix.pre_quote_indent) else {
+                        break;
+                    };
+                    let body_start = strip_indent(src, after_q, line_end, prefix.post_quote_indent);
+                    if extra_indent_cols(&src[body_start..line_end]) >= 4 {
+                        break;
+                    }
+                    body_start
+                }
+            };
+            let Some((opener_range, closer, closer_idx)) = match_opener(src, content_start, line_end) else {
+                break;
+            };
+            if first_in_chain {
+                prefix = line_prefix(src, cur_line_start, opener_range.start, quote_depth, in_item);
+            }
+            if line_nl >= limit {
+                if limit == src.len() {
+                    open_display_from.get_or_insert(cur_line_start);
+                }
+                break;
+            }
+            let (cached_qd, cached_stop) = no_close[closer_idx];
+            if prefix.quote_depth == cached_qd && cur_line_start < cached_stop {
+                break;
+            }
+            match scan_display_block(src, opener_range, line_nl + 1, limit, prefix, closer) {
+                ScanBlock::Closed { opener, blanks, body, end } => {
+                    masked_ranges.push((opener.clone(), blanks));
+                    blocks.push(DisplayBlock { opener, masked: true, lines: body });
+                    claimed_until = end;
+                    if end >= limit {
+                        break;
+                    }
+                    cur_line_start = end;
+                }
+                ScanBlock::Unclosed { stop, at_eof } => {
+                    no_close[closer_idx] = (prefix.quote_depth, stop);
+                    if at_eof {
+                        open_display_from.get_or_insert(cur_line_start);
+                    }
+                    break;
+                }
+                ScanBlock::Empty => break,
+            }
+        }
+    }
+
+    if masked_ranges.is_empty() {
+        return (Cow::Borrowed(src), Vec::new(), open_display_from);
+    }
+    let mut bytes = src.as_bytes().to_vec();
+    for (opener, blanks) in masked_ranges {
+        bytes[opener].fill(b'a');
+        for blank in blanks {
+            bytes[blank].fill(b' ');
+        }
+    }
+    let Ok(masked) = String::from_utf8(bytes) else {
+        return (Cow::Borrowed(src), Vec::new(), open_display_from);
+    };
+    (Cow::Owned(masked), blocks, open_display_from)
+}
+
+/// Computes the blockquote depth and list-item indents from `src[line_start..pos]`.
+fn line_prefix(src: &str, line_start: usize, pos: usize, quote_depth: usize, in_item: bool) -> Prefix {
+    let slice = &src[line_start..pos];
+    if quote_depth == 0 {
+        let post = if in_item { col_width(slice) } else { 0 };
+        return Prefix { quote_depth: 0, pre_quote_indent: 0, post_quote_indent: post };
+    }
+    let pre = if in_item {
+        slice.find('>').map_or(0, |i| col_width(&slice[..i]))
+    } else {
+        0
+    };
+    let post = if in_item {
+        slice.rfind('>').map_or(0, |i| {
+            let after = &slice[i + 1..];
+            let after = after.strip_prefix(' ').unwrap_or(after);
+            col_width(after)
+        })
+    } else {
+        0
+    };
+    Prefix { quote_depth, pre_quote_indent: pre, post_quote_indent: post }
+}
+
+/// Matches a display equation opener (`$$`, `$`, or `\[`) alone on `src[start..end]`.
+fn match_opener(src: &str, start: usize, end: usize) -> Option<(Range<usize>, &'static str, usize)> {
+    let raw = &src[start..end];
+    let lead = raw.len() - raw.trim_start_matches([' ', '\t']).len();
+    let trimmed = raw[lead..].trim_end_matches([' ', '\t']);
+    let (closer, idx) = match trimmed {
+        "$$" => ("$$", 0),
+        "$" => ("$", 1),
+        "\\[" => ("\\]", 2),
+        _ => return None,
+    };
+    let a = start + lead;
+    Some((a..a + trimmed.len(), closer, idx))
+}
+
+/// Scans body lines starting at `from` for a matching `closer` line before `limit`.
+fn scan_display_block(
+    src: &str,
+    opener: Range<usize>,
+    from: usize,
+    limit: usize,
+    prefix: Prefix,
+    closer: &str,
+) -> ScanBlock {
+    let mut body = Vec::new();
+    let mut blanks = Vec::new();
+    let mut cur = from;
+    while cur < limit {
+        let nl = src[cur..limit].find('\n').map_or(limit, |d| cur + d);
+        let line_end = strip_cr(src, cur, nl);
+        let Some(after_q) = strip_quotes(src, cur, line_end, prefix.quote_depth, prefix.pre_quote_indent) else {
+            return ScanBlock::Unclosed { stop: cur, at_eof: false };
+        };
+        if src[after_q..line_end].bytes().all(|b| b.is_ascii_whitespace()) {
+            return ScanBlock::Unclosed { stop: cur, at_eof: false };
+        }
+        let body_start = strip_indent(src, after_q, line_end, prefix.post_quote_indent);
+        let content = &src[body_start..line_end];
+        if content.trim_matches([' ', '\t']) == closer {
+            if body.is_empty() {
+                return ScanBlock::Empty;
+            }
+            blanks.push(after_q..line_end);
+            let end = if nl < limit { nl + 1 } else { nl };
+            return ScanBlock::Closed { opener, blanks, body, end };
+        }
+        if opens_code_fence(content) {
+            return ScanBlock::Unclosed { stop: cur, at_eof: false };
+        }
+        blanks.push(after_q..line_end);
+        body.push(body_start..line_end);
+        cur = if nl < limit { nl + 1 } else { limit };
+    }
+    ScanBlock::Unclosed { stop: limit, at_eof: limit == src.len() }
+}
+
+fn strip_cr(src: &str, start: usize, end: usize) -> usize {
+    if end > start && src.as_bytes()[end - 1] == b'\r' { end - 1 } else { end }
+}
+
+/// Strips `quote_depth` leading `>` markers (each with optional single space), allowing up to
+/// `pre_indent + 3` leading columns before a `>`.
+fn strip_quotes(src: &str, start: usize, end: usize, quote_depth: usize, pre_indent: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = start;
+    let max_lead = pre_indent + 3;
+    for q in 0..quote_depth {
+        let mut cols = 0usize;
+        let limit_cols = if q == 0 { max_lead } else { 3 };
+        while i < end && cols <= limit_cols {
+            match bytes[i] {
+                b' ' => {
+                    cols += 1;
+                    i += 1;
+                }
+                b'\t' => {
+                    cols = (cols / 4 + 1) * 4;
+                    i += 1;
+                }
+                _ => break,
+            }
+        }
+        if cols > limit_cols || i >= end || bytes[i] != b'>' {
+            return None;
+        }
+        i += 1;
+        if i < end && bytes[i] == b' ' {
+            i += 1;
+        }
+    }
+    Some(i)
+}
+
+/// Strips up to `max_cols` columns of leading spaces/tabs from `src[start..end]`.
+fn strip_indent(src: &str, start: usize, end: usize, max_cols: usize) -> usize {
+    let bytes = src.as_bytes();
+    let mut i = start;
+    let mut cols = 0usize;
+    while i < end && cols < max_cols {
+        match bytes[i] {
+            b' ' => {
+                cols += 1;
+                i += 1;
+            }
+            b'\t' => {
+                let next = (cols / 4 + 1) * 4;
+                if next > max_cols {
+                    break;
+                }
+                cols = next;
+                i += 1;
+            }
+            _ => break,
+        }
+    }
+    i
+}
+
+fn col_width(s: &str) -> usize {
+    let mut cols = 0usize;
+    for b in s.bytes() {
+        if b == b'\t' {
+            cols = (cols / 4 + 1) * 4;
+        } else {
+            cols += 1;
+        }
+    }
+    cols
+}
+
+fn extra_indent_cols(s: &str) -> usize {
+    let mut cols = 0usize;
+    for b in s.bytes() {
+        match b {
+            b' ' => cols += 1,
+            b'\t' => cols = (cols / 4 + 1) * 4,
+            _ => break,
+        }
+    }
+    cols
+}
+
+/// Whether `line` opens a CommonMark fenced code block (0–3 spaces, then `>= 3` backticks with
+/// no backticks in the info string, or `>= 3` tildes).
+fn opens_code_fence(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && i < 3 && bytes[i] == b' ' {
+        i += 1;
+    }
+    let Some(&ch @ (b'`' | b'~')) = bytes.get(i) else { return false };
+    let n = bytes[i..].iter().take_while(|&&b| b == ch).count();
+    n >= 3 && (ch == b'~' || !bytes[i + n..].contains(&b'`'))
 }
 
 impl Found {

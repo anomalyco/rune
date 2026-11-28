@@ -115,10 +115,12 @@ enum SkipMode {
 pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder::new(autolink);
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
-    let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
-    let mut skip: Option<SkipMode> = None;
     #[cfg(feature = "math")]
-    let mut math = math::Math::find(src, opts);
+    let (parse_src, mut math) = math::Math::prepare(src, opts);
+    #[cfg(not(feature = "math"))]
+    let parse_src = src;
+    let mut events = super::interrupt::list_interrupts(&parse_src, Parser::new_ext(&parse_src, opts).into_offset_iter());
+    let mut skip: Option<SkipMode> = None;
     while let Some((ev, range)) = events.next() {
         if let Some(mode) = &mut skip {
             match (mode, &ev) {
@@ -171,7 +173,11 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (P
             b.flush_inline();
             let at = src[..range.start].rfind('\n').map_or(0, |i| i + 1);
             b.root_start = at;
-            if !events.made() {
+            #[cfg(feature = "math")]
+            let hold_cut = math.holds_cut(at);
+            #[cfg(not(feature = "math"))]
+            let hold_cut = false;
+            if !events.made() && !hold_cut {
                 b.cuts.push(Cut { at, blocks: b.stack[0].1.len(), sources: b.sources.len(), tasks: b.tasks.len() });
             }
         }
