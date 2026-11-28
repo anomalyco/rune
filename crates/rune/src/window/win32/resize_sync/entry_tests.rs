@@ -1,12 +1,15 @@
-//! Regression tests for `BeginDrag` GPU-present synchronization before `detach_dcomp`,
-//! pre-paint `WM_ERASEBKGND` suppression, stray damage disarming, and capacited drag-target
-//! pixel parity across overlay/layer/cache/backdrop-blur mount and unmount transitions (#2113).
+//! Regression tests for `BeginDrag` GPU-present synchronization, two-frame DWM composition
+//! gating before `detach_dcomp`, pre-paint `WM_ERASEBKGND` suppression, stray damage disarming,
+//! and capacited drag-target pixel parity across overlay/layer/cache/backdrop-blur mount and
+//! unmount transitions (#2113).
 
 use std::sync::Arc;
 
 use super::DragResizeSync;
-use super::frame::{DragFrameConsumers, run_drag_frame};
+use super::frame::{DragFrameConsumers, DragFramePhase, DragFrameOutcome, run_drag_frame};
 use super::gpu::{DragDevice, DragSeam, SharedDragTarget};
+use super::machine::{DETACH_DWM_FRAMES, DcompPhase, Effect, Eligibility, Event, State, step};
+use crate::machine::Seq;
 use crate::frame::clock::FrameClock;
 use crate::frame::encoded::FrameReports;
 use crate::frame::surface_stats::SurfaceMeter;
@@ -20,16 +23,28 @@ use crate::{Color, El, Env, Runtime, col, el, text};
 enum SeamCall {
     SetValidRects(bool),
     PresentShared { wait_for_present: bool },
+    DwmFrameCount,
     DetachDcomp,
     AttachDcomp,
     ReleaseSwapChain,
 }
 
-#[derive(Default)]
 struct RecordingSeam {
     calls: Vec<SeamCall>,
     last_pixels: Vec<u8>,
     fail_present: bool,
+    dwm_frame: Option<u64>,
+}
+
+impl Default for RecordingSeam {
+    fn default() -> Self {
+        Self {
+            calls: Vec::new(),
+            last_pixels: Vec::new(),
+            fail_present: false,
+            dwm_frame: Some(100),
+        }
+    }
 }
 
 impl DragSeam for RecordingSeam {
@@ -49,12 +64,17 @@ impl DragSeam for RecordingSeam {
         self.last_pixels = pixels;
         if wait_for_present {
             // Exercise the exact post-present fence signal + CPU event wait path used by
-            // `Win32DragSeam` on `BeginDrag` before detaching DirectComposition.
+            // `Win32DragSeam` on `BeginDrag` before sampling DWM's composition frame count.
             let done = drag.signal_post_present()?;
             drag.wait_for_release(done)?;
             return Ok(done);
         }
         Ok(release_value)
+    }
+
+    fn dwm_frame_count(&mut self) -> Option<u64> {
+        self.calls.push(SeamCall::DwmFrameCount);
+        self.dwm_frame
     }
 
     fn detach_dcomp(&mut self) -> Result<(), String> {
@@ -241,8 +261,8 @@ fn run_one_drag_step(
     seam: &mut RecordingSeam,
     size: (u32, u32),
     format: wgpu::TextureFormat,
-    detach_dcomp: bool,
-) -> Result<(), String> {
+    phase: DragFramePhase,
+) -> Result<DragFrameOutcome, String> {
     let now = crate::time::now();
     let mut clock = FrameClock::new(now);
     let mut meter = SurfaceMeter::new("main", Arc::default());
@@ -272,11 +292,11 @@ fn run_one_drag_step(
         next_tick: None,
         base_format: format,
     };
-    run_drag_frame(sync, gpu, renderer, &mut consumers, seam, size, detach_dcomp, || {}).map(|_| ())
+    run_drag_frame(sync, gpu, renderer, &mut consumers, seam, size, phase, || {})
 }
 
 #[test]
-fn begin_drag_suppresses_erase_waits_for_present_then_detaches_dcomp() {
+fn begin_drag_suppresses_erase_waits_for_present_and_keeps_dcomp_until_dwm_advances() {
     let Some(gpu) = Gpu::test_headless_wgpu() else { return };
     let format = wgpu::TextureFormat::Bgra8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
@@ -289,27 +309,45 @@ fn begin_drag_suppresses_erase_waits_for_present_then_detaches_dcomp() {
     let mut app = TypedWindowApp::for_test(rt, None);
 
     let mut sync = DragResizeSync::default();
-    let mut seam = RecordingSeam::default();
+    let mut seam = RecordingSeam { dwm_frame: Some(500), ..RecordingSeam::default() };
 
-    // Frame 0 (`BeginDrag`): suppress erase before `BeginPaint`, wait on the D3D11 post-present
-    // fence, and detach DirectComposition strictly after the present completes.
-    run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (240, 160), format, true)
+    // Frame 0 (`Begin`): suppress erase before `BeginPaint`, wait on the D3D11 post-present
+    // fence, sample DWM's composed frame count strictly after present, and keep DComp attached.
+    let out0 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (240, 160), format, DragFramePhase::Begin)
         .expect("begin drag succeeds");
+    assert_eq!(out0.dwm_frame, Some(500));
     assert_eq!(
         seam.calls,
         vec![
             SeamCall::SetValidRects(true),
             SeamCall::PresentShared { wait_for_present: true },
-            SeamCall::DetachDcomp,
+            SeamCall::DwmFrameCount,
         ],
     );
 
-    // Steady-state drag frames: never block on `wait_for_present` and never re-detach DComp.
+    // Priming frame: no CPU fence wait, still samples DWM's frame count.
     seam.calls.clear();
-    run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (272, 168), format, false)
+    seam.dwm_frame = Some(501);
+    let out1 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (260, 164), format, DragFramePhase::Priming)
+        .expect("priming drag step succeeds");
+    assert_eq!(out1.dwm_frame, Some(501));
+    assert_eq!(
+        seam.calls,
+        vec![
+            SeamCall::PresentShared { wait_for_present: false },
+            SeamCall::DwmFrameCount,
+        ],
+    );
+
+    // Steady-state drag frames: never block on `wait_for_present`, skip DWM timing queries,
+    // and never re-detach DComp.
+    seam.calls.clear();
+    let out2 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (272, 168), format, DragFramePhase::Steady)
         .expect("steady drag step succeeds");
-    run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (300, 180), format, false)
+    let out3 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (300, 180), format, DragFramePhase::Steady)
         .expect("steady drag step 2 succeeds");
+    assert_eq!(out2.dwm_frame, None);
+    assert_eq!(out3.dwm_frame, None);
     assert_eq!(
         seam.calls,
         vec![
@@ -318,11 +356,13 @@ fn begin_drag_suppresses_erase_waits_for_present_then_detaches_dcomp() {
         ],
     );
 
-    // On a `BeginDrag` present failure, `detach_dcomp` must NOT run (caller drives `DragFailed`).
+    // On a `Begin` present failure, neither DWM sampling nor `detach_dcomp` runs.
     seam.calls.clear();
     seam.fail_present = true;
-    let err = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (312, 184), format, true)
-        .expect_err("injected failure surfaces");
+    let err = match run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (312, 184), format, DragFramePhase::Begin) {
+        Ok(_) => panic!("expected injected present failure"),
+        Err(err) => err,
+    };
     assert!(err.contains("injected present failure"), "unexpected error: {err}");
     assert_eq!(
         seam.calls,
@@ -379,7 +419,8 @@ fn capacited_drag_target_matches_normal_across_overlay_layer_blur_cache_and_arme
                     true,
                 );
             }
-            run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, size, format, begin_drag)
+            let phase = if begin_drag { DragFramePhase::Begin } else { DragFramePhase::Steady };
+            run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, size, format, phase)
                 .unwrap_or_else(|e| panic!("drag step failed for {label} ({format:?}): {e}"));
             let cap = sync.ring.capacity().expect("capacited ring");
             assert!(cap.0 > size.0 && cap.1 > size.1, "expected capacited target for {label}: cap={cap:?} size={size:?}");
@@ -404,4 +445,173 @@ fn capacited_drag_target_matches_normal_across_overlay_layer_blur_cache_and_arme
 
         sync.drop_d3d11_device();
     }
+}
+
+fn eligible() -> Eligibility {
+    Eligibility {
+        opt_in: true,
+        opaque: true,
+        overlay: false,
+        dxgi_from_visual: true,
+        handed_over: true,
+        d3d12_live: true,
+        hardware_adapter: true,
+        supported_format: true,
+    }
+}
+
+#[test]
+fn priming_gates_detach_on_two_dwm_compositions_and_handles_reset_and_unavailability() {
+    let mut seq = Seq::default();
+    let mut state = State::Idle;
+    let t0 = crate::time::now();
+
+    let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::Resize { size: (640, 480), eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (640, 480), dwm_frame: 100 });
+    assert_eq!(state, State::Dragging { size: (640, 480), dcomp: DcompPhase::Priming { presented_at: 100 } });
+
+    // Same composition (delta 0) and next composition (delta 1): must NOT detach yet.
+    assert!(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(100) }).into_iter().next().is_none());
+    assert!(state.is_priming());
+    assert!(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(101) }).into_iter().next().is_none());
+    assert!(state.is_priming());
+
+    // Counter reset (e.g. DWM restart / mode switch): re-baselines instead of detaching early.
+    assert!(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(5) }).into_iter().next().is_none());
+    assert_eq!(state, State::Dragging { size: (640, 480), dcomp: DcompPhase::Priming { presented_at: 5 } });
+    assert!(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(6) }).into_iter().next().is_none());
+    assert!(state.is_priming());
+
+    // Once two compositions have elapsed since the baseline, DetachDcomp fires exactly once.
+    let effects: Vec<_> = step(
+        &mut seq,
+        &mut state,
+        Event::DragFramePresented { dwm_frame: Some(5 + DETACH_DWM_FRAMES) },
+    ).into_iter().collect();
+    assert_eq!(effects, vec![Effect::DetachDcomp]);
+    assert_eq!(state, State::Dragging { size: (640, 480), dcomp: DcompPhase::Detached });
+    assert!(!state.is_priming());
+    assert!(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(99) }).into_iter().next().is_none());
+
+    // Unreadable DWM frame count while priming must abort back to normal DComp resize instead
+    // of leaving DComp permanently attached over a frozen surface.
+    state = State::Idle;
+    let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (640, 480), dwm_frame: 200 });
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: None }).into_iter().collect();
+    assert_eq!(effects, vec![Effect::AttachDcomp, Effect::ReleaseDragResources]);
+    assert_eq!(state, State::Idle);
+
+    // Quick drag that exits while still priming must still transition cleanly through Leaving.
+    let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (700, 500), dwm_frame: 300 });
+    assert!(state.is_priming());
+    let exit_effects: Vec<_> = step(&mut seq, &mut state, Event::ExitSizeMove { now: t0 }).into_iter().collect();
+    assert_eq!(exit_effects.len(), 2);
+    assert_eq!(exit_effects[0], Effect::RequestExitFrame);
+    assert!(state.is_leaving());
+    let done_effects: Vec<_> = step(&mut seq, &mut state, Event::ExitFrameCompleted).into_iter().collect();
+    assert_eq!(done_effects, vec![Effect::AttachDcomp, Effect::ReleaseDragResources]);
+    assert_eq!(state, State::Idle);
+}
+
+#[test]
+fn second_drag_never_exposes_previous_drag_redirection_pixels_before_two_dwm_frames() {
+    let Some(gpu) = Gpu::test_headless_wgpu() else { return };
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.attach_gpu(&gpu);
+    renderer.set_srgb_blend(true);
+
+    // Model Windows DWM's HWND redirection surface: it retains the previous drag's pixels after
+    // DComp re-attaches, and only composes a newly presented copy-model frame after two DWM
+    // compositions have elapsed.
+    let mut rt = Runtime::new(
+        OverlayScene { dialog_open: true, blur_popover_open: false },
+        overlay_view,
+        (240.0, 160.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_srgb_blend(true);
+    rt.frame(0.0);
+    let mut app = TypedWindowApp::for_test(rt, None);
+    let mut sync = DragResizeSync::default();
+    let mut seam = RecordingSeam { dwm_frame: Some(100), ..RecordingSeam::default() };
+    let mut seq = Seq::default();
+    let mut state = State::Idle;
+
+    // Drag #1 (dialog open): completes and leaves dialog pixels in the redirection surface.
+    let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::Resize { size: (240, 160), eligibility: eligible() });
+    let out = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (240, 160), format, DragFramePhase::Begin)
+        .expect("drag 1 begin");
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (240, 160), dwm_frame: out.dwm_frame.unwrap() });
+    seam.dwm_frame = Some(102);
+    let out = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (256, 168), format, DragFramePhase::Priming)
+        .expect("drag 1 detach step");
+    let effects: Vec<_> = step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: out.dwm_frame }).into_iter().collect();
+    assert_eq!(effects, vec![Effect::DetachDcomp]);
+    let stale_prev_drag_pixels = seam.last_pixels.clone();
+    let _ = step(&mut seq, &mut state, Event::ExitSizeMove { now: crate::time::now() });
+    let _ = step(&mut seq, &mut state, Event::ExitFrameCompleted);
+    sync.release_drag_resources();
+    assert_eq!(state, State::Idle);
+
+    // Between drags: close dialog and open the frosted popover (normal DComp presentation;
+    // the hidden HWND redirection surface still holds `stale_prev_drag_pixels`).
+    app.rt.state = OverlayScene { dialog_open: false, blur_popover_open: true };
+    app.rt.core_mut().commit.dirty = true;
+    app.rt.frame(0.0);
+    let expected_drag2 = render_exact_reference(&gpu, &mut renderer, app.rt.core_mut(), (256, 168), format);
+    assert_ne!(stale_prev_drag_pixels, expected_drag2, "drag 2 scene must differ from drag 1");
+
+    // Drag #2 begins at cFrame = 500: DWM's visible redirection surface would still expose
+    // `stale_prev_drag_pixels` at cFrame 500 and 501, and only guarantees Drag #2's pixels at 502.
+    seam.calls.clear();
+    seam.dwm_frame = Some(500);
+    let mut visible_redirection_pixels = stale_prev_drag_pixels.clone();
+    let mut dcomp_detached = false;
+
+    let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
+    let _ = step(&mut seq, &mut state, Event::Resize { size: (256, 168), eligibility: eligible() });
+    let out0 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (256, 168), format, DragFramePhase::Begin)
+        .expect("drag 2 begin");
+    let pending_redirection_at = Some((500, seam.last_pixels.clone()));
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (256, 168), dwm_frame: out0.dwm_frame.unwrap() });
+    assert!(!dcomp_detached && state.is_priming(), "must not detach on frame 0 while redirection surface is stale");
+
+    // Step 1 arrives only 1 DWM composition later (cFrame = 501): redirection surface STILL stale!
+    seam.dwm_frame = Some(501);
+    let out1 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (256, 168), format, DragFramePhase::Priming)
+        .expect("drag 2 priming step");
+    for eff in step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: out1.dwm_frame }) {
+        if eff == Effect::DetachDcomp {
+            dcomp_detached = true;
+        }
+    }
+    assert!(!dcomp_detached && state.is_priming(), "must not detach after only 1 DWM composition");
+    assert_eq!(visible_redirection_pixels, stale_prev_drag_pixels);
+
+    // Step 2 arrives at cFrame = 502 (2 DWM compositions after first present): DWM has now
+    // composed Drag #2's first frame into the redirection surface -> DetachDcomp is safe!
+    seam.dwm_frame = Some(502);
+    if let Some((at, px)) = pending_redirection_at.as_ref() && 502 >= at + DETACH_DWM_FRAMES {
+        visible_redirection_pixels = px.clone();
+    }
+    let out2 = run_one_drag_step(&mut sync, &gpu, &mut renderer, &mut app, &mut seam, (256, 168), format, DragFramePhase::Priming)
+        .expect("drag 2 detach step");
+    for eff in step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: out2.dwm_frame }) {
+        if eff == Effect::DetachDcomp {
+            seam.detach_dcomp().expect("detach dcomp");
+            dcomp_detached = true;
+        }
+    }
+    assert!(dcomp_detached && !state.is_priming(), "must detach once DWM has composed two frames");
+    assert_eq!(
+        visible_redirection_pixels, expected_drag2,
+        "redirection surface revealed on DetachDcomp must match Drag #2 bit-for-bit, never Drag #1",
+    );
+
+    sync.drop_d3d11_device();
 }

@@ -570,6 +570,7 @@ pub(super) trait DragSeam {
         ready_value: u64,
         wait_for_present: bool,
     ) -> Result<u64, String>;
+    fn dwm_frame_count(&mut self) -> Option<u64>;
     fn detach_dcomp(&mut self) -> Result<(), String>;
     fn attach_dcomp(&mut self) -> Result<(), String>;
     fn set_valid_rects_active(&mut self, active: bool);

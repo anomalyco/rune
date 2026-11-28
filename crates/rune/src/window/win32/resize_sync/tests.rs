@@ -3,10 +3,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::frame::{DragFrameConsumers, run_drag_frame};
+use super::frame::{DragFrameConsumers, DragFramePhase, run_drag_frame};
 use super::gpu::{CAPACITY_STEP, DragDevice, DragSeam, SharedDragTarget, dxgi_format_for, grow_capacity};
 use super::machine::{
-    Effect, Eligibility, Event, LEAVING_TIMEOUT, State, step, valid_rects,
+    DETACH_DWM_FRAMES, DcompPhase, Effect, Eligibility, Event, LEAVING_TIMEOUT, State, step,
+    valid_rects,
 };
 use super::{DragResizeSync, commit_or_rollback_config};
 
@@ -102,15 +103,24 @@ fn finished_drag_lifecycle_and_pure_move_exit() {
     assert_eq!(effects, vec![Effect::BeginDrag { size: (800, 600) }]);
     assert_eq!(state, State::Entering);
 
-    assert!(collect(step(&mut seq, &mut state, Event::DragStarted { size: (800, 600) })).is_empty());
-    assert_eq!(state, State::Dragging { size: (800, 600) });
+    assert!(collect(step(&mut seq, &mut state, Event::DragStarted { size: (800, 600), dwm_frame: 100 })).is_empty());
+    assert_eq!(state, State::Dragging { size: (800, 600), dcomp: DcompPhase::Priming { presented_at: 100 } });
+    assert!(state.is_priming());
 
     let effects = collect(step(&mut seq, &mut state, Event::Resize {
         size: (840, 610),
         eligibility: eligible(),
     }));
     assert_eq!(effects, vec![Effect::RenderDragFrame { size: (840, 610) }]);
-    assert_eq!(state, State::Dragging { size: (840, 610) });
+    assert_eq!(state, State::Dragging { size: (840, 610), dcomp: DcompPhase::Priming { presented_at: 100 } });
+    assert!(collect(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(100 + DETACH_DWM_FRAMES - 1) })).is_empty());
+    assert!(state.is_priming());
+    assert_eq!(
+        collect(step(&mut seq, &mut state, Event::DragFramePresented { dwm_frame: Some(100 + DETACH_DWM_FRAMES) })),
+        vec![Effect::DetachDcomp],
+    );
+    assert_eq!(state, State::Dragging { size: (840, 610), dcomp: DcompPhase::Detached });
+    assert!(!state.is_priming());
 
     let effects = collect(step(&mut seq, &mut state, Event::Redraw));
     assert_eq!(effects, vec![Effect::RenderDragFrame { size: (840, 610) }]);
@@ -134,7 +144,7 @@ fn leaving_timer_ignores_early_and_stale_attempts_and_recovers_on_due() {
     let mut state = State::Idle;
     let _ = step(&mut seq, &mut state, Event::EnterSizeMove { eligibility: eligible() });
     let _ = step(&mut seq, &mut state, Event::Resize { size: (640, 480), eligibility: eligible() });
-    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (640, 480) });
+    let _ = step(&mut seq, &mut state, Event::DragStarted { size: (640, 480), dwm_frame: 10 });
     let _ = step(&mut seq, &mut state, Event::ExitSizeMove { now: t0 });
     let attempt = state.leaving_attempt().expect("leaving attempt");
     let deadline = state.deadline().expect("leaving deadline");
@@ -164,7 +174,7 @@ fn all_abort_exits_leave_clean_idle_state() {
         *state = State::Idle;
         let _ = step(seq, state, Event::EnterSizeMove { eligibility: eligible() });
         let _ = step(seq, state, Event::Resize { size: (700, 500), eligibility: eligible() });
-        let _ = step(seq, state, Event::DragStarted { size: (700, 500) });
+        let _ = step(seq, state, Event::DragStarted { size: (700, 500), dwm_frame: 20 });
         assert!(state.is_dragging());
     };
 
@@ -330,6 +340,10 @@ impl DragSeam for FakeSeam {
         self.last_pixels = pixels;
         self.presents.push(PresentedStep { copy: copy_size, cap: target.size, ready: ready_value });
         Ok(release_value)
+    }
+
+    fn dwm_frame_count(&mut self) -> Option<u64> {
+        Some(100 + self.presents.len() as u64)
     }
 
     fn detach_dcomp(&mut self) -> Result<(), String> {
@@ -539,7 +553,7 @@ fn offscreen_shared_texture_ring_subrect_bit_exact_and_zero_per_step_alloc() {
         render_into_ring_slot(&mut sync, &gpu, &mut renderer, rt.core_mut(), &mut seam, (240, 160), format);
         seam.detach_dcomp().expect("detach dcomp");
         seam.set_valid_rects_active(true);
-        let _ = step(&mut sync.seq, &mut sync.state, Event::DragStarted { size: (240, 160) });
+        let _ = step(&mut sync.seq, &mut sync.state, Event::DragStarted { size: (240, 160), dwm_frame: 100 });
         assert_eq!(sync.ring.allocations, 1);
         let cap = sync.ring.capacity().expect("capacity");
         assert!(cap.0 > 240 && cap.1 > 160, "capacited shared texture should have headroom: {cap:?}");
@@ -687,7 +701,7 @@ fn drag_frame_feeds_every_presented_frame_consumer_behind_seam() {
                 &mut consumers,
                 seam,
                 (w, h),
-                idx == 0,
+                if idx == 0 { DragFramePhase::Begin } else { DragFramePhase::Steady },
                 || { *pre_presents += 1; },
             )
             .expect("drag frame succeeds");
@@ -755,8 +769,9 @@ fn drag_frame_feeds_every_presented_frame_consumer_behind_seam() {
     // 7. Rest received `RestEvent::Drew` (deadline armed in the future, not idle-expired).
     assert!(rest.deadline().is_some());
 
-    // 8. Seam detached DComp once and presented 3 times using only 2 shared textures.
-    assert!(seam.dcomp_detached);
+    // 8. Seam kept DComp attached on BeginDrag (detached only via machine gate), activated
+    // valid rects, and presented 3 times using only 2 shared textures.
+    assert!(!seam.dcomp_detached);
     assert!(seam.valid_rects_active);
     assert_eq!(seam.presents.len(), 3);
     assert_eq!(sync.ring.allocations, 2);

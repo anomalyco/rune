@@ -51,10 +51,26 @@ pub(super) struct DragFrameConsumers<'a> {
     pub base_format: wgpu::TextureFormat,
 }
 
+/// Presentation phase of one [`run_drag_frame`] pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DragFramePhase {
+    /// First drag frame (`BeginDrag`): enable `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression
+    /// before `BeginPaint`, wait on the D3D11 post-present fence, keep DirectComposition
+    /// attached, and sample DWM's composed frame count.
+    Begin,
+    /// Subsequent drag frame while DirectComposition is still attached (`DcompPhase::Priming`):
+    /// present without blocking on a CPU fence and sample DWM's composed frame count.
+    Priming,
+    /// Steady-state drag frame after DirectComposition has been detached: present without
+    /// blocking on a CPU fence and skip DWM timing queries.
+    Steady,
+}
+
 /// Result of one [`run_drag_frame`] pass.
 pub(super) struct DragFrameOutcome {
     pub animating: bool,
     pub trace_finished: bool,
+    pub dwm_frame: Option<u64>,
 }
 
 /// Runs one drag-sync frame against `seam` and feeds every presented-frame consumer.
@@ -66,7 +82,7 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     consumers: &mut DragFrameConsumers<'_>,
     seam: &mut S,
     size: (u32, u32),
-    detach_dcomp: bool,
+    phase: DragFramePhase,
     pre_present: impl FnOnce(),
 ) -> Result<DragFrameOutcome, String> {
     if gpu.is_lost() {
@@ -182,7 +198,8 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     };
     profile.mark_submitted();
     let encoded = consumers.frame_reports.stamp();
-    if detach_dcomp {
+    let is_begin = phase == DragFramePhase::Begin;
+    if is_begin {
         // Suppress `WM_ERASEBKGND` before the first `BeginPaint` runs on standard-frame windows;
         // any failure below drives `Event::DragFailed`, which clears the flag again.
         seam.set_valid_rects_active(true);
@@ -190,13 +207,16 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     let release_value = {
         let _present = StageGuard::enter(FrameStage::Present);
         pre_present();
-        seam.present_shared(drag, target, size, ready_value, detach_dcomp)?
+        seam.present_shared(drag, target, size, ready_value, is_begin)?
     };
     let present_returned = consumers.frame_reports.stamp();
     sync.note_slot_release(slot_idx, release_value);
-    if detach_dcomp {
-        seam.detach_dcomp()?;
-    }
+    // Sample DWM's composed frame count strictly after `present_shared` completes while priming
+    // (`Begin` and `Priming`). Steady-state frames skip the DWM query altogether.
+    let dwm_frame = match phase {
+        DragFramePhase::Begin | DragFramePhase::Priming => seam.dwm_frame_count(),
+        DragFramePhase::Steady => None,
+    };
     // Reclaim finished wgpu command allocators and staging buffers continuously during drags
     // without blocking the UI thread; any device loss surfaces via `gpu.is_lost()`.
     rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
@@ -245,7 +265,7 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     consumers.meter.set_pacing(if *consumers.idle { Pacing::Idle } else { Pacing::Vsync });
     profile.flush_core(consumers.app.rt(), consumers.frame_moving, animating, consumers.next_tick);
 
-    Ok(DragFrameOutcome { animating, trace_finished })
+    Ok(DragFrameOutcome { animating, trace_finished, dwm_frame })
 }
 
 impl Host {
@@ -254,8 +274,8 @@ impl Host {
     pub(super) fn render_and_present_drag(
         &mut self,
         size: (u32, u32),
-        detach_dcomp: bool,
-    ) -> Result<(), String> {
+        phase: DragFramePhase,
+    ) -> Result<DragFrameOutcome, String> {
         let now = crate::time::now();
         open_trace_if_needed(self, now);
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else {
@@ -314,7 +334,7 @@ impl Host {
                 &mut consumers,
                 &mut seam,
                 size,
-                detach_dcomp,
+                phase,
                 || window.pre_present_notify(),
             )
         };
@@ -341,11 +361,11 @@ impl Host {
         let outcome = result?;
         if outcome.trace_finished {
             self.life.finish();
-            return Ok(());
+            return Ok(outcome);
         }
         if outcome.animating || (self.trace.is_some() && self.args.frames.is_some()) {
             l.request_redraw();
         }
-        Ok(())
+        Ok(outcome)
     }
 }

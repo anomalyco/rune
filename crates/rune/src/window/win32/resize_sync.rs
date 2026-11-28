@@ -28,6 +28,7 @@ mod entry_tests;
 #[cfg(test)]
 mod tests;
 
+use frame::DragFramePhase;
 use gpu::{DragDevice, DragSeam, DragSlot, DragTargetRing, SharedDragTarget};
 pub(crate) use machine::{Effect, Eligibility, Event, State, step, valid_rects};
 use present::{DxgiDragSwapChain, Win32DragSeam};
@@ -63,6 +64,11 @@ impl DragResizeSync {
     /// Whether the window is currently presenting drag frames through the D3D11 copy-model path.
     pub(in crate::window) fn is_dragging(&self) -> bool {
         self.state.is_dragging()
+    }
+
+    /// Whether the window is waiting for DWM to compose enough frames before detaching DComp.
+    pub(super) fn is_priming(&self) -> bool {
+        self.state.is_priming()
     }
 
     /// Whether the window is waiting for one completed post-drag D3D12 flip-model frame before
@@ -293,6 +299,7 @@ impl Host {
         if !w.native.resize_sync.is_dragging() {
             return false;
         }
+        let prev_surface_size = w.native.resize_sync.surface_size_before_drag;
         let effects = step(
             &mut w.native.resize_sync.seq,
             &mut w.native.resize_sync.state,
@@ -301,7 +308,11 @@ impl Host {
         let mut handled = false;
         for effect in effects {
             if let Effect::RenderDragFrame { size } = effect {
-                handled |= self.execute_render_drag_frame(size);
+                if self.execute_render_drag_frame(size) {
+                    handled = true;
+                } else {
+                    self.reconfigure_surface_after_redraw_fallback(prev_surface_size);
+                }
             } else {
                 self.apply_resize_sync_effect(effect);
             }
@@ -343,6 +354,14 @@ impl Host {
             }
             Effect::RenderDragFrame { size } => {
                 let _ = self.execute_render_drag_frame(size);
+            }
+            Effect::DetachDcomp => {
+                if let Err(err) = self.try_detach_dcomp() {
+                    if let Some(w) = self.win.as_mut() {
+                        w.native.resize_sync.log_error_once(&err);
+                    }
+                    self.drive_resize_sync(Event::DragFailed);
+                }
             }
             Effect::RequestExitFrame => {
                 self.prepare_exit_frame();
@@ -424,17 +443,67 @@ impl Host {
         ok
     }
 
-    /// Releases active video layers, renders and presents the first drag frame onto the D3D11
-    /// copy-model swap chain inside `WM_PAINT`, detaches the DirectComposition root, and enables
-    /// `WVR_VALIDRECTS` + `WM_ERASEBKGND` suppression.
+    fn try_detach_dcomp(&mut self) -> Result<(), String> {
+        let Some(w) = self.win.as_mut() else {
+            return Err("window missing during detach_dcomp".into());
+        };
+        let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else {
+            return Err("window has no Win32 HWND".into());
+        };
+        let mut seam = Win32DragSeam {
+            hwnd,
+            handover: w.native.mode.handover(),
+            swap_chain: &mut w.native.resize_sync.swap_chain,
+            dcomp_detached: &mut w.native.resize_sync.dcomp_detached,
+        };
+        seam.detach_dcomp()
+    }
+
+    fn sync_drag_tick_timer(&self, animating: bool) {
+        let Some(w) = self.win.as_ref() else { return };
+        let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else { return };
+        let wanted = w.native.resize_sync.is_dragging()
+            && (w.native.resize_sync.is_priming() || animating);
+        crate::platform::win32::set_resize_sync_tick(hwnd, wanted);
+    }
+
+    fn reconfigure_surface_after_redraw_fallback(&mut self, prev_surface_size: Option<(u32, u32)>) {
+        let Some(l) = self.win.as_mut() else { return };
+        if prev_surface_size == Some((l.config.width, l.config.height)) {
+            return;
+        }
+        l.presented = None;
+        l.damage.reset();
+        if let (Some(surface), Some((gpu, _))) = (l.surface.as_ref(), self.gpu.as_ref()) {
+            let configured = configure(surface, gpu, &l.config);
+            l.native.slot.reconfigured(configured.is_ok());
+            if let Err(error) = configured {
+                eprintln!("rune: a window's surface refused its fallback drag size: {error}");
+                l.surface_ok = false;
+            }
+        }
+    }
+
+    /// Releases active video layers, enables `WVR_VALIDRECTS` + `WM_ERASEBKGND` suppression,
+    /// renders and presents the first drag frame onto the D3D11 copy-model swap chain inside
+    /// `WM_PAINT`, and records DWM's composed frame count while keeping DirectComposition attached
+    /// until DWM has composed at least two frames.
     fn execute_begin_drag(&mut self, size: (u32, u32)) -> bool {
         if let Some(w) = self.win.as_mut() {
             let native = &mut w.native;
             native.video_layers.release(native.mode.handover());
         }
-        match self.render_and_present_drag(size, true) {
-            Ok(()) => {
-                self.drive_resize_sync(Event::DragStarted { size });
+        match self.render_and_present_drag(size, DragFramePhase::Begin) {
+            Ok(outcome) => {
+                let Some(dwm_frame) = outcome.dwm_frame else {
+                    if let Some(w) = self.win.as_mut() {
+                        w.native.resize_sync.log_error_once("DWM composition frame count unavailable");
+                    }
+                    self.drive_resize_sync(Event::DragFailed);
+                    return false;
+                };
+                self.drive_resize_sync(Event::DragStarted { size, dwm_frame });
+                self.sync_drag_tick_timer(outcome.animating);
                 true
             }
             Err(err) => {
@@ -448,8 +517,52 @@ impl Host {
     }
 
     fn execute_render_drag_frame(&mut self, size: (u32, u32)) -> bool {
-        match self.render_and_present_drag(size, false) {
-            Ok(()) => true,
+        let was_priming = self.win.as_ref().is_some_and(|w| w.native.resize_sync.is_priming());
+        let phase = if was_priming { DragFramePhase::Priming } else { DragFramePhase::Steady };
+        match self.render_and_present_drag(size, phase) {
+            Ok(outcome) => {
+                if was_priming {
+                    let effects = {
+                        let Some(w) = self.win.as_mut() else { return false };
+                        step(
+                            &mut w.native.resize_sync.seq,
+                            &mut w.native.resize_sync.state,
+                            Event::DragFramePresented { dwm_frame: outcome.dwm_frame },
+                        )
+                    };
+                    let mut detach_failed = None;
+                    let mut aborted = false;
+                    for effect in effects {
+                        match effect {
+                            Effect::DetachDcomp => {
+                                if let Err(err) = self.try_detach_dcomp() {
+                                    detach_failed = Some(err);
+                                }
+                            }
+                            Effect::ReleaseDragResources => {
+                                aborted = true;
+                                self.apply_resize_sync_effect(Effect::ReleaseDragResources);
+                            }
+                            other => self.apply_resize_sync_effect(other),
+                        }
+                    }
+                    if let Some(err) = detach_failed {
+                        if let Some(w) = self.win.as_mut() {
+                            w.native.resize_sync.log_error_once(&err);
+                        }
+                        self.drive_resize_sync(Event::DragFailed);
+                        return false;
+                    }
+                    if aborted {
+                        if let Some(w) = self.win.as_mut() {
+                            w.native.resize_sync.log_error_once("DWM composition frame count unavailable");
+                        }
+                        return false;
+                    }
+                }
+                self.sync_drag_tick_timer(outcome.animating);
+                true
+            }
             Err(err) => {
                 if let Some(w) = self.win.as_mut() {
                     w.native.resize_sync.log_error_once(&err);
