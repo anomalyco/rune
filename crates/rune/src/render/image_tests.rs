@@ -181,7 +181,8 @@ fn gpu_static_mips_alpha_clip_and_page_order_match_pixels() {
     let out = draw(&mut rt);
     near(pixel(&out, 0, 0), [255, 0, 0, 255]);
     near(pixel(&out, 7, 0), [0, 0, 255, 255]);
-    assert!(rt.images.pages.iter().any(|p| p.data.is_empty()), "the old large page is released between live pages");
+    assert!(rt.images.pages.iter().any(|p| !p.is_active()), "the old large page is released between live pages");
+    assert_eq!(rt.images.cpu_bytes(), 0, "GPU-uploaded pages retain no CPU page buffer");
 }
 
 #[test]
@@ -450,20 +451,20 @@ fn gpu_sub_texel_image_crop_samples_own_texel_not_atlas_neighbour() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
 
-    // Place a 16x16 red slot, then paint a 4x4 blue sub-region at (4, 4) inside it.
+    // Place a 16x16 red slot with a 4x4 blue sub-region at (4, 4) inside it.
     // A sub-texel crop rooted at (ox, oy) whose clamp sets hi = lo - 1 bleeds the red
     // neighbour at lo - 1 instead of sampling the blue texel at lo.
     let mut images = ImageAtlas::default();
     let probe = Pixels::new();
-    probe.set(16, 16, [255, 0, 0, 255].repeat(16 * 16));
-    let placed = images.place(&probe, [16.0, 16.0]).expect("places image");
-    let page = &mut images.pages[placed.page];
+    let mut rgba = [255u8, 0, 0, 255].repeat(16 * 16);
     for y in 4..8 {
         for x in 4..8 {
-            let at = ((placed.rect[1] + y) * page.width + (placed.rect[0] + x)) as usize * 4;
-            page.data[at..at + 4].copy_from_slice(&[0, 64, 240, 255]);
+            let at = (y * 16 + x) * 4;
+            rgba[at..at + 4].copy_from_slice(&[0, 64, 240, 255]);
         }
     }
+    probe.set(16, 16, rgba);
+    let placed = images.place(&probe, [16.0, 16.0]).expect("places image");
     let ox = (placed.rect[0] + 4) as f32;
     let oy = (placed.rect[1] + 4) as f32;
 

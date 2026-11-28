@@ -333,7 +333,7 @@ fn sub_texel_and_degenerate_image_never_panics() {
         paint(&scene, &mut Target::new(&mut buf, w, h), 1).expect("CPU paints degenerate image");
         assert_eq!(buf, clear_buf, "degenerate image rect={rect:?} uv={uv:?} should draw nothing");
         // Also exercise `shade::image` directly for inputs `pixel_bounds` skips (like zero rect).
-        let img = super::super::Image { width: images.pages[placed.page].width, data: &images.pages[placed.page].data, dirty: None };
+        let img = super::super::Image { width: images.pages[placed.page].width, data: std::borrow::Cow::Borrowed(&images.pages[placed.page].data), dirty: None };
         assert_eq!(image(&inst, &img, [8.5, 8.5]), [0.0; 4], "shade::image rect={rect:?} uv={uv:?}");
     }
 
@@ -654,7 +654,7 @@ fn pixels_wrap_extend_repeat_mirror_match_gpu_byte_for_byte() {
     assert!(p_mask.premultiplied);
 
     // Degenerate wrap borders return transparent without panicking.
-    let page = crate::render::cpu_boot::Image { width: images.pages[p_tile.page].width, data: &images.pages[p_tile.page].data, dirty: None };
+    let page = crate::render::cpu_boot::Image { width: images.pages[p_tile.page].width, data: std::borrow::Cow::Borrowed(&images.pages[p_tile.page].data), dirty: None };
     for bad_border in [[0.0, 0.0, 0.0, 16.0], [0.0, 0.0, -8.0, 16.0], [f32::NAN, 0.0, 16.0, 16.0]] {
         let bad = Instance {
             rect: [0.0, 0.0, 16.0, 16.0],

@@ -421,3 +421,131 @@ fn steady_overflow_scene_keeps_pages_resident_without_per_frame_copies_and_recla
         }
     }
 }
+
+#[test]
+fn gpu_backing_holds_zero_cpu_page_bytes_and_uploads_dirty_rects_and_full_rebuilds() {
+    let mut atlas = ImageAtlas::default();
+    atlas.set_backing(Backing::Gpu);
+    assert_eq!(atlas.backing(), Backing::Gpu);
+
+    // 1. Place raw RGBA, mip-backed, animated, and standalone (> 1024) images on GPU backing.
+    let raw = Pixels::new();
+    raw.set(64, 64, [10, 20, 30, 255].repeat(64 * 64));
+    let neighbor = Pixels::new();
+    neighbor.set(64, 64, [40, 50, 60, 255].repeat(64 * 64));
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let mip_img = cache.rgba(64, 64, [200, 100, 50, 255].repeat(64 * 64));
+    mip_img.wait().unwrap();
+    let anim = Pixels::new();
+    let f0 = crate::mip_chain(16, 16, &[255, 0, 0, 255].repeat(16 * 16)).unwrap().mips;
+    let f1 = crate::mip_chain(16, 16, &[0, 255, 0, 255].repeat(16 * 16)).unwrap().mips;
+    let motion = crate::animated::Motion { frames: vec![f1], ends: vec![0.1, 0.2], plays: None };
+    anim.store_mips(Arc::new(crate::Decoded { mips: f0, motion: Some(Box::new(motion)), intrinsic: None }));
+    let tall = Pixels::new();
+    tall.set(256, 200, [70, 80, 90, 255].repeat(256 * 200));
+    let standalone = Pixels::new();
+    standalone.set(1025, 32, [11, 22, 33, 255].repeat(1025 * 32));
+
+    let p_raw = atlas.place(&raw, [64.0; 2]).unwrap();
+    let p_neighbor = atlas.place(&neighbor, [64.0; 2]).unwrap();
+    let p_mip = atlas.place(mip_img.pixels(), [32.0; 2]).unwrap();
+    let (p_anim, _) = atlas.place_at(&anim, [16.0; 2], Some(0.0)).unwrap();
+    let p_tall = atlas.place(&tall, [256.0, 200.0]).unwrap();
+    let p_big = atlas.place(&standalone, [1025.0, 32.0]).unwrap();
+    atlas.end_frame();
+
+    assert_eq!(atlas.pages.len(), 2);
+    assert!(atlas.pages[0].is_active() && atlas.pages[1].is_active());
+    assert_eq!(atlas.pages[0].height, 512, "shelf page 0 grew to hold 200-row band");
+    assert_eq!(atlas.cpu_bytes(), 0, "GPU backing must allocate zero ImagePage::data bytes");
+    assert!(atlas.pages.iter().all(|p| p.data.is_empty() && p.data.capacity() == 0));
+
+    // Initial drain uploads all placed rects on both pages and clears dirty/pending state.
+    let mut initial_rects = Vec::new();
+    atlas.drain_page_uploads(0, true, |x, y, w, h, bytes| {
+        initial_rects.push(([x, y, w, h], [bytes[0], bytes[1], bytes[2], bytes[3]]));
+    });
+    assert!(initial_rects.contains(&(p_raw.rect, [10, 20, 30, 255])));
+    assert!(initial_rects.contains(&(p_neighbor.rect, [40, 50, 60, 255])));
+    assert!(initial_rects.iter().any(|(r, _)| *r == p_mip.rect));
+    assert!(initial_rects.contains(&(p_anim.rect, [255, 0, 0, 255])));
+    assert!(initial_rects.contains(&(p_tall.rect, [70, 80, 90, 255])));
+    assert_eq!(atlas.pages[0].dirty, None);
+
+    let mut big_rects = Vec::new();
+    atlas.drain_page_uploads(1, true, |x, y, w, h, bytes| {
+        big_rects.push(([x, y, w, h], [bytes[0], bytes[1], bytes[2], bytes[3]]));
+    });
+    assert_eq!(big_rects, vec![(p_big.rect, [11, 22, 33, 255])]);
+
+    // 2. Incremental update: update raw + advance animation to frame 1. Only those two rects upload.
+    raw.set(64, 64, [99, 88, 77, 255].repeat(64 * 64));
+    assert_eq!(atlas.place(&raw, [64.0; 2]), Some(p_raw));
+    assert_eq!(atlas.place(&neighbor, [64.0; 2]), Some(p_neighbor));
+    assert_eq!(atlas.place(mip_img.pixels(), [32.0; 2]), Some(p_mip));
+    assert_eq!(atlas.place_at(&anim, [16.0; 2], Some(0.15)).unwrap().0, p_anim);
+    atlas.end_frame();
+    let mut incr = Vec::new();
+    atlas.drain_page_uploads(0, false, |x, y, w, h, bytes| {
+        incr.push(([x, y, w, h], [bytes[0], bytes[1], bytes[2], bytes[3]]));
+    });
+    assert_eq!(incr.len(), 2, "incremental frame uploads only the 2 changed rects: {incr:?}");
+    assert!(incr.contains(&(p_raw.rect, [99, 88, 77, 255])));
+    assert!(incr.contains(&(p_anim.rect, [0, 255, 0, 255])));
+
+    // 3. rest() evicts unshown tall image and shrinks page 0 from 512 -> 128 without allocating data.
+    atlas.rest();
+    assert_eq!(atlas.pages.len(), 1, "unshown standalone page 1 truncated at rest");
+    assert_eq!(atlas.pages[0].height, 128, "shelf page 0 shrank back to 128 rows");
+    assert_eq!(atlas.cpu_bytes(), 0);
+    assert!(atlas.pages[0].dirty.is_some());
+
+    // 4. Full rebuild (shrink / invalidate / lost device) uploads every surviving live slot from Pixels.
+    atlas.invalidate();
+    let mut rebuilt = Vec::new();
+    atlas.drain_page_uploads(0, false, |x, y, w, h, bytes| {
+        rebuilt.push(([x, y, w, h], [bytes[0], bytes[1], bytes[2], bytes[3]]));
+    });
+    assert_eq!(rebuilt.len(), 4, "all 4 surviving live slots re-upload after invalidate");
+    assert!(rebuilt.contains(&(p_raw.rect, [99, 88, 77, 255])));
+    assert!(rebuilt.contains(&(p_neighbor.rect, [40, 50, 60, 255])));
+    assert!(rebuilt.iter().any(|(r, _)| *r == p_mip.rect));
+    assert!(rebuilt.contains(&(p_anim.rect, [0, 255, 0, 255])));
+
+    // 5. read_page_rgba and Backing::Cpu materialization reconstruct exact pixels, and Backing::Gpu drops them again.
+    let reconstructed = atlas.read_page_rgba(0);
+    let raw_off = ((p_raw.rect[1] * atlas.pages[0].width + p_raw.rect[0]) * 4) as usize;
+    assert_eq!(&reconstructed[raw_off..raw_off + 4], &[99, 88, 77, 255]);
+    atlas.set_backing(Backing::Cpu);
+    assert_eq!(atlas.cpu_bytes(), 1024 * 128 * 4);
+    assert_eq!(&atlas.pages[0].data[raw_off..raw_off + 4], &[99, 88, 77, 255]);
+    atlas.set_backing(Backing::Gpu);
+    assert_eq!(atlas.cpu_bytes(), 0);
+    assert_eq!(atlas.pages[0].data.capacity(), 0);
+
+    // 6. Bounds enforcement (IMAGE_ATLAS_MAX_PAGES) still works in Backing::Gpu when data is empty.
+    let mut bounded = ImageAtlas::default();
+    bounded.set_backing(Backing::Gpu);
+    let bigs: Vec<Pixels> = (0..IMAGE_ATLAS_MAX_PAGES + 4)
+        .map(|i| {
+            let p = Pixels::new();
+            p.set(900, 900, [i as u8, 10, 20, 255].repeat(900 * 900));
+            p
+        })
+        .collect();
+    for p in &bigs {
+        assert!(bounded.place(p, [900.0; 2]).is_some());
+    }
+    bounded.end_frame();
+    assert_eq!(bounded.cpu_bytes(), 0);
+    assert!(bounded.pages.len() >= IMAGE_ATLAS_MAX_PAGES + 4);
+    // Keep only 4 visible: enforce_bounds must evict unshown pages even though cpu_bytes() == 0.
+    for _ in 0..2 {
+        for p in &bigs[..4] {
+            assert!(bounded.place(p, [900.0; 2]).is_some());
+        }
+        bounded.end_frame();
+    }
+    assert!(bounded.pages.len() <= IMAGE_ATLAS_MAX_PAGES);
+    assert_eq!(bounded.cpu_bytes(), 0);
+}

@@ -439,11 +439,12 @@ fn give_back_drops_freed_image_pages_at_rest_and_all_pages_when_hidden_and_wakes
     };
 
     // Idle rest (Host::give_back(false)): interior page 0 is emptied by rest() and pruned from GPU;
-    // visible page 1 stays resident.
+    // visible page 1 stays resident (with zero retained CPU page buffer after GPU upload).
     rt.images.rest();
     assert_eq!(rt.images.pages.len(), 2);
-    assert!(rt.images.pages[0].data.is_empty());
-    assert!(!rt.images.pages[1].data.is_empty());
+    assert!(!rt.images.pages[0].is_active());
+    assert!(rt.images.pages[1].is_active());
+    assert_eq!(rt.images.cpu_bytes(), 0);
     renderer.give_back(false, &mut rt.text.atlas.resident_caches, &rt.images);
     assert!(renderer.has_images(), "visible image page stays resident at idle rest");
     assert_eq!(renderer.image_texture_count(), 1);
@@ -657,4 +658,139 @@ fn steady_overflow_image_atlas_uploads_zero_pages_per_frame() {
     for (got, want) in out[..4].iter().zip(want) {
         assert!(got.abs_diff(want) <= 1, "relocated pixel {got} != {want}");
     }
+}
+
+/// Uploading images to GPU releases all CPU `ImagePage::data` shadow buffers (0 bytes retained),
+/// incremental sub-rect updates preserve neighbors on the same shelf row, shelf growth / hide-wake
+/// / lost-device recovery re-upload exact pixels from live `Pixels` slots, and `cpu_boot::Scene`
+/// still paints accurately on demand.
+#[test]
+fn gpu_upload_drops_cpu_page_buffers_and_survives_growth_device_loss_and_cpu_paint() {
+    use std::sync::Arc;
+    use crate::image::ImageCache;
+    use crate::pixels::{Backing, ImageAtlas, Pixels};
+    use crate::render::cpu_boot::{Scene, Target, paint};
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut atlas = crate::text::Atlas::new();
+    let target = Offscreen::new(device, 32, 8);
+
+    let left = Pixels::new();
+    left.set(32, 32, [220, 40, 30, 255].repeat(32 * 32));
+    let right = Pixels::new();
+    right.set(32, 32, [30, 210, 60, 255].repeat(32 * 32));
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let mip = cache.rgba(64, 64, [40, 80, 230, 255].repeat(64 * 64));
+    mip.wait().unwrap();
+    let big = Pixels::new();
+    big.set(1025, 16, [230, 190, 20, 255].repeat(1025 * 16));
+
+    let mut images = ImageAtlas::default();
+    let p_left = images.place(&left, [32.0; 2]).unwrap();
+    let p_right = images.place(&right, [32.0; 2]).unwrap();
+    let p_mip = images.place(mip.pixels(), [16.0; 2]).unwrap();
+    let p_big = images.place(&big, [1025.0, 16.0]).unwrap();
+    assert_eq!(p_left.page, 0);
+    assert_eq!(p_right.page, 0);
+    assert_eq!(p_left.rect[1], p_right.rect[1], "left and right share the same shelf row");
+    assert_eq!(p_big.page, 1);
+    images.end_frame();
+    assert!(images.cpu_bytes() > 0, "default CPU backing allocates page buffers before first GPU upload");
+
+    let mk_inst = |x: f32, placed: crate::pixels::Placed| Instance {
+        rect: [x, 0.0, 8.0, 8.0],
+        radii: [0.0; 4],
+        fill: [0.0, 0.0, 0.0, 1.0],
+        border: [0.0; 4],
+        params: [placed.page as f32, KIND_IMAGE, placed.premultiplied as u8 as f32, 1.0],
+        uv: placed.rect.map(|v| v as f32),
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let insts = [mk_inst(0.0, p_left), mk_inst(8.0, p_right), mk_inst(16.0, p_mip), mk_inst(24.0, p_big)];
+    let draw = |r: &mut Renderer, imgs: &mut ImageAtlas, atlas: &mut crate::text::Atlas| -> Vec<u8> {
+        r.upload_images(device, queue, imgs);
+        r.prepare(device, queue, atlas, &insts, (32, 8));
+        let mut enc = device.create_command_encoder(&Default::default());
+        r.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        r.submit(queue, enc);
+        target.read(device)
+    };
+    let near = |out: &[u8], x: usize, want: [u8; 4], label: &str| {
+        let off = (4 * 32 + x) * 4;
+        let got: [u8; 4] = out[off..off + 4].try_into().unwrap();
+        assert!(got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 2), "{label}: got {got:?}, want {want:?}");
+    };
+
+    // 1. First GPU upload drops all CPU page buffers and switches to Backing::Gpu.
+    let out1 = draw(&mut renderer, &mut images, &mut atlas);
+    assert_eq!(images.backing(), Backing::Gpu);
+    assert_eq!(images.cpu_bytes(), 0, "GPU upload must release all CPU ImagePage::data buffers");
+    assert!(images.pages.iter().all(|p| p.data.is_empty() && p.data.capacity() == 0));
+    near(&out1, 4, [220, 40, 30, 255], "initial left");
+    near(&out1, 12, [30, 210, 60, 255], "initial right");
+    near(&out1, 20, [40, 80, 230, 255], "initial mip");
+    near(&out1, 28, [230, 190, 20, 255], "initial standalone");
+
+    // 2. Incremental sub-rect update to left must NOT clobber right on the same shelf row.
+    left.set(32, 32, [180, 20, 210, 255].repeat(32 * 32));
+    assert_eq!(images.place(&left, [32.0; 2]), Some(p_left));
+    assert_eq!(images.place(&right, [32.0; 2]), Some(p_right));
+    assert_eq!(images.place(mip.pixels(), [16.0; 2]), Some(p_mip));
+    assert_eq!(images.place(&big, [1025.0, 16.0]), Some(p_big));
+    images.end_frame();
+    assert_eq!(images.cpu_bytes(), 0, "GPU-backed place allocates zero CPU page bytes");
+    let out2 = draw(&mut renderer, &mut images, &mut atlas);
+    near(&out2, 4, [180, 20, 210, 255], "updated left");
+    near(&out2, 12, [30, 210, 60, 255], "same-row neighbor right preserved");
+    near(&out2, 20, [40, 80, 230, 255], "mip preserved");
+    near(&out2, 28, [230, 190, 20, 255], "standalone preserved");
+
+    // 3. Shelf growth (128 -> 256 rows) recreates GPU texture and re-uploads all existing live slots.
+    let tall = Pixels::new();
+    tall.set(256, 200, [90, 90, 90, 255].repeat(256 * 200));
+    assert_eq!(images.place(&left, [32.0; 2]), Some(p_left));
+    assert_eq!(images.place(&right, [32.0; 2]), Some(p_right));
+    assert_eq!(images.place(mip.pixels(), [16.0; 2]), Some(p_mip));
+    assert_eq!(images.place(&big, [1025.0, 16.0]), Some(p_big));
+    assert_eq!(images.place(&tall, [256.0, 200.0]).unwrap().page, 0);
+    images.end_frame();
+    assert_eq!(images.pages[0].height, 256);
+    assert_eq!(images.cpu_bytes(), 0, "shelf growth in GPU mode allocates zero CPU page bytes");
+    let out3 = draw(&mut renderer, &mut images, &mut atlas);
+    assert_eq!(renderer.images[0].as_ref().unwrap().0.height(), 256);
+    near(&out3, 4, [180, 20, 210, 255], "left survives shelf growth");
+    near(&out3, 12, [30, 210, 60, 255], "right survives shelf growth");
+    near(&out3, 20, [40, 80, 230, 255], "mip survives shelf growth");
+    near(&out3, 28, [230, 190, 20, 255], "standalone survives shelf growth");
+
+    // 4. Simulated lost device / new renderer + invalidate(): re-uploads everything with 0 CPU backing.
+    drop(renderer);
+    images.invalidate();
+    let mut recovered = Renderer::new(device, OFFSCREEN_FORMAT);
+    let out4 = draw(&mut recovered, &mut images, &mut atlas);
+    assert_eq!(images.cpu_bytes(), 0);
+    near(&out4, 4, [180, 20, 210, 255], "left after device-loss recovery");
+    near(&out4, 12, [30, 210, 60, 255], "right after device-loss recovery");
+    near(&out4, 20, [40, 80, 230, 255], "mip after device-loss recovery");
+    near(&out4, 28, [230, 190, 20, 255], "standalone after device-loss recovery");
+
+    // 5. CPU renderer (cpu_boot::Scene) still paints accurately when page.data is empty.
+    let mut cpu_buf = vec![0u8; 32 * 8 * 4];
+    let scene = Scene::new(&insts, &atlas, &images, (32, 8), [0.0, 0.0, 0.0, 1.0]).srgb_blend(true);
+    paint(&scene, &mut Target::new(&mut cpu_buf, 32, 8), 1).expect("CPU paints GPU-backed atlas");
+    // Target is BGRA8; check channels (B, G, R, A).
+    let cpu_near = |x: usize, want_rgba: [u8; 4], label: &str| {
+        let off = (4 * 32 + x) * 4;
+        let got_rgba = [cpu_buf[off + 2], cpu_buf[off + 1], cpu_buf[off], cpu_buf[off + 3]];
+        assert!(got_rgba.iter().zip(want_rgba).all(|(a, b)| a.abs_diff(b) <= 2), "{label}: got {got_rgba:?}, want {want_rgba:?}");
+    };
+    cpu_near(4, [180, 20, 210, 255], "CPU paint left");
+    cpu_near(12, [30, 210, 60, 255], "CPU paint right");
+    cpu_near(20, [40, 80, 230, 255], "CPU paint mip");
+    cpu_near(28, [230, 190, 20, 255], "CPU paint standalone");
+    assert_eq!(images.cpu_bytes(), 0, "on-demand CPU paint does not retain page buffers on the atlas");
 }

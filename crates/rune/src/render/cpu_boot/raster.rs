@@ -520,7 +520,7 @@ impl Painter<'_, '_> {
 
     /// A `KIND_IMAGE` from its image page.
     fn image(&mut self, i: &Instance, r: [u32; 4], clip: &Clip) {
-        let Some(&page) = self.scene.images.get(i.params[0] as usize) else { return };
+        let Some(page) = self.scene.images.get(i.params[0] as usize) else { return };
         let segs = self.segments(r, None, clip);
         let mut k = 0;
         for y in r[1]..r[3] {
@@ -529,7 +529,7 @@ impl Painter<'_, '_> {
             let (whole, vis) = (segs[k].whole, segs[k].vis);
             for x in vis.iter().flat_map(|(a, b)| a..b) {
                 let p = [x as f32 + 0.5, py];
-                let c = shade::image(i, &page, p);
+                let c = shade::image(i, page, p);
                 if c == [0.0; 4] { continue; }
                 let a = if p[0] >= whole.0 && p[0] <= whole.1 { 1.0 } else { clip.alpha(p) };
                 self.stats.shaded_px += 1;

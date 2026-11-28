@@ -38,10 +38,30 @@ pub(crate) const IMAGE_PAGE_START_ROWS: u32 = 128;
 /// `place_at`'s stack when `set` runs concurrently (any further `set` drops the uncopied
 /// intermediate frame immediately, and the snapshot drops before `place_at` returns).
 #[derive(Clone)]
-enum FrameData {
+pub(crate) enum FrameData {
     Empty,
     Rgba(Arc<Vec<u8>>),
     Mips(Arc<crate::Decoded>),
+}
+
+impl FrameData {
+    /// Borrows tightly packed `w × h × 4` RGBA8 bytes for `(level, frame)` when present and matching.
+    pub(crate) fn slice(&self, level: usize, frame: usize, w: u32, h: u32) -> Option<&[u8]> {
+        let need = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+        match self {
+            FrameData::Empty => None,
+            FrameData::Rgba(rgba) => (rgba.len() == need).then_some(rgba.as_slice()),
+            FrameData::Mips(decoded) => {
+                let mips = match &decoded.motion {
+                    Some(motion) => motion.frame_checked(&decoded.mips, frame)?,
+                    None if frame == 0 => &decoded.mips[..],
+                    None => return None,
+                };
+                let mip = mips.get(level)?;
+                (mip.width == w && mip.height == h && mip.pixels.len() == need).then_some(mip.pixels.as_slice())
+            }
+        }
+    }
 }
 
 struct Frame {
@@ -534,6 +554,17 @@ pub struct Placed {
     pub premultiplied: bool,
 }
 
+/// Whether `ImageAtlas` retains a full-page CPU copy (`ImagePage::data`) beside GPU textures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backing {
+    /// Keep `ImagePage::data` for CPU painting (`cpu_boot::Scene`) and standalone atlas inspection.
+    #[default]
+    Cpu,
+    /// Do not retain `ImagePage::data`: stage dirty rectangles directly from `Pixels` on GPU
+    /// upload, and re-upload live slots from `Pixels` after texture resize, hide/wake, or device loss.
+    Gpu,
+}
+
 /// Streaming buffers keep one slot. Static images keep a slot per sampled mip level.
 #[derive(Default)]
 pub struct ImageAtlas {
@@ -548,6 +579,9 @@ pub struct ImageAtlas {
     deferred_this_frame: Vec<(usize, u32, u32, u32)>,
     /// Deferred rects from the previous frame, released on the next `end_frame` or `rest`.
     deferred_prev_frame: Vec<(usize, u32, u32, u32)>,
+    /// Page-backing mode: `Backing::Cpu` keeps `ImagePage::data`; `Backing::Gpu` drops it and
+    /// uploads dirty rectangles directly from `Pixels`.
+    backing: Backing,
     /// Frames copied in so far, so the idle meter sees new pixels in a slot it already drew.
     #[cfg(debug_assertions)]
     #[doc(hidden)]
@@ -697,12 +731,24 @@ impl ImageAtlas {
             #[cfg(debug_assertions)]
             { self.copies += 1; }
             let page = &mut self.pages[slot.page];
-            let row = (page.width * 4) as usize;
-            for line in 0..h as usize {
-                let dst = (slot.y as usize + line) * row + slot.x as usize * 4;
-                let src = line * w as usize * 4;
-                page.data[dst..dst + w as usize * 4].copy_from_slice(&bytes[src..src + w as usize * 4]);
-                on_copy_row(line);
+            if !page.data.is_empty() {
+                let row = (page.width * 4) as usize;
+                for line in 0..h as usize {
+                    let dst = (slot.y as usize + line) * row + slot.x as usize * 4;
+                    let src = line * w as usize * 4;
+                    page.data[dst..dst + w as usize * 4].copy_from_slice(&bytes[src..src + w as usize * 4]);
+                    on_copy_row(line);
+                }
+            } else {
+                page.queue_pending(crate::shelf::PendingWrite {
+                    x: slot.x,
+                    y: slot.y,
+                    w,
+                    h,
+                    level,
+                    frame: shown,
+                    data,
+                });
             }
             let (y0, y1) = (slot.y, slot.y + h);
             page.dirty = Some(page.dirty.map_or((y0, y1), |(a, b)| (a.min(y0), b.max(y1))));
@@ -747,9 +793,7 @@ impl ImageAtlas {
         for (i, page) in pages.iter_mut().enumerate() {
             page.shown = std::mem::take(&mut page.touched);
             if !slots.values().any(|slot| slot.page == i) && !deferred_this_frame.iter().any(|&(p, ..)| p == i) {
-                page.shelves.reset();
-                page.dirty = None;
-                page.data = Vec::new();
+                page.empty();
             }
         }
         let keep = self.slots.values().map(|s| s.page + 1)
@@ -806,19 +850,183 @@ impl ImageAtlas {
         had
     }
 
-    /// Marks every row for upload (a new texture).
+    /// Current page-backing mode (`Backing::Cpu` or `Backing::Gpu`).
+    pub fn backing(&self) -> Backing {
+        self.backing
+    }
+
+    /// Switches how the atlas stages pixel data. `Backing::Gpu` drops all retained
+    /// `ImagePage::data` buffers immediately and uploads future dirty rectangles directly from
+    /// `Pixels`. `Backing::Cpu` materializes `ImagePage::data` for active pages so the CPU
+    /// painter can borrow them directly.
+    pub fn set_backing(&mut self, backing: Backing) {
+        self.backing = backing;
+        match backing {
+            Backing::Gpu => {
+                for page in &mut self.pages {
+                    if !page.data.is_empty() {
+                        if page.dirty.is_some() { page.full_upload = true; }
+                        page.drop_cpu_data();
+                    }
+                }
+            }
+            Backing::Cpu => {
+                for index in 0..self.pages.len() {
+                    if self.pages[index].is_active() && self.pages[index].data.is_empty() {
+                        let buf = self.read_page_rgba(index);
+                        self.pages[index].data = buf;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Releases all retained `ImagePage::data` CPU buffers and switches to `Backing::Gpu`.
+    pub fn release_cpu_pages(&mut self) {
+        self.set_backing(Backing::Gpu);
+    }
+
+    /// Total CPU heap bytes currently retained in `ImagePage::data` buffers across all pages.
+    pub fn cpu_bytes(&self) -> usize {
+        self.pages.iter().map(ImagePage::cpu_bytes).sum()
+    }
+
+    /// Clears pending upload state on an inactive or oversized page.
+    pub fn clear_page_uploads(&mut self, index: usize) {
+        if let Some(page) = self.pages.get_mut(index) {
+            page.dirty = None;
+            page.full_upload = false;
+            page.pending.clear();
+        }
+    }
+
+    /// Calls `upload(x, y, width, height, rgba_bytes)` for every rectangle on active page `index`
+    /// that needs to reach the GPU texture, then clears that page's pending/dirty upload state.
+    /// When `force_full` is true (new/resized texture, wake from hide, or device loss) or the page
+    /// was invalidated, uploads every live slot directly from `Pixels` (plus any in-frame pending
+    /// snapshots) without needing a retained `ImagePage::data` buffer.
+    pub fn drain_page_uploads(
+        &mut self,
+        index: usize,
+        force_full: bool,
+        mut upload: impl FnMut(u32, u32, u32, u32, &[u8]),
+    ) {
+        let Some(page) = self.pages.get_mut(index) else { return };
+        if !page.is_active() {
+            page.dirty = None;
+            page.full_upload = false;
+            page.pending.clear();
+            return;
+        }
+        let (page_w, page_h) = (page.width, page.height);
+        if !page.data.is_empty() {
+            let rows = if force_full || page.full_upload {
+                page.dirty = None;
+                Some((0, page_h))
+            } else {
+                page.dirty.take()
+            };
+            page.full_upload = false;
+            page.pending.clear();
+            if let Some((y0, y1)) = rows {
+                let row_bytes = page_w as usize * 4;
+                let max_y = (page.data.len() / row_bytes.max(1)) as u32;
+                let y1 = y1.min(page_h).min(max_y);
+                if y1 > y0 {
+                    upload(0, y0, page_w, y1 - y0, &page.data[(y0 as usize * row_bytes)..(y1 as usize * row_bytes)]);
+                }
+            }
+            return;
+        }
+        let need_full = force_full || page.full_upload || (page.dirty.is_some() && page.pending.is_empty());
+        let pending = std::mem::take(&mut page.pending);
+        page.full_upload = false;
+        page.dirty = None;
+        if need_full {
+            for (&(_, level), slot) in &self.slots {
+                if slot.page != index || slot.x + slot.w > page_w || slot.y + slot.h > page_h {
+                    continue;
+                }
+                if pending.iter().any(|p| p.x == slot.x && p.y == slot.y && p.w == slot.w && p.h == slot.h) {
+                    continue;
+                }
+                self.with_live_slot_bytes(slot, level, |bytes| upload(slot.x, slot.y, slot.w, slot.h, bytes));
+            }
+        }
+        for p in &pending {
+            if p.x + p.w <= page_w && p.y + p.h <= page_h
+                && let Some(bytes) = p.data.slice(p.level, p.frame, p.w, p.h)
+            {
+                upload(p.x, p.y, p.w, p.h, bytes);
+            }
+        }
+    }
+
+    /// Reconstructs a full tightly packed RGBA8 buffer (`width * height * 4` bytes) for active
+    /// page `index` from its live slots and pending writes, for CPU painting after `data` was
+    /// released on GPU upload.
+    pub fn read_page_rgba(&self, index: usize) -> Vec<u8> {
+        let Some(page) = self.pages.get(index) else { return Vec::new() };
+        if !page.is_active() { return Vec::new(); }
+        if !page.data.is_empty() { return page.data.clone(); }
+        let mut out = vec![0u8; page.pixel_bytes()];
+        let stride = page.width as usize * 4;
+        let blit = |out: &mut [u8], x: u32, y: u32, w: u32, h: u32, bytes: &[u8]| {
+            let row_bytes = w as usize * 4;
+            for line in 0..h as usize {
+                let dst = (y as usize + line) * stride + x as usize * 4;
+                let src = line * row_bytes;
+                out[dst..dst + row_bytes].copy_from_slice(&bytes[src..src + row_bytes]);
+            }
+        };
+        for (&(_, level), slot) in &self.slots {
+            if slot.page != index || slot.x + slot.w > page.width || slot.y + slot.h > page.height {
+                continue;
+            }
+            if page.pending.iter().any(|p| p.x == slot.x && p.y == slot.y && p.w == slot.w && p.h == slot.h) {
+                continue;
+            }
+            self.with_live_slot_bytes(slot, level, |bytes| blit(&mut out, slot.x, slot.y, slot.w, slot.h, bytes));
+        }
+        for p in &page.pending {
+            if p.x + p.w <= page.width && p.y + p.h <= page.height
+                && let Some(bytes) = p.data.slice(p.level, p.frame, p.w, p.h)
+            {
+                blit(&mut out, p.x, p.y, p.w, p.h, bytes);
+            }
+        }
+        out
+    }
+
+    fn with_live_slot_bytes(&self, slot: &Slot, level: usize, f: impl FnOnce(&[u8])) {
+        let Some(inner) = slot.live.upgrade() else { return };
+        let (frame_w, frame_h, data) = {
+            let frame = inner.frame.lock().unwrap();
+            (frame.width, frame.height, frame.data.clone())
+        };
+        if matches!(data, FrameData::Rgba(_)) && (frame_w != slot.w || frame_h != slot.h) {
+            return;
+        }
+        if let Some(bytes) = data.slice(level, slot.frame, slot.w, slot.h) {
+            f(bytes);
+        }
+    }
+
+    /// Marks every row for upload (a new texture or lost device).
     pub fn invalidate(&mut self) {
         for page in &mut self.pages {
-            if !page.data.is_empty() {
+            if page.is_active() {
+                page.full_upload = true;
                 page.dirty = Some((0, page.height));
             }
         }
     }
 
     fn try_allocate_within(&mut self, w: u32, h: u32, max_pages: usize, reclaim_stale: bool) -> Option<(usize, u32, u32)> {
+        let retain_cpu = self.backing == Backing::Cpu;
         let limit = max_pages.min(self.pages.len());
         for (i, page) in self.pages[..limit].iter_mut().enumerate() {
-            if page.data.is_empty() { *page = ImagePage::new(w, h); }
+            if !page.is_active() { *page = ImagePage::new(w, h, retain_cpu); }
             if let Some((x, y)) = page.allocate(w, h) { return Some((i, x, y)); }
         }
         let is_shelf_req = w <= IMAGE_ATLAS_SIZE && h <= IMAGE_ATLAS_SIZE;
@@ -829,6 +1037,7 @@ impl ImageAtlas {
             self.slots.retain(|_, s| s.page != i);
             let page = &mut self.pages[i];
             page.shelves.reset();
+            page.pending.clear();
             let (x, y) = page.allocate(w, h).unwrap();
             return Some((i, x, y));
         }
@@ -836,7 +1045,7 @@ impl ImageAtlas {
         // At or past the atlas bound: reclaim idle pages or stale unshown slots on shelf pages.
         if let Some(i) = self.pages[..limit].iter().enumerate().position(|(i, p)| !p.shown && !p.touched && !self.page_pinned(i)) {
             self.slots.retain(|_, s| s.page != i);
-            self.pages[i] = ImagePage::new(w, h);
+            self.pages[i] = ImagePage::new(w, h, retain_cpu);
             let (x, y) = self.pages[i].allocate(w, h).unwrap();
             return Some((i, x, y));
         }
@@ -874,7 +1083,7 @@ impl ImageAtlas {
         if let Some(placed) = self.try_allocate_within(w, h, self.pages.len(), reclaim) {
             return placed;
         }
-        let mut page = ImagePage::new(w, h);
+        let mut page = ImagePage::new(w, h, self.backing == Backing::Cpu);
         let (x, y) = page.allocate(w, h).unwrap();
         self.pages.push(page);
         (self.pages.len() - 1, x, y)
@@ -885,11 +1094,11 @@ impl ImageAtlas {
     }
 
     fn total_bytes(&self) -> usize {
-        self.pages.iter().map(|p| p.data.len()).sum()
+        self.pages.iter().map(ImagePage::pixel_bytes).sum()
     }
 
     fn active_pages(&self) -> usize {
-        self.pages.iter().filter(|p| !p.data.is_empty()).count()
+        self.pages.iter().filter(|p| p.is_active()).count()
     }
 
     fn enforce_bounds(&mut self) {

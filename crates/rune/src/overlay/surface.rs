@@ -432,6 +432,7 @@ impl OverlayCore {
             .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         rt.transparent = true;
         rt.set_renderer_kind(crate::RendererKind::Gpu);
+        rt.images.set_backing(crate::pixels::Backing::Gpu);
         rt.set_viewport(self.at.size, scale);
         #[cfg(target_os = "macos")]
         let pacing = self.frame_wake.clone().and_then(|wake| {

@@ -331,16 +331,27 @@ pub(super) fn replace_texture_rows(texture: &TextureRaw, y: u32, rows: &[u8]) {
     let row = w * block as usize;
     let count = rows.len() / row;
     if count == 0 { return }
-    assert!(y as usize + count <= texture.raw.height(), "row write past the end of a texture");
+    replace_texture_rect(texture, 0, y, w as u32, count as u32, &rows[..row * count]);
+}
+
+/// Writes a tightly packed `width × height` rectangle of an idle shared texture at `(x, y)`.
+pub(super) fn replace_texture_rect(texture: &TextureRaw, x: u32, y: u32, width: u32, height: u32, data: &[u8]) {
+    let Some(block) = texture.format.block_copy_size(None) else { return };
+    if width == 0 || height == 0 { return }
+    let row = width as usize * block as usize;
+    let Some(need) = row.checked_mul(height as usize) else { return };
+    if data.len() < need { return }
+    assert!(x as usize + width as usize <= texture.raw.width(), "rect write past the width of a texture");
+    assert!(y as usize + height as usize <= texture.raw.height(), "rect write past the height of a texture");
     let region = MTLRegion {
-        origin: MTLOrigin { x: 0, y: y as usize, z: 0 },
-        size: MTLSize { width: w, height: count, depth: 1 },
+        origin: MTLOrigin { x: x as usize, y: y as usize, z: 0 },
+        size: MTLSize { width: width as usize, height: height as usize, depth: 1 },
     };
     let bpr = if texture.dimension == wgpu::TextureDimension::D1 { 0 } else { row };
-    // SAFETY: `rows` holds `count` tightly packed full-width rows within mip 0, checked above.
+    // SAFETY: `data` holds `width * height` tightly packed texels within mip 0, checked above.
     unsafe {
         texture.raw.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
-            region, 0, 0, NonNull::from(&rows[0]).cast(), bpr, 0,
+            region, 0, 0, NonNull::from(&data[0]).cast(), bpr, 0,
         );
     }
 }

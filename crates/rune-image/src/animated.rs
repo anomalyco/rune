@@ -45,6 +45,11 @@ impl Motion {
     pub(crate) fn frame<'a>(&'a self, first: &'a [Mip], i: usize) -> &'a [Mip] {
         if i == 0 { first } else { &self.frames[i - 1] }
     }
+
+    /// Checked variant of [`Self::frame`] for out-of-band slot reconstruction.
+    pub(crate) fn frame_checked<'a>(&'a self, first: &'a [Mip], i: usize) -> Option<&'a [Mip]> {
+        if i == 0 { Some(first) } else { self.frames.get(i - 1).map(Vec::as_slice) }
+    }
 }
 
 /// Without the `png` feature on `wasm32`, animated formats decode their first frame in the

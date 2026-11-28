@@ -147,6 +147,7 @@ pub fn enabled() -> bool {
 pub fn instance() -> wgpu::Instance {
     rune_staging::set_direct(write_in_place);
     rune_staging::set_direct_texture(write_texture_in_place);
+    rune_staging::set_direct_texture_rect(write_texture_rect_in_place);
     wgpu::Instance::from_custom(MetalInstance)
 }
 
@@ -166,6 +167,16 @@ fn write_texture_in_place(texture: &wgpu::Texture, y: u32, rows: &[u8]) -> bool 
     let Some(shared) = &tex.shared else { return false };
     if !tex.raw.is_idle(shared) { return false }
     encode::replace_texture_rows(&tex.raw, y, rows);
+    true
+}
+
+/// Staging's in-place texture rectangle writer: an idle Apple Silicon shared texture takes an
+/// arbitrary sub-rectangle via `replaceRegion`, falling back to staged blits while in flight.
+fn write_texture_rect_in_place(texture: &wgpu::Texture, x: u32, y: u32, width: u32, height: u32, data: &[u8]) -> bool {
+    let Some(tex) = texture.as_custom::<resource::MetalTexture>() else { return false };
+    let Some(shared) = &tex.shared else { return false };
+    if !tex.raw.is_idle(shared) { return false }
+    encode::replace_texture_rect(&tex.raw, x, y, width, height, data);
     true
 }
 

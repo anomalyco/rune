@@ -53,12 +53,12 @@ pub use painter::{CpuPainter, Painted};
 /// Inline storage for up to `N` atlas pages so steady-frame `Scene::new` performs zero heap
 /// allocations in the common case (0..=4 pages), spilling to `Vec` only when a scene exceeds `N`.
 #[derive(Clone)]
-enum SmallPages<T: Copy + Default, const N: usize> {
+enum SmallPages<T: Clone + Default, const N: usize> {
     Inline { items: [T; N], len: usize },
     Heap(Vec<T>),
 }
 
-impl<T: Copy + Default, const N: usize> std::ops::Deref for SmallPages<T, N> {
+impl<T: Clone + Default, const N: usize> std::ops::Deref for SmallPages<T, N> {
     type Target = [T];
     #[inline]
     fn deref(&self) -> &[T] {
@@ -69,7 +69,7 @@ impl<T: Copy + Default, const N: usize> std::ops::Deref for SmallPages<T, N> {
     }
 }
 
-impl<'b, T: Copy + Default, const N: usize> IntoIterator for &'b SmallPages<T, N> {
+impl<'b, T: Clone + Default, const N: usize> IntoIterator for &'b SmallPages<T, N> {
     type Item = &'b T;
     type IntoIter = std::slice::Iter<'b, T>;
     #[inline]
@@ -78,9 +78,9 @@ impl<'b, T: Copy + Default, const N: usize> IntoIterator for &'b SmallPages<T, N
     }
 }
 
-impl<T: Copy + Default, const N: usize> FromIterator<T> for SmallPages<T, N> {
+impl<T: Clone + Default, const N: usize> FromIterator<T> for SmallPages<T, N> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut items = [T::default(); N];
+        let mut items = std::array::from_fn(|_| T::default());
         let mut len = 0usize;
         let mut iter = iter.into_iter();
         while len < N {
@@ -94,7 +94,7 @@ impl<T: Copy + Default, const N: usize> FromIterator<T> for SmallPages<T, N> {
             return Self::Inline { items, len };
         };
         let mut v = Vec::with_capacity(N + 1 + iter.size_hint().0);
-        v.extend_from_slice(&items);
+        v.extend(items);
         v.push(extra);
         v.extend(iter);
         Self::Heap(v)
@@ -171,10 +171,10 @@ struct Flags {
 }
 
 /// An image atlas page: RGBA8 texels, `width * 4` bytes a row.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct Image<'a> {
     width: u32,
-    data: &'a [u8],
+    data: std::borrow::Cow<'a, [u8]>,
     /// Rows written since the renderer last uploaded the page (`ImagePage::dirty`).
     dirty: Option<(u32, u32)>,
 }
@@ -185,7 +185,16 @@ impl<'a> Scene<'a> {
     /// sRGB encoding as windows do by default.
     pub fn new(instances: &'a [Instance], atlas: &'a Atlas, images: &'a ImageAtlas, size: (u32, u32), clear: [f32; 4]) -> Self {
         let glyph_pages = (0..atlas.page_count()).filter_map(|p| atlas.page_data(p)).collect();
-        let images = images.pages.iter().map(|p| Image { width: p.width, data: &p.data, dirty: p.dirty }).collect();
+        let images = images.pages.iter().enumerate().map(|(index, p)| {
+            let data = if !p.data.is_empty() {
+                std::borrow::Cow::Borrowed(p.data.as_slice())
+            } else if p.is_active() {
+                std::borrow::Cow::Owned(images.read_page_rgba(index))
+            } else {
+                std::borrow::Cow::Borrowed(&[][..])
+            };
+            Image { width: p.width, data, dirty: p.dirty }
+        }).collect();
         Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default(), fade_stops: [0.0; 2], degraded: false }
     }
 

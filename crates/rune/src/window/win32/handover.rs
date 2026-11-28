@@ -433,7 +433,11 @@ impl Host {
                     crate::marks::mark("window.shown");
                 }
                 w.presented = None;
-                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
+                {
+                    let rt = self.app.rt_mut();
+                    rt.set_renderer_kind(crate::RendererKind::Gpu);
+                    rt.images.set_backing(crate::pixels::Backing::Gpu);
+                }
                 crate::marks::mark("gpu.window.handed");
             }
         }
@@ -485,7 +489,7 @@ impl Host {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (target_format != l.config.format).then_some(target_format), ..Default::default() });
         {
             let rt = self.app.rt_mut();
-            renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+            renderer.upload_images_retaining_cpu(&gpu.device, &gpu.queue, &mut rt.images);
             renderer.build_surfaces(&gpu.device, &rt.surfaces, rt.live_notifier());
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, (l.config.width, l.config.height));
             renderer.set_frame_wake(rt.live_wake());
@@ -605,7 +609,11 @@ impl Host {
                 w.presented = None;
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
-                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
+                {
+                    let rt = self.app.rt_mut();
+                    rt.set_renderer_kind(crate::RendererKind::Gpu);
+                    rt.images.set_backing(crate::pixels::Backing::Gpu);
+                }
                 self.sync_window_backdrop(false);
                 self.on_resize_sync_event(super::resize_sync::Event::Handover);
             }
