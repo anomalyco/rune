@@ -140,9 +140,16 @@ pub(crate) struct MetalDevice {
     limits: wgpu::Limits,
 }
 
-pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>) -> (MetalDevice, MetalQueue) {
-    let queue = device.newCommandQueue().expect("a Metal command queue");
-    let event = device.newSharedEvent().expect("a Metal shared event");
+pub(super) fn new(
+    device: Obj<dyn MTLDevice>,
+    desc: &wgpu::DeviceDescriptor<'_>,
+) -> Result<(MetalDevice, MetalQueue), wgpu::RequestDeviceError> {
+    let queue = device.newCommandQueue().ok_or_else(|| {
+        wgpu::RequestDeviceError::from_message("Metal device could not create a command queue".into())
+    })?;
+    let event = device.newSharedEvent().ok_or_else(|| {
+        wgpu::RequestDeviceError::from_message("Metal device does not support MTLSharedEvent".into())
+    })?;
     #[cfg(debug_assertions)]
     {
         queue.setLabel(Some(&NSString::from_str("rune metal queue")));
@@ -166,7 +173,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
-    (device, MetalQueue(shared))
+    Ok((device, MetalQueue(shared)))
 }
 
 /// wgpu-hal's choice of MSL version for this macOS or iOS. Their numbers meet at 26; before, iOS
