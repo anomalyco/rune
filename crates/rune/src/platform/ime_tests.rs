@@ -342,3 +342,178 @@ fn rtl_primary_lang_ids_match_windows_rtl_layouts() {
         assert!(!is_rtl_primary_lang_id(hkl & 0x03ff), "expected LTR for HKL {hkl:#06x}");
     }
 }
+
+/// Structural seam guard for #2746: vendored winit's Wayland `SeatHandler` must not destroy
+/// `zwp_text_input_v3` in `remove_capability` (e.g. when a virtual touch device disappears),
+/// and must detach it from windows and destroy it only in `remove_seat`.
+#[test]
+fn vendored_winit_wayland_seat_keeps_text_input_across_capability_removal() {
+    let seat_rs = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/winit/src/platform_impl/linux/wayland/seat/mod.rs"
+    ))
+    .expect("read vendor/winit Wayland seat/mod.rs");
+
+    let handler = seat_rs
+        .split("impl SeatHandler for WinitState")
+        .nth(1)
+        .and_then(|s| s.split("impl WinitState").next())
+        .expect("SeatHandler impl in vendor/winit Wayland seat/mod.rs");
+
+    let new_cap = handler
+        .split("fn new_capability")
+        .nth(1)
+        .and_then(|s| s.split("fn remove_capability").next())
+        .expect("new_capability body");
+    let remove_cap = handler
+        .split("fn remove_capability")
+        .nth(1)
+        .and_then(|s| s.split("fn new_seat").next())
+        .expect("remove_capability body");
+    let remove_seat = handler
+        .split("fn remove_seat")
+        .nth(1)
+        .expect("remove_seat body");
+
+    assert!(
+        new_cap.contains("seat_state.text_input.is_none()"),
+        "new_capability must still lazily bind zwp_text_input_v3 when absent",
+    );
+    assert!(
+        !remove_cap.contains("text_input"),
+        "remove_capability must never take or destroy zwp_text_input_v3: {remove_cap}",
+    );
+    assert!(
+        remove_seat.contains("self.seats.remove(&seat.id()).and_then(|seat| seat.text_input)"),
+        "remove_seat must extract the removed seat's zwp_text_input_v3",
+    );
+    assert!(
+        remove_seat.contains("self.on_text_input_destroy(&text_input)")
+            && remove_seat.contains("text_input.destroy()"),
+        "remove_seat must detach text_input from windows and destroy it",
+    );
+    assert!(
+        seat_rs.contains("fn on_text_input_destroy")
+            && seat_rs.contains(".text_input_left(text_input)"),
+        "WinitState::on_text_input_destroy must remove the destroyed proxy from windows",
+    );
+
+    let patch = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/winit.patch"
+    ))
+    .expect("read vendor/winit.patch");
+    assert!(
+        patch.contains("diff --git a/src/platform_impl/linux/wayland/seat/mod.rs")
+            && patch.contains("-        if let Some(text_input) = seat_state.text_input.take() {")
+            && patch.contains("+        if let Some(text_input) = self.seats.remove(&seat.id()).and_then(|seat| seat.text_input) {"),
+        "vendor/winit.patch must record the Wayland seat text_input lifecycle fix",
+    );
+}
+
+#[test]
+fn wayland_seat_text_input_survives_capability_hotplug_until_seat_removed() {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Cap { Pointer, Keyboard, Touch }
+
+    struct Seat {
+        text_input: Option<u32>,
+        pointer: bool,
+        keyboard: bool,
+        touch: bool,
+    }
+
+    struct Harness {
+        next_ti: u32,
+        seat: Option<Seat>,
+        window_text_inputs: Vec<u32>,
+        destroyed: Vec<u32>,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            Self {
+                next_ti: 23,
+                seat: Some(Seat { text_input: None, pointer: false, keyboard: false, touch: false }),
+                window_text_inputs: Vec::new(),
+                destroyed: Vec::new(),
+            }
+        }
+
+        fn new_capability(&mut self, cap: Cap) {
+            let Some(seat) = self.seat.as_mut() else { return };
+            match cap {
+                Cap::Pointer => seat.pointer = true,
+                Cap::Keyboard => seat.keyboard = true,
+                Cap::Touch => seat.touch = true,
+            }
+            if seat.text_input.is_none() {
+                let id = self.next_ti;
+                self.next_ti += 1;
+                seat.text_input = Some(id);
+            }
+        }
+
+        fn remove_capability(&mut self, cap: Cap) {
+            let Some(seat) = self.seat.as_mut() else { return };
+            // zwp_text_input_v3 is bound to wl_seat, not to any individual capability.
+            match cap {
+                Cap::Pointer => seat.pointer = false,
+                Cap::Keyboard => seat.keyboard = false,
+                Cap::Touch => seat.touch = false,
+            }
+        }
+
+        fn enter_window(&mut self) {
+            if let Some(id) = self.seat.as_ref().and_then(|s| s.text_input)
+                && !self.window_text_inputs.contains(&id)
+            {
+                self.window_text_inputs.push(id);
+            }
+        }
+
+        fn remove_seat(&mut self) {
+            if let Some(id) = self.seat.take().and_then(|s| s.text_input) {
+                self.window_text_inputs.retain(|&t| t != id);
+                self.destroyed.push(id);
+            }
+        }
+
+        fn live_window_text_inputs(&self) -> Vec<u32> {
+            self.window_text_inputs
+                .iter()
+                .copied()
+                .filter(|id| !self.destroyed.contains(id))
+                .collect()
+        }
+    }
+
+    let mut h = Harness::new();
+    // Startup: wl_seat capabilities = 3 (Pointer + Keyboard) creates one zwp_text_input_v3 (#23).
+    h.new_capability(Cap::Pointer);
+    h.new_capability(Cap::Keyboard);
+    h.enter_window();
+    assert_eq!(h.seat.as_ref().unwrap().text_input, Some(23));
+    assert_eq!(h.live_window_text_inputs(), vec![23]);
+
+    // Virtual touch added (capabilities 3 -> 7) and removed (7 -> 3): #23 stays live and entered.
+    h.new_capability(Cap::Touch);
+    h.remove_capability(Cap::Touch);
+    assert_eq!(h.seat.as_ref().unwrap().text_input, Some(23));
+    assert!(h.destroyed.is_empty());
+    assert_eq!(h.live_window_text_inputs(), vec![23]);
+
+    // All capabilities transiently removed (3 -> 0) and Keyboard restored: still #23, no leak.
+    h.remove_capability(Cap::Pointer);
+    h.remove_capability(Cap::Keyboard);
+    assert_eq!(h.seat.as_ref().unwrap().text_input, Some(23));
+    assert!(h.destroyed.is_empty());
+    h.new_capability(Cap::Keyboard);
+    assert_eq!(h.seat.as_ref().unwrap().text_input, Some(23));
+    assert_eq!(h.next_ti, 24);
+
+    // Seat removal detaches #23 from the window and destroys it once.
+    h.remove_seat();
+    assert!(h.window_text_inputs.is_empty());
+    assert_eq!(h.destroyed, vec![23]);
+}
