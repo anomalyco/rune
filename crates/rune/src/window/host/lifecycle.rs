@@ -225,6 +225,25 @@ impl Host {
         crate::window::window_theme_for_platform(self.color_scheme, app, platform)
     }
 
+    pub(in crate::window) fn effective_menu_scheme(&self) -> crate::ColorScheme {
+        match self.args.theme.as_deref() {
+            Some("light") => crate::ColorScheme::Light,
+            Some("dark") => crate::ColorScheme::Dark,
+            _ => self.color_scheme.effective_for_window(crate::window::app_color_scheme()),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) fn sync_windows_menu_theme(&self) {
+        let rt = self.app.rt();
+        let mode = crate::platform::win32::dark_mode::menu_theme_for_window(
+            self.effective_menu_scheme(),
+            rt.backdrop_dark(),
+            rt.env.system_dark,
+        );
+        crate::platform::win32::dark_mode::set_menu_theme(mode);
+    }
+
     pub(in crate::window) fn apply_window_color_scheme(&mut self) {
         let target = self.window_theme();
         let Some(w) = &self.win else { return };
@@ -232,8 +251,11 @@ impl Host {
         let changed = crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {
             #[cfg(target_os = "windows")]
             if theme.is_none() {
-                crate::platform::win32::dark_mode::refresh_color_policy();
+                crate::platform::win32::dark_mode::with_system_theme_query(|| w.window.set_theme(theme));
+            } else {
+                w.window.set_theme(theme);
             }
+            #[cfg(not(target_os = "windows"))]
             w.window.set_theme(theme);
             #[cfg(target_os = "macos")]
             if let Some(panel) = &w.native.panel {
@@ -242,6 +264,10 @@ impl Host {
             #[cfg(not(target_os = "macos"))]
             let _ = color_scheme;
         });
+        #[cfg(target_os = "windows")]
+        if self.win.as_ref().is_some_and(|w| w.window.has_focus()) {
+            self.sync_windows_menu_theme();
+        }
         if changed {
             self.sync_window_backdrop(true);
         }

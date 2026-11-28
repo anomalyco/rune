@@ -327,8 +327,9 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn sync_after_step(&mut self, info: &mut StepInfo) {
         let now = self.now.unwrap_or_else(crate::time::now);
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
+        let menu_scheme = self.host.effective_menu_scheme();
         let Some(l) = self.host.win.as_mut() else { return };
-        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard, menu_scheme);
         self.host.sync_wayland_drop();
     }
 

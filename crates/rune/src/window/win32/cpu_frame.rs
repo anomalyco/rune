@@ -398,9 +398,10 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn sync_after_step(&mut self, info: &mut StepInfo) {
         let now = self.now.unwrap_or_else(crate::time::now);
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
+        let menu_scheme = self.host.effective_menu_scheme();
         let Some(l) = self.host.win.as_mut() else { return };
         let rt = self.host.app.rt_mut();
-        sync_platform_core(l, rt, &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        sync_platform_core(l, rt, &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard, menu_scheme);
         let mut quiet_now = false;
         if let SurfaceMode::Cpu { job: GpuJob::Building { latest, animating: moving, ready, .. }, .. } = &mut l.native.mode {
             *latest.lock().unwrap_or_else(|e| e.into_inner()) = warm_instances(&rt.instances);

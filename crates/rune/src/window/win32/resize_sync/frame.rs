@@ -323,6 +323,11 @@ impl Host {
         l.native.resize_sync = sync;
         l.damage = damage;
         l.presented = None;
+        let menu_scheme = match self.args.theme.as_deref() {
+            Some("light") => crate::ColorScheme::Light,
+            Some("dark") => crate::ColorScheme::Dark,
+            _ => self.color_scheme.effective_for_window(crate::window::app_color_scheme()),
+        };
         sync_platform_core(
             l,
             self.app.rt_mut(),
@@ -330,6 +335,7 @@ impl Host {
             &mut self.ime,
             self.ime_waits,
             &self.clipboard,
+            menu_scheme,
         );
 
         let outcome = result?;

@@ -28,9 +28,6 @@ pub(super) fn stop(menu: Tracking) {
     menu.cancelTrackingWithoutAnimation();
 }
 
-/// An `NSMenu` takes its appearance from the view it pops up in.
-pub(super) fn scheme(_dark: bool) {}
-
 /// winit's run-loop observers keep running while a menu tracks, so nothing asks for turns.
 pub(super) fn start(_turn: Waker) {}
 
@@ -59,7 +56,7 @@ define_class!(
 /// `session` and `wake` brings the host to read it. False when the window has no AppKit view.
 /// A session cancelled before then never opens; one whose window was hidden by then answers
 /// `None`.
-pub(super) fn show(window: &Arc<Window>, show: Show, session: Rc<Session>, wake: Option<Waker>) -> bool {
+pub(super) fn show(window: &Arc<Window>, show: Show, _dark: bool, session: Rc<Session>, wake: Option<Waker>) -> bool {
     let Some(mtm) = MainThreadMarker::new() else { return false };
     let Some(view) = crate::platform::macos::content_view(window) else { return false };
     let mut ids = Vec::new();

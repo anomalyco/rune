@@ -103,7 +103,15 @@ impl Host {
         let focus = focus && !self.no_activate();
         #[cfg(target_os = "windows")]
         let attrs = self.windows_window.apply_attributes(crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false)));
-        let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        #[cfg(target_os = "windows")]
+        let created = if effective_theme.is_none() {
+            crate::platform::win32::dark_mode::with_system_theme_query(|| event_loop.create_window(attrs))
+        } else {
+            event_loop.create_window(attrs)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let created = event_loop.create_window(attrs);
+        let window = Arc::new(created.map_err(|e| e.to_string())?);
         crate::window::displays::track(&window);
         self.applied_theme = effective_theme;
         crate::marks::mark("window.native");

@@ -6,7 +6,7 @@
 
 #![allow(unsafe_code)]
 
-use std::sync::{OnceLock, atomic::{AtomicU8, Ordering}};
+use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
@@ -26,28 +26,260 @@ const FIRST_COLOR_POLICY_BUILD: u32 = 17763;
 const FIRST_BUILD: u32 = 18362;
 const THEME_SUBCLASS: usize = 0x5255_4e54;
 
+/// Desired process-wide Win32 native menu theme (`PreferredAppMode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuTheme {
+    /// Follow Windows' app mode (`ALLOW_DARK`).
+    System,
+    /// Force light native menus (`FORCE_LIGHT`).
+    Light,
+    /// Force dark native menus (`FORCE_DARK`).
+    Dark,
+}
+
+impl MenuTheme {
+    const fn preferred_app_mode(self) -> i32 {
+        match self {
+            MenuTheme::System => ALLOW_DARK,
+            MenuTheme::Light => FORCE_LIGHT,
+            MenuTheme::Dark => FORCE_DARK,
+        }
+    }
+}
+
+/// Chooses the Win32 menu theme for a focused window.
+///
+/// Stays in `MenuTheme::System` (`ALLOW_DARK`) whenever the window follows the OS scheme and
+/// its rendered surface matches `system_dark` (or is transparent), so uxtheme's
+/// `ShouldAppsUseDarkMode` continues to reflect live OS Settings switches and tray/unfocused
+/// menus follow the OS too. Forces `Dark` or `Light` only when the window diverges from the OS.
+pub(crate) const fn menu_theme_for_window(
+    effective_scheme: crate::ColorScheme,
+    backdrop_dark: Option<bool>,
+    system_dark: bool,
+) -> MenuTheme {
+    match effective_scheme {
+        crate::ColorScheme::System => match backdrop_dark {
+            Some(dark) if dark != system_dark => {
+                if dark { MenuTheme::Dark } else { MenuTheme::Light }
+            }
+            _ => MenuTheme::System,
+        },
+        crate::ColorScheme::Dark => match backdrop_dark {
+            Some(false) => MenuTheme::Light,
+            _ => MenuTheme::Dark,
+        },
+        crate::ColorScheme::Light => match backdrop_dark {
+            Some(true) => MenuTheme::Dark,
+            _ => MenuTheme::Light,
+        },
+    }
+}
+
 struct Uxtheme {
     set_preferred_app_mode: unsafe extern "system" fn(i32) -> i32,
     flush_menu_themes: unsafe extern "system" fn(),
 }
 
-/// The mode last asked for, so a frame that doesn't change it costs nothing.
-static APPLIED: AtomicU8 = AtomicU8::new(0);
+/// Seam over uxtheme's ordinal calls so the mode state machine is unit-testable off-screen.
+trait UxthemeSeam {
+    fn set_preferred_app_mode(&mut self, mode: i32);
+    fn refresh_color_policy(&mut self);
+    fn flush_menu_themes(&mut self);
+}
 
-/// Menus follow the system's dark or light app mode until a window says what it draws.
-pub(crate) fn follow_system() { apply(ALLOW_DARK); }
+struct RealUxthemeSeam;
 
-/// Menus from now on are dark or light, whatever the system's app mode.
-pub(crate) fn menus(dark: bool) { apply(if dark { FORCE_DARK } else { FORCE_LIGHT }); }
-
-fn apply(mode: i32) {
-    let Some(uxtheme) = uxtheme() else { return };
-    if APPLIED.swap(mode as u8, Ordering::Relaxed) == mode as u8 { return; }
-    // SAFETY: both are uxtheme's own exports on a build that has them with these signatures.
-    unsafe {
-        (uxtheme.set_preferred_app_mode)(mode);
-        (uxtheme.flush_menu_themes)();
+impl UxthemeSeam for RealUxthemeSeam {
+    fn set_preferred_app_mode(&mut self, mode: i32) {
+        if let Some(ux) = uxtheme() {
+            // SAFETY: uxtheme ordinal 135 takes `PreferredAppMode` on build 18362 and later.
+            unsafe { (ux.set_preferred_app_mode)(mode); }
+        }
     }
+
+    fn refresh_color_policy(&mut self) {
+        if let Some(refresh) = refresh_fn() {
+            // SAFETY: uxtheme ordinal 104 takes no arguments on build 17763 and later.
+            unsafe { refresh(); }
+        }
+    }
+
+    fn flush_menu_themes(&mut self) {
+        if let Some(ux) = uxtheme() {
+            // SAFETY: uxtheme ordinal 136 takes no arguments on build 18362 and later.
+            unsafe { (ux.flush_menu_themes)(); }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModeActions {
+    set_mode: Option<i32>,
+    refresh: bool,
+    flush: bool,
+}
+
+impl ModeActions {
+    const NONE: Self = Self { set_mode: None, refresh: false, flush: false };
+
+    fn run(self, seam: &mut impl UxthemeSeam) {
+        if let Some(mode) = self.set_mode {
+            seam.set_preferred_app_mode(mode);
+        }
+        if self.refresh {
+            seam.refresh_color_policy();
+        }
+        if self.flush {
+            seam.flush_menu_themes();
+        }
+    }
+}
+
+/// Three-layer state for process-wide `PreferredAppMode`:
+/// 1. Active OS theme queries (`query_depth > 0`) always hold `ALLOW_DARK` so winit's
+///    `ShouldAppsUseDarkMode` (ordinal 132) sees the real OS app mode rather than a forced menu
+///    override.
+/// 2. An active native pop-up menu (`popup`) forces dark/light only while `TrackPopupMenuEx`
+///    tracks.
+/// 3. The focused window's `base` theme (`MenuTheme::System` by default).
+struct ModeController {
+    base: MenuTheme,
+    popup: Option<bool>,
+    query_depth: u32,
+    applied: i32,
+    pending_flush: bool,
+}
+
+impl ModeController {
+    const fn new() -> Self {
+        Self {
+            base: MenuTheme::System,
+            popup: None,
+            query_depth: 0,
+            applied: 0,
+            pending_flush: false,
+        }
+    }
+
+    const fn resolve(&self) -> i32 {
+        if self.query_depth > 0 {
+            ALLOW_DARK
+        } else if let Some(dark) = self.popup {
+            if dark { FORCE_DARK } else { FORCE_LIGHT }
+        } else {
+            self.base.preferred_app_mode()
+        }
+    }
+
+    fn sync_after_change(&mut self) -> ModeActions {
+        let target = self.resolve();
+        if self.applied != target {
+            self.applied = target;
+            ModeActions { set_mode: Some(target), refresh: false, flush: true }
+        } else {
+            if self.query_depth > 0 {
+                self.pending_flush = true;
+            }
+            ModeActions::NONE
+        }
+    }
+
+    fn set_base(&mut self, theme: MenuTheme) -> ModeActions {
+        self.base = theme;
+        self.sync_after_change()
+    }
+
+    fn push_popup(&mut self, dark: bool) -> (Option<bool>, ModeActions) {
+        let prev = self.popup.replace(dark);
+        (prev, self.sync_after_change())
+    }
+
+    fn pop_popup(&mut self, prev: Option<bool>) -> ModeActions {
+        self.popup = prev;
+        self.sync_after_change()
+    }
+
+    fn enter_query(&mut self, flush_if_system: bool) -> ModeActions {
+        self.query_depth = self.query_depth.saturating_add(1);
+        let target = self.resolve();
+        let set_mode = (self.applied != target).then(|| {
+            self.applied = target;
+            target
+        });
+        let flush = flush_if_system && self.base == MenuTheme::System && self.popup.is_none();
+        ModeActions { set_mode, refresh: true, flush }
+    }
+
+    fn exit_query(&mut self) -> ModeActions {
+        self.query_depth = self.query_depth.saturating_sub(1);
+        let target = self.resolve();
+        let set_mode = (self.applied != target).then(|| {
+            self.applied = target;
+            target
+        });
+        let flush = self.query_depth == 0 && std::mem::take(&mut self.pending_flush);
+        ModeActions { set_mode, refresh: false, flush }
+    }
+}
+
+static MODE: Mutex<ModeController> = Mutex::new(ModeController::new());
+
+/// Menus follow the system's dark or light app mode until a window diverges from it.
+pub(crate) fn follow_system() { set_menu_theme(MenuTheme::System); }
+
+/// Updates the process-wide menu theme for the focused window.
+pub(crate) fn set_menu_theme(theme: MenuTheme) {
+    let actions = MODE.lock().unwrap_or_else(|e| e.into_inner()).set_base(theme);
+    actions.run(&mut RealUxthemeSeam);
+}
+
+/// RAII guard forcing dark or light native menus only while a Win32 modal pop-up menu tracks.
+pub(crate) struct PopupMenuThemeGuard {
+    prev: Option<bool>,
+}
+
+impl Drop for PopupMenuThemeGuard {
+    fn drop(&mut self) {
+        let actions = MODE.lock().unwrap_or_else(|e| e.into_inner()).pop_popup(self.prev);
+        actions.run(&mut RealUxthemeSeam);
+    }
+}
+
+/// Temporarily forces dark or light native menus for the lifetime of the returned guard.
+pub(crate) fn scoped_popup_menus(dark: bool) -> PopupMenuThemeGuard {
+    let (prev, actions) = MODE.lock().unwrap_or_else(|e| e.into_inner()).push_popup(dark);
+    actions.run(&mut RealUxthemeSeam);
+    PopupMenuThemeGuard { prev }
+}
+
+struct QueryScopeGuard;
+
+impl Drop for QueryScopeGuard {
+    fn drop(&mut self) {
+        let actions = MODE.lock().unwrap_or_else(|e| e.into_inner()).exit_query();
+        actions.run(&mut RealUxthemeSeam);
+    }
+}
+
+fn with_system_theme_query_inner<R>(flush_if_system: bool, f: impl FnOnce() -> R) -> R {
+    let actions = MODE.lock().unwrap_or_else(|e| e.into_inner()).enter_query(flush_if_system);
+    actions.run(&mut RealUxthemeSeam);
+    let _guard = QueryScopeGuard;
+    f()
+}
+
+/// Runs `f` with uxtheme temporarily in `ALLOW_DARK` and its immersive color policy refreshed so
+/// winit's `ShouldAppsUseDarkMode` (ordinal 132) reads the real OS setting instead of a forced
+/// menu override, then restores any previously forced menu mode.
+pub(crate) fn with_system_theme_query<R>(f: impl FnOnce() -> R) -> R {
+    with_system_theme_query_inner(false, f)
+}
+
+/// Like [`with_system_theme_query`], and flushes cached menu themes when menus follow the system
+/// (for `WM_SETTINGCHANGE` broadcasts from Windows Settings).
+pub(crate) fn with_system_theme_query_and_flush<R>(f: impl FnOnce() -> R) -> R {
+    with_system_theme_query_inner(true, f)
 }
 
 fn uxtheme() -> Option<&'static Uxtheme> {
@@ -152,23 +384,6 @@ pub(crate) fn should_refresh_color_policy(lparam: LPARAM) -> bool {
     should_refresh_color_policy_area(Some(area))
 }
 
-/// Refreshes uxtheme's process-cached immersive color policy (`RefreshImmersiveColorPolicyState`,
-/// ordinal 104, Windows 10 1809+) so winit's `ShouldAppsUseDarkMode` (ordinal 132) sees live OS
-/// Light/Dark switches instead of its launch-time cache. Also flushes menu themes when menus are
-/// following the system (`ALLOW_DARK`).
-pub(crate) fn refresh_color_policy() {
-    if let Some(refresh) = refresh_fn() {
-        // SAFETY: uxtheme ordinal 104 takes no arguments on build 17763 and later.
-        unsafe { refresh(); }
-    }
-    if APPLIED.load(Ordering::Relaxed) == ALLOW_DARK as u8
-        && let Some(uxtheme) = uxtheme()
-    {
-        // SAFETY: uxtheme ordinal 136 takes no arguments on build 18362 and later.
-        unsafe { (uxtheme.flush_menu_themes)(); }
-    }
-}
-
 fn refresh_fn() -> Option<unsafe extern "system" fn()> {
     static REFRESH: OnceLock<Option<unsafe extern "system" fn()>> = OnceLock::new();
     *REFRESH.get_or_init(|| {
@@ -201,9 +416,8 @@ unsafe extern "system" fn theme_subclass(
     _: usize,
     _: usize,
 ) -> LRESULT {
-    if message == WM_SETTINGCHANGE && should_refresh_color_policy(lparam) {
-        refresh_color_policy();
-    } else if message == WM_NCDESTROY {
+    let refresh_theme = message == WM_SETTINGCHANGE && should_refresh_color_policy(lparam);
+    if message == WM_NCDESTROY {
         // SAFETY: removes this subclass from the window being destroyed.
         unsafe { RemoveWindowSubclass(hwnd, Some(theme_subclass), THEME_SUBCLASS); }
     }
@@ -212,7 +426,11 @@ unsafe extern "system" fn theme_subclass(
         crate::system_material::windows::notify_wm_setting_change();
     }
     // SAFETY: forwards the message to the next procedure in this window's subclass chain (winit).
-    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    if refresh_theme {
+        with_system_theme_query_and_flush(|| unsafe { DefSubclassProc(hwnd, message, wparam, lparam) })
+    } else {
+        unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    }
 }
 
 fn wide(s: &str) -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() }

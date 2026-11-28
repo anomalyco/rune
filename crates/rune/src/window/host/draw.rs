@@ -515,8 +515,9 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn on_unchanged(&mut self, _info: &StepInfo) {
+        let menu_scheme = self.host.effective_menu_scheme();
         let Some(l) = self.host.win.as_mut() else { return };
-        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard, menu_scheme);
         crate::haptics::flush_live(self.host.app.rt_mut(), !self.state.hidden);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.host.sync_wayland_drop();
@@ -751,12 +752,13 @@ impl FrameHost for WindowFrame<'_> {
         #[cfg(target_os = "macos")]
         self.state.shown.take();
         let now = self.state.now.unwrap_or_else(crate::time::now);
+        let menu_scheme = self.host.effective_menu_scheme();
         let Some(l) = self.host.win.as_mut() else { return };
         l.backoff_step(BackoffEvent::Presented);
         if self.state.hidden { l.hidden_pace.rendered(now); }
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
         self.state.profile.mark_built();
-        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard, menu_scheme);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.host.sync_wayland_drop();
     }

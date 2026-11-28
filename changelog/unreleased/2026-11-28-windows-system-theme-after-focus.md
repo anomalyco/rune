@@ -1,0 +1,1 @@
+- Fixed Windows windows and overlays stopping from following live OS light/dark app-mode changes after receiving focus or opening a native pop-up menu: kept system-matching windows in uxtheme's `AllowDark` mode, scoped pop-up menu theme overrides to tracking, and temporarily restored `AllowDark` around `WM_SETTINGCHANGE`, window creation, and `set_theme(None)` queries.

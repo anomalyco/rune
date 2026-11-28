@@ -4,8 +4,9 @@ use crate::window::surface::Win;
 
 /// What a built frame hands the window besides its pixels: secure input, the IME, the cursor,
 /// help tags and the clipboard. With `ime_waits` the IME is left as it is (`Host::ime_waits`).
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, secure_input: &mut crate::input::secure_input::SecureInput,
-    ime: &mut host_events::ImeSync, ime_waits: bool, clipboard: &crate::clipboard::Client) {
+    ime: &mut host_events::ImeSync, ime_waits: bool, clipboard: &crate::clipboard::Client, menu_scheme: crate::ColorScheme) {
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
     l.apply_cursor_core(rt, focused);
@@ -21,7 +22,14 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     // The process has one menu theme: the active window's, so its window menu matches it.
     #[cfg(target_os = "windows")]
     {
-        if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
+        if focused {
+            let mode = crate::platform::win32::dark_mode::menu_theme_for_window(
+                menu_scheme,
+                rt.backdrop_dark(),
+                rt.env.system_dark,
+            );
+            crate::platform::win32::dark_mode::set_menu_theme(mode);
+        }
         crate::platform::win32::drop_target::set_feedback(&l.window, rt.drop_feedback());
         let fullscreen = l.window.fullscreen().is_some();
         if l.native.drag_sync.needs_update(rt.commit_generation(), rt.zoom(), fullscreen, rt.animating) {
