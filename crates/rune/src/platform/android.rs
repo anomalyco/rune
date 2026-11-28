@@ -4,9 +4,11 @@
 //! every test target so surface loss, repeated background trips, rotation, insets, keyboard
 //! overlap, dark mode, back navigation, and API-level haptic dispatch are verified off-device too.
 
-pub(crate) mod haptics;
 #[cfg(target_os = "android")]
 pub(crate) mod bridge;
+#[cfg(target_os = "android")]
+mod document;
+pub(crate) mod haptics;
 #[cfg(target_os = "android")]
 mod host;
 #[cfg(target_os = "android")]
@@ -14,6 +16,9 @@ mod logcat;
 pub(crate) mod machine;
 #[cfg(test)]
 mod machine_tests;
+pub(crate) mod picker;
+#[cfg(test)]
+mod picker_tests;
 pub(crate) mod touch;
 #[cfg(test)]
 mod touch_tests;

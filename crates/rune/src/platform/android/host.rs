@@ -26,20 +26,23 @@ use crate::tooling::AppSpec;
 use crate::{Haptic, TouchPhase};
 
 use super::bridge::{self, jni_clear_exception, jni_delete_global_ref};
+use super::document::{self, Document};
 use super::{haptics, logcat};
 use super::machine::{self, Effect, Event, State};
-
+use super::picker::{self, PickAnswer, PickRequest, PickStep};
 static APP_ENTRY: OnceLock<fn()> = OnceLock::new();
 
 /// JNI global reference to the live `dev.rune.RuneView` instance and its cached Java callbacks.
-struct ViewBridge {
-    obj: jobject,
+pub(super) struct ViewBridge {
+    pub(super) obj: jobject,
     schedule_frame: jmethodID,
     cancel_frame: jmethodID,
     schedule_wake_after: jmethodID,
     post_wake: jmethodID,
     perform_haptic: jmethodID,
     api_level: i32,
+    pub(super) start_document_pick: jmethodID,
+    pub(super) open_document_fd: jmethodID,
 }
 
 // SAFETY: JNI global references and `jmethodID`s are process-wide and safe to pass across threads
@@ -69,6 +72,9 @@ trait AndroidRunner {
     fn drain_shared(&mut self);
     fn frame(&mut self) -> Option<EmbedFrame>;
     fn take_haptics(&mut self) -> Vec<Haptic>;
+    fn take_file_pick(&mut self) -> PickStep;
+    fn deliver_file_pick(&mut self, id: u64, answer: PickAnswer, bridge: &Arc<Mutex<Option<ViewBridge>>>);
+    fn cancel_file_dialogs(&mut self);
 }
 
 struct PendingAndroidApp<S: 'static> {
@@ -116,6 +122,7 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
                 Some(pending.runtime_config),
             )
         }?;
+        host.runtime_mut().core_mut().host.file_dialogs = true;
         if let Some(compositor) = pending.compositor {
             host = host.with_boxed_compositor(compositor);
         }
@@ -144,15 +151,11 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
     fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time_secs: f64) {
         if let Some(h) = &mut self.host { h.runtime_mut().touch(id, phase, x, y, time_secs); }
     }
-
     fn dispatch_back(&mut self) -> bool {
-        let Some(host) = self.host.as_mut() else {
-            return false;
-        };
+        let Some(host) = self.host.as_mut() else { return false; };
         let _ = self.shared.drain_window(host.runtime_mut(), |_| {});
         host.dispatch_back_escape()
     }
-
     fn drain_shared(&mut self) {
         if let Some(host) = &mut self.host {
             let _ = self.clipboard.receive_core(host.runtime_mut().core_mut());
@@ -160,7 +163,6 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
             self.clipboard.flush_core(host.runtime_mut().core_mut());
         }
     }
-
     fn frame(&mut self) -> Option<EmbedFrame> {
         let host = self.host.as_mut()?;
         let _ = self.clipboard.receive_core(host.runtime_mut().core_mut());
@@ -169,9 +171,22 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
         self.clipboard.flush_core(host.runtime_mut().core_mut());
         Some(outcome)
     }
-
     fn take_haptics(&mut self) -> Vec<Haptic> {
         self.host.as_mut().map(LayerHost::take_haptics).unwrap_or_default()
+    }
+    fn take_file_pick(&mut self) -> PickStep {
+        self.host.as_mut().map_or(PickStep::None, |h| picker::take_pick(h.runtime_mut().core_mut()))
+    }
+    fn deliver_file_pick(&mut self, id: u64, answer: PickAnswer, bridge: &Arc<Mutex<Option<ViewBridge>>>) {
+        if let Some(host) = &mut self.host {
+            let bridge = Arc::clone(bridge);
+            picker::deliver_pick(host.runtime_mut().core_mut(), id, answer, move |uri| {
+                Document::new(Arc::clone(&bridge), uri)
+            });
+        }
+    }
+    fn cancel_file_dialogs(&mut self) {
+        if let Some(host) = &mut self.host { host.runtime_mut().cancel_file_dialogs(); }
     }
 }
 
@@ -209,8 +224,10 @@ impl Host {
         }
     }
 
+
     fn shutdown(&mut self, env: *mut JNIEnv) {
         if let Some(runner) = &mut self.runner {
+            runner.cancel_file_dialogs();
             runner.detach();
         }
         self.runner = None;
@@ -339,6 +356,21 @@ unsafe fn register_rune_view_natives(env: *mut JNIEnv) -> bool {
         jni_method(c"nativeLongPressTimeout", c"(I)V", native_long_press_timeout as *const () as *mut c_void),
         jni_method(c"nativeWake", c"()V", native_wake as *const () as *mut c_void),
         jni_method(c"nativeDestroy", c"()V", native_destroy as *const () as *mut c_void),
+        jni_method(
+            c"nativeFilePickResult",
+            c"(J[Ljava/lang/String;[Ljava/lang/String;)V",
+            document::native_file_pick_result as *const () as *mut c_void,
+        ),
+        jni_method(
+            c"nativeFilePickCancelled",
+            c"(J)V",
+            document::native_file_pick_cancelled as *const () as *mut c_void,
+        ),
+        jni_method(
+            c"nativeFilePickError",
+            c"(JLjava/lang/String;)V",
+            document::native_file_pick_error as *const () as *mut c_void,
+        ),
     ];
 
     // SAFETY: `env` is a valid JNIEnv*; all C strings and function pointers match `RuneView.kt`.
@@ -365,6 +397,7 @@ unsafe fn register_rune_view_natives(env: *mut JNIEnv) -> bool {
     }
 }
 
+
 unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridge> {
     // SAFETY: `env` and `view` are valid JNI handles passed to `nativeInit`.
     unsafe {
@@ -381,11 +414,25 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         let schedule_wake_after = get_method(env, cls, c"scheduleWakeAfter".as_ptr(), c"(J)V".as_ptr());
         let post_wake = get_method(env, cls, c"postWake".as_ptr(), c"()V".as_ptr());
         let perform_haptic = get_method(env, cls, c"performHaptic".as_ptr(), c"(I)V".as_ptr());
+        let start_document_pick = get_method(
+            env,
+            cls,
+            c"startDocumentPick".as_ptr(),
+            c"(JZZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V".as_ptr(),
+        );
+        let open_document_fd = get_method(
+            env,
+            cls,
+            c"openDocumentFd".as_ptr(),
+            c"(Ljava/lang/String;Ljava/lang/String;)I".as_ptr(),
+        );
         if schedule_frame.is_null()
             || cancel_frame.is_null()
             || schedule_wake_after.is_null()
             || post_wake.is_null()
             || perform_haptic.is_null()
+            || start_document_pick.is_null()
+            || open_document_fd.is_null()
         {
             if let Some(del) = (**env).DeleteLocalRef {
                 del(env, cls);
@@ -434,6 +481,8 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             post_wake,
             perform_haptic,
             api_level,
+            start_document_pick,
+            open_document_fd,
         })
     }
 }
@@ -462,9 +511,7 @@ unsafe fn call_void_long(env: *mut JNIEnv, obj: jobject, method: jmethodID, valu
 fn post_wake_from_any_thread(view_bridge: &Mutex<Option<ViewBridge>>) {
     let _ = bridge::with_jni_env(|env| {
         let guard = view_bridge.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(view) = guard.as_ref() else {
-            return;
-        };
+        let Some(view) = guard.as_ref() else { return; };
         // SAFETY: `env` is attached to this thread and `view` is held alive under `guard`.
         unsafe { call_void_0(env, view.obj, view.post_wake) };
     });
@@ -486,9 +533,21 @@ fn apply_view_schedule(env: *mut JNIEnv, bridge: &Mutex<Option<ViewBridge>>, eff
     }
 }
 
+pub(super) fn deliver_file_pick_from_jni(env: *mut JNIEnv, id: u64, answer: PickAnswer) {
+    HOST.with(|slot| {
+        if let Some(host) = slot.borrow_mut().as_mut()
+            && let Some(runner) = &mut host.runner
+        {
+            runner.deliver_file_pick(id, answer, &host.bridge);
+        }
+    });
+    let _ = dispatch(env, Event::Wake, ptr::null_mut());
+}
+
 fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativeWindow) -> bool {
     let mut consumed_back = false;
     let mut pending_window = pending_window;
+    let mut pending_picks: Vec<(Arc<Mutex<Option<ViewBridge>>>, PickRequest)> = Vec::new();
     HOST.with(|slot| {
         let mut borrow = slot.borrow_mut();
         let Some(host) = borrow.as_mut() else {
@@ -522,35 +581,29 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                     }
                 }
                 Effect::ResizeSurface { viewport, scale } => {
-                    if let Some(runner) = &mut host.runner {
-                        runner.resize(viewport, scale);
-                    }
+                    if let Some(r) = &mut host.runner { r.resize(viewport, scale); }
                 }
                 Effect::DetachSurface => {
-                    if let Some(runner) = &mut host.runner {
-                        let _ = runner.take_haptics();
-                        runner.detach();
+                    if let Some(r) = &mut host.runner {
+                        let _ = r.take_haptics();
+                        r.detach();
                     }
                     host.release_native_window();
                 }
                 Effect::SetSafeArea(insets) => {
-                    if let Some(runner) = &mut host.runner {
-                        runner.set_safe_area(insets);
-                    }
+                    if let Some(r) = &mut host.runner { r.set_safe_area(insets); }
                 }
                 Effect::SetKeyboardInset(points) => {
-                    if let Some(runner) = &mut host.runner {
-                        runner.set_keyboard_inset(points);
-                    }
+                    if let Some(r) = &mut host.runner { r.set_keyboard_inset(points); }
                 }
                 Effect::SetDark(dark) => {
-                    if let Some(runner) = &mut host.runner { runner.set_dark(dark); }
+                    if let Some(r) = &mut host.runner { r.set_dark(dark); }
                 }
                 Effect::SetTouchLongPress(secs) => {
-                    if let Some(runner) = &mut host.runner { runner.set_touch_long_press(secs); }
+                    if let Some(r) = &mut host.runner { r.set_touch_long_press(secs); }
                 }
                 Effect::Touch { id, phase, x, y, time_secs } => {
-                    if let Some(runner) = &mut host.runner { runner.touch(id, phase, x, y, time_secs); }
+                    if let Some(r) = &mut host.runner { r.touch(id, phase, x, y, time_secs); }
                 }
                 Effect::DispatchBack => {
                     let consumed = host.runner.as_mut().is_some_and(|r| r.dispatch_back());
@@ -564,19 +617,26 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                     apply_view_schedule(env, &host.bridge, effect);
                 }
                 Effect::DrawFrame => {
-                    if let Some((outcome, pending)) =
-                        host.runner.as_mut().and_then(|r| Some((r.frame()?, r.take_haptics())))
-                    {
-                        if !pending.is_empty()
+                    if let Some((outcome, pending_haptics, pick_step)) = host.runner.as_mut().and_then(|r| {
+                        let outcome = r.frame()?;
+                        Some((outcome, r.take_haptics(), r.take_file_pick()))
+                    }) {
+                        if !pending_haptics.is_empty()
                             && let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
                         {
                             // SAFETY: `env` is the UI thread's `JNIEnv*` and `v` is locked.
-                            unsafe { haptics::flush_jni(env, v.obj, v.perform_haptic, v.api_level, outcome.drew, pending) };
+                            unsafe { haptics::flush_jni(env, v.obj, v.perform_haptic, v.api_level, outcome.drew, pending_haptics) };
+                        }
+                        let mut needs_redraw = outcome.animating;
+                        match pick_step {
+                            PickStep::None => {}
+                            PickStep::Refused => needs_redraw = true,
+                            PickStep::Start(req) => pending_picks.push((Arc::clone(&host.bridge), req)),
                         }
                         let follow = machine::step(
                             &mut host.state,
                             Event::FrameDone {
-                                animating: outcome.animating,
+                                animating: needs_redraw,
                                 wake_after_secs: outcome.wake_after_secs,
                             },
                         );
@@ -599,6 +659,12 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
     if !pending_window.is_null() {
         // SAFETY: `pending_window` was not adopted by `Host`, so release our reference.
         unsafe { ndk_sys::ANativeWindow_release(pending_window) };
+    }
+    for (bridge, req) in pending_picks {
+        let id = req.id;
+        if let Err(err) = document::start_pick(env, &bridge, &req) {
+            deliver_file_pick_from_jni(env, id, PickAnswer::Error(err));
+        }
     }
     consumed_back
 }

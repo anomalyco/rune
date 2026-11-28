@@ -13,9 +13,13 @@ Rune runs natively on Android without `winit`'s event loop at runtime: a small K
   - Supports `LayerHost::detach_surface` and `LayerHost::attach_native_window` so the `Runtime<S>`, app state, and GPU device survive across Home/return surface destruction.
   - Uses `wgpu::Limits::downlevel_defaults()` automatically on adapters with 16 KiB uniform buffer limits (Android GLES) while supporting Vulkan and GLES.
 - **Kotlin host (`crates/rune/android/src/main/java/dev/rune/`)**:
-  - `RuneActivity`: full-screen edge-to-edge `Activity` using `SOFT_INPUT_ADJUST_NOTHING`, reading the shared library name from manifest meta-data `dev.rune.lib_name`.
-  - `RuneView`: `SurfaceView` + `Choreographer.FrameCallback` forwarding surface lifecycle, display density, system bars/display cutout, soft keyboard inset, dark mode, Back presses, and `Intent.ACTION_VIEW` link launches.
+  - `RuneActivity`: full-screen edge-to-edge `Activity` using `SOFT_INPUT_ADJUST_NOTHING`, reading the shared library name from manifest meta-data `dev.rune.lib_name`, and launching Storage Access Framework document pickers for `RuneView`.
+  - `RuneView`: `SurfaceView` + `Choreographer.FrameCallback` forwarding surface lifecycle, display density, system bars/display cutout, soft keyboard inset, dark mode, Back presses, `Intent.ACTION_VIEW` link launches, and Storage Access Framework document picks (`onDocumentPick`, `onDocumentPickActivityResult`, `deliverDocumentPick`, `openDocumentFd`).
   - `RuneClipboard` / `RuneClipboardProvider`: wraps Android's `ClipboardManager` for plain text, HTML, sensitive secrets (`ClipDescription.EXTRA_IS_SENSITIVE`), change revisions (`OnPrimaryClipChangedListener`), image paste via `ContentResolver`, and image copy via an unexported `ContentProvider`.
+- **Document picker (`Tx::pick_file`, `Tx::pick_files`, `Tx::pick_save_file`)**:
+  - Handle-based dialogs launch `ACTION_OPEN_DOCUMENT` (single or multi-select with filter extensions mapped to MIME types) or `ACTION_CREATE_DOCUMENT` (with the suggested file name).
+  - Picked `content://` URIs are wrapped in `FileHandle::from_provider` backed by `ContentResolver.openFileDescriptor(..).detachFd()`, streaming directly through `std::fs::File` without copying into app cache.
+  - Path-based dialogs (`open_file`, `open_files`, `save_file`, `open_folder`) are refused with a `FileDialogError`. Embedding hosts with their own `Activity` set `RuneView.onDocumentPick` and hand the result back via `onDocumentPickActivityResult` or `deliverDocumentPick`.
 - **Insets and Back**:
   - Hardware system bars and display cutouts map to `Cx::safe_area()` (`[top, right, bottom, left]` in dp).
   - Soft keyboard overlap maps separately to `Cx::keyboard_inset()` (dp from bottom) so `El::on_edge_drag` bands stay bound to hardware chrome while views can pad by `cx.safe_area()[2].max(cx.keyboard_inset())` and focused text fields auto-scroll above the keyboard.
