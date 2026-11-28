@@ -198,7 +198,7 @@ impl Measurement<'_> {
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
         let bound = if self.content_sizing.fits_height() { f32::INFINITY } else { self.viewport.1 };
-        self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows);
+        self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows, false);
         root
     }
 
@@ -300,7 +300,7 @@ impl Measurement<'_> {
     /// `bound` is the most `el` can be tall (see [`crate::el::virtual_list::height_bound`]); `scroll`
     /// is the scroll viewport `el` is the content of.
     #[allow(clippy::too_many_arguments)]
-    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, inert: bool, selection_off: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool) {
+    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, inert: bool, selection_off: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool, in_region: bool) {
         if !el.flags.has(ElFlags::HAS_VIRTUAL) {
             return;
         }
@@ -308,10 +308,19 @@ impl Measurement<'_> {
         // A memo reused whole whose lists mount what the last commit did stays a placeholder,
         // so flattening reuses its nodes, rows included. Flattening skips memo reuse for a direct
         // child of a horizontal scroll viewport (`parent_sx`), so those must expand here.
-        if keep_windows && !parent_sx && self.keeps_windows(el, &path, scroll, tx, force_all, bound) {
+        if keep_windows && !parent_sx && self.keeps_windows(el, &path, scroll, tx, force_all, bound, group) {
             return;
         }
+        let memo_region = el.memo.as_ref().map(|b| b.region);
+        let had_memo = memo_region.is_some();
+        let root_matches = el.memo_built().is_some_and(|b| memo_reuse::same_root_el(el, b, false));
         el.expand_memo();
+        // Caller-applied modifiers on a memo root (e.g. `.opacity(..)` or `.py(..)` on a region
+        // whose root is a `virtual_rows` list) must not be recorded as the memo's canonical slice.
+        if had_memo && !root_matches && let Some(c) = el.cold.get_mut_if_some() {
+            c.expanded_memo = None;
+        }
+        let in_region = memo_region.unwrap_or(in_region);
         let inert = inert || el.flags.has(ElFlags::INERT);
         let selection_off = crate::el::selection_off(el.cold.selection_enabled, selection_off);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
@@ -319,6 +328,13 @@ impl Measurement<'_> {
         let is_virtual_items = el.cold.virtual_items.is_some();
         if let Some(estimate) = el.cold.virtual_estimate {
             assert!(!is_virtual_items, "element at {path:?} cannot combine `.virtual_items(..)` with `.virtualize(..)` / `.virtual_rows(..)`");
+            let can_flat_list = !parent_sx && in_region && (!had_memo || root_matches);
+            if keep_windows && can_flat_list && self.keeps_list_window(el, &path, estimate, scroll, tx, force_all, group) {
+                return;
+            }
+            let record_list_id = (can_flat_list && crate::memo::el_flatten_reusable(el))
+                .then(|| el.cold.virtual_rows.as_ref().map(|r| r.id))
+                .flatten();
             let w = match self.windowed.remove(&path) {
                 Some(w) => w,
                 None => self.window(el, &path, estimate, scroll, tx, force_all),
@@ -330,6 +346,9 @@ impl Measurement<'_> {
             el.style.set_pad_top(w.pad_top);
             el.style.set_pad_bottom(w.pad_bottom);
             self.populate_virtual_children(el, &path, source, inert, selection_off, group);
+            if let Some(id) = record_list_id {
+                el.cold_mut().virtual_flat = crate::el::VirtualFlat::Record(id);
+            }
         } else if let Some(source) = el.cold.virtual_items.clone() {
             assert!(el.children.is_empty(), "`.virtual_items(..)` at {path:?} builds its own items; it takes no children");
             el.children = self.virtual_items.populate_rebuild(
@@ -353,7 +372,7 @@ impl Measurement<'_> {
         for (i, child) in el.children.iter_mut().enumerate() {
             if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }
             let bound = bounds.of(child);
-            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, selection_off, child_group, child_sx, keep_windows);
+            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, selection_off, child_group, child_sx, keep_windows, in_region);
         }
     }
 
@@ -490,13 +509,13 @@ impl Measurement<'_> {
     /// and no focused or selected row built off screen. Its lists are windowed either way, once:
     /// when it can't stay, `window_tree` applies these windows to the expanded subtree.
     #[allow(clippy::too_many_arguments)]
-    fn keeps_windows(&mut self, el: &El, path: &str, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32) -> bool {
+    fn keeps_windows(&mut self, el: &El, path: &str, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, group: Option<&str>) -> bool {
         let Some(built) = el.memo_built() else { return false };
         if !built.region || !built.reusable || force_all || !matches!(self.pass, Pass::First) || !crate::memo::flattened(built.id) || !memo_reuse::same_root_el(el, built, false) {
             return false;
         }
         let mut lists = Vec::new();
-        if !windowed_lists(el, path, scroll, bound, &mut lists) {
+        if !windowed_lists(el, path, scroll, bound, group, &mut lists) {
             return false;
         }
         let prefix = format!("{path}/");
@@ -507,14 +526,20 @@ impl Measurement<'_> {
         }
         let mut keeps = true;
         let mut quiet = Vec::with_capacity(lists.len());
-        for (list_path, list_el, list_scroll) in lists {
+        for (list_path, list_el, list_scroll, list_group) in lists {
             let Some(estimate) = list_el.cold.virtual_estimate else { return false };
             let held = self.virtuals.get(&list_path).is_some_and(|v| {
-                v.mounted.is_some() && v.focused_row.is_none() && v.selection.pins.rows().is_empty() && v.row_reads.hold()
+                v.mounted.is_some()
+                    && v.selection.scope.group_path.as_deref() == list_group.as_deref()
+                    && v.row_reads.hold()
             });
             let w = self.window(list_el, &list_path, estimate, list_scroll.as_ref().map(OwnedScrollCtx::as_ref), tx, force_all);
             let v = self.virtuals.get_mut(&list_path).expect("windowed");
-            let same = held && w.same && v.mounted == Some(crate::el::virtual_list::Mounted::of(v));
+            let same = held
+                && w.same
+                && v.mounted == Some(crate::el::virtual_list::Mounted::of(v))
+                && !has_offscreen_focus(v, &list_path, self.focused)
+                && !has_offscreen_pin(v);
             if same {
                 let commits = self.commits;
                 quiet.push((list_path.clone(), v.range.clone().map(|i| v.mounts_quietly(i, commits)).collect::<Vec<_>>()));
@@ -532,6 +557,51 @@ impl Measurement<'_> {
             crate::memo::keep_rows(v.keys[v.range.clone()].iter().map(|key| crate::memo::virtual_row_tag(list_path, key)));
         }
         self.kept_lists.extend(quiet);
+        true
+    }
+
+    /// Keeps a single `virtual_rows` list's mounted rows inside a kept `region` whose enclosing
+    /// placeholder could not stay whole (e.g. a sibling `text_input` or another list that moved).
+    #[allow(clippy::too_many_arguments)]
+    fn keeps_list_window(&mut self, el: &mut El, path: &str, estimate: f32, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, group: Option<&str>) -> bool {
+        let Some(rows_id) = el.cold.virtual_rows.as_ref().map(|r| r.id) else { return false };
+        if force_all
+            || !matches!(self.pass, Pass::First)
+            || !crate::memo::flattened_list(rows_id.get())
+            || !crate::memo::el_flatten_reusable(el)
+        {
+            return false;
+        }
+        let prefix = format!("{path}/");
+        if self.virtuals.keys().any(|k| k.starts_with(&prefix)) {
+            return false;
+        }
+        let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path) } else { group };
+        let held = self.virtuals.get(path).is_some_and(|v| {
+            v.mounted.is_some()
+                && v.selection.scope.group_path.as_deref() == list_group
+                && v.row_reads.hold()
+        });
+        let w = match self.windowed.remove(path) {
+            Some(w) => w,
+            None => self.window(el, path, estimate, scroll, tx, force_all),
+        };
+        let v = self.virtuals.get_mut(path).expect("windowed");
+        let same = held
+            && w.same
+            && v.mounted == Some(crate::el::virtual_list::Mounted::of(v))
+            && !has_offscreen_focus(v, path, self.focused)
+            && !has_offscreen_pin(v);
+        if !same {
+            self.windowed.insert(path.to_owned(), w);
+            return false;
+        }
+        let commits = self.commits;
+        let quiet: Vec<bool> = v.range.clone().map(|i| v.mounts_quietly(i, commits)).collect();
+        v.row_reads.replay();
+        crate::memo::keep_rows(v.keys[v.range.clone()].iter().map(|key| crate::memo::virtual_row_tag(path, key)));
+        self.kept_lists.push((path.to_owned(), quiet));
+        el.cold_mut().virtual_flat = crate::el::VirtualFlat::Reuse(rows_id);
         true
     }
     fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> ViewMeasured {
@@ -648,6 +718,7 @@ impl Measurement<'_> {
                     old_cursor: 0,
                     committing: self.committing,
                     committed: &self.memo.flattened,
+                    committed_lists: &self.memo.flattened_lists,
                     pending,
                     reused,
                     taken_paths,
@@ -883,7 +954,23 @@ impl OwnedScrollCtx {
     }
 }
 
-fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bound: f32, out: &mut Vec<(String, &'e El, Option<OwnedScrollCtx>)>) -> bool {
+fn has_offscreen_focus(v: &crate::el::virtual_list::VirtualList, list_path: &str, focused: Option<&str>) -> bool {
+    let under = |f: &str| f.strip_prefix(list_path).is_some_and(|rest| rest.starts_with('/'));
+    v.focused_row
+        .as_deref()
+        .filter(|_| focused.is_some_and(under))
+        .and_then(|key| v.index_of(key))
+        .is_some_and(|i| !v.range.contains(&i))
+}
+
+fn has_offscreen_pin(v: &crate::el::virtual_list::VirtualList) -> bool {
+    !v.selection.pins.texts().is_empty()
+        || v.selection.pins.rows().iter().filter_map(|key| v.index_of(key)).any(|i| !v.range.contains(&i))
+}
+
+type WindowedList<'e> = (String, &'e El, Option<OwnedScrollCtx>, Option<String>);
+
+fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bound: f32, group: Option<&str>, out: &mut Vec<WindowedList<'e>>) -> bool {
     if !el.flags.has(ElFlags::HAS_VIRTUAL) {
         return true;
     }
@@ -897,11 +984,12 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bou
         return false;
     }
     let is_virtual = el.cold.virtual_estimate.is_some();
+    let child_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path) } else { group };
     if is_virtual {
         if el.cold.virtual_rows.is_none() {
             return false;
         }
-        out.push((path.to_owned(), el, scroll.map(OwnedScrollCtx::from_ctx)));
+        out.push((path.to_owned(), el, scroll.map(OwnedScrollCtx::from_ctx), child_group.map(str::to_owned)));
     }
     let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, kids);
     let scroll = match el.cold.scroll {
@@ -909,7 +997,7 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bou
         None => scroll.map(|sc| ScrollCtx { nested: sc.nested || is_virtual, ..sc }),
     };
     kids.iter().enumerate().filter(|(_, c)| c.flags.has(ElFlags::HAS_VIRTUAL)).all(|(i, child)| {
-        windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), out)
+        windowed_lists(child, &node_path(path, child.key.as_deref(), i), scroll, bounds.of(child), child_group, out)
     })
 }
 
@@ -922,3 +1010,7 @@ pub(in crate::runtime) struct Window {
     pad_top: f32,
     pad_bottom: f32,
 }
+
+#[cfg(test)]
+#[path = "region_virtual_rows_tests.rs"]
+mod region_virtual_rows_tests;

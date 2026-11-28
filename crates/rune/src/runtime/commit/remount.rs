@@ -33,6 +33,7 @@ struct ListPlan {
     selection_off: bool,
     quiet: Vec<bool>,
     built_rows: Vec<(usize, El)>,
+    keep_flat: Option<(u64, memo_reuse::InheritedFlatten, Option<Rc<(Anim, Anim)>>)>,
 }
 
 enum Plan {
@@ -266,6 +267,7 @@ impl EmitCtx<'_> {
             old_cursor: 0,
             committing: self.committing,
             committed: self.empty_committed,
+            committed_lists: self.empty_committed,
             pending: std::mem::take(&mut self.pending),
             reused: std::mem::take(&mut self.reused),
             taken_paths: Vec::new(),
@@ -324,6 +326,7 @@ impl EmitCtx<'_> {
 
                         let mut row_slots = Vec::with_capacity(plan.range.len());
                         let mut any_row_dirty = false;
+                        let no_built_rows = plan.built_rows.is_empty();
                         let mut built_iter = plan.built_rows.into_iter().peekable();
                         let keys = &self.virtuals[&plan.path].keys;
                         for (pos, row_i) in plan.range.clone().enumerate() {
@@ -345,6 +348,19 @@ impl EmitCtx<'_> {
                             }
                         }
                         any_dirty |= self.sync_container(new_list_idx, list_id, list_taffy, list_style, row_slots, any_row_dirty);
+                        if no_built_rows
+                            && !any_row_dirty
+                            && let Some((flat_id, inherited, hover_within)) = plan.keep_flat
+                        {
+                            self.pending.push(memo_reuse::PendingFlat {
+                                built_id: flat_id,
+                                is_list: true,
+                                start: new_list_idx,
+                                len: self.nodes.len() - new_list_idx,
+                                inherited,
+                                hover_within,
+                            });
+                        }
                         old_idx = plan.list_subtree_end;
                     }
                     Plan::Items(plan) => {
@@ -495,6 +511,13 @@ impl Measurement<'_> {
                 .filter(|i| !v.range.contains(i))
                 .collect();
 
+            let unchanged = v.mounted == Some(crate::el::virtual_list::Mounted::of(v))
+                && focused.is_none()
+                && pinned_rows.is_empty();
+            let keep_flat = unchanged
+                .then(|| self.memo.flattened_lists.get(&rows.id.get()))
+                .flatten()
+                .map(|f| (rows.id.get(), f.inherited, f.hover_within.clone()));
             plans.push(Plan::List(ListPlan {
                 path: path.clone(),
                 old_list_idx,
@@ -511,6 +534,7 @@ impl Measurement<'_> {
                 selection_off,
                 quiet: Vec::new(),
                 built_rows: Vec::new(),
+                keep_flat,
             }));
         }
         if !self.virtual_items.is_empty() {

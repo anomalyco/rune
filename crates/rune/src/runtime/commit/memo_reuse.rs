@@ -32,6 +32,7 @@ pub(crate) struct FlattenedMemo {
 
 pub(crate) struct PendingFlat {
     pub(in crate::runtime) built_id: u64,
+    pub(in crate::runtime) is_list: bool,
     pub(in crate::runtime) start: usize,
     pub(in crate::runtime) len: usize,
     pub(in crate::runtime) inherited: InheritedFlatten,
@@ -131,6 +132,7 @@ pub(in crate::runtime) struct MemoFlattenCtx<'a> {
     pub(in crate::runtime) old_cursor: usize,
     pub(in crate::runtime) committing: bool,
     pub(in crate::runtime) committed: &'a HashMap<u64, FlattenedMemo>,
+    pub(in crate::runtime) committed_lists: &'a HashMap<u64, FlattenedMemo>,
     pub(in crate::runtime) pending: Vec<PendingFlat>,
     pub(in crate::runtime) reused: Vec<ReusedSpan>,
     pub(in crate::runtime) taken_paths: Vec<(u32, u32)>,
@@ -231,12 +233,13 @@ pub(in crate::runtime) fn same_visual(a: &Visual, b: &Visual) -> bool {
         && (crate::cold::Cold::ptr_eq(&a.cold, cold) || same_visual_cold(&a.cold, cold))
 }
 
-fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
+fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold, expanded_virtual_root: bool) -> bool {
     let crate::el::ElCold {
         focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
         animated_changes, option_as_alt, window_resize, transition, transition_motion, enter_in_instant, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
         virtual_rows_version, virtual_rows_append_only, virtual_overscan, virtual_items, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
         expanded_memo: _,
+        virtual_flat: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
         #[cfg(debug_assertions)]
@@ -275,7 +278,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.scroll_edges == *scroll_edges
         && opt_box_eq(&a.growth, growth)
         && a.virtual_estimate == *virtual_estimate
-        && opt_rc_eq(&a.virtual_rows, virtual_rows)
+        && (opt_rc_eq(&a.virtual_rows, virtual_rows) || (expanded_virtual_root && a.virtual_rows.is_none() && virtual_rows.is_some()))
         && a.virtual_rows_version == *virtual_rows_version
         && a.virtual_rows_append_only == *virtual_rows_append_only
         && a.virtual_overscan == *virtual_overscan
@@ -493,11 +496,29 @@ pub(in crate::runtime) fn same_root_el(el: &El, built: &crate::memo::Built, expa
     a.set(ignored, false);
     b.set(ignored, false);
 
+    let expanded_virtual_root = expanded && cold.virtual_rows.is_some();
+    let same_style = if expanded_virtual_root {
+        let bp = style.padding();
+        let pt = |p: taffy::style::LengthPercentage| match p.expand() {
+            taffy::style::ExpandedLengthPercentage::Length(x) => Some(x),
+            _ => None,
+        };
+        if let (Some(top), Some(bottom)) = (pt(bp.top), pt(bp.bottom)) {
+            let mut s = el.style.clone();
+            s.set_pad_top(top);
+            s.set_pad_bottom(bottom);
+            s == *style
+        } else {
+            el.style == *style
+        }
+    } else {
+        el.style == *style
+    };
     (expanded || (el.children.is_empty() && el.memo_children().is_some_and(|mc| Rc::ptr_eq(mc, &built.children))))
         && el.role == *role
         && a == b
         && el.vis_flags == *vis_flags
-        && el.style == *style
+        && same_style
         && same_visual(&el.vis, vis)
         && match (&el.text, text) {
             (None, None) => true,
@@ -508,7 +529,7 @@ pub(in crate::runtime) fn same_root_el(el: &El, built: &crate::memo::Built, expa
         && el.scale == *scale
         && cold.live.is_empty()
         && cold.input.is_none()
-        && (crate::cold::Cold::ptr_eq(&el.cold, cold) || same_el_cold(&el.cold, cold))
+        && (crate::cold::Cold::ptr_eq(&el.cold, cold) || same_el_cold(&el.cold, cold, expanded_virtual_root))
 }
 
 pub(in crate::runtime) fn inherited_for(
@@ -557,24 +578,37 @@ fn path_matches(old_path: &str, parent_path: &str, key: Option<&str>, index: usi
     }
 }
 
+/// Whether freshly flattened virtual-row nodes can be reused across commits without breaking
+/// secure-text, modal, anchor, aspect-fit, or non-virtual growth invariants.
+pub(in crate::runtime) fn nodes_reusable(slice: &[Node]) -> bool {
+    slice.iter().all(|n| {
+        !n.is_secure()
+            && !n.virtual_items
+            && n.handlers.get().is_none_or(|h| h.modal.is_none())
+            && n.cold.get().is_none_or(|c| {
+                c.aspect_fit.is_none()
+                    && c.above.is_none()
+                    && (c.growth.is_none() || n.virtual_list)
+            })
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(in crate::runtime) fn try_reuse_memo(
+fn reuse_flattened_slice(
+    flat: &FlattenedMemo,
+    built_id: u64,
+    is_list: bool,
+    allow_rebase: bool,
     el: &El,
     parent: Option<usize>,
     parent_path: &str,
     index: usize,
-    motion: Spring,
-    in_row: RowLayout,
-    scale: f32,
+    inherited: InheritedFlatten,
+    hover_within: Option<Rc<(Anim, Anim)>>,
     taffy: &mut LayoutEngine,
     nodes: &mut Vec<Node>,
     ctx: &mut MemoFlattenCtx<'_>,
 ) -> Option<SlotId> {
-    let built = el.memo_built()?;
-    if !built.reusable {
-        return None;
-    }
-    let flat = ctx.committed.get(&built.id)?;
     let end = flat.start.checked_add(flat.len)?;
     if flat.len == 0 || end > ctx.old_present_len || end > ctx.old_nodes.len() {
         return None;
@@ -583,12 +617,11 @@ pub(in crate::runtime) fn try_reuse_memo(
     if old_slice[0].is_moved_stub() || old_slice[0].path.is_empty() || old_slice[0].id != flat.root_id || old_slice[flat.len - 1].id != flat.last_id {
         return None;
     }
-    let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale, ctx.foreground);
     // By value: a view that sets `hover_motion_within` above the memo builds a new pair each time.
     if flat.inherited != inherited || flat.hover_within.as_deref() != hover_within.as_deref() {
         return None;
     }
-    if el.key != old_slice[0].key || !same_root_el(el, built, false) {
+    if el.key != old_slice[0].key {
         return None;
     }
     if !old_slice.iter().all(|old| !old.is_moved_stub() && !old.path.is_empty() && taffy.can_reuse(old.id.0, old.taffy)) {
@@ -602,11 +635,14 @@ pub(in crate::runtime) fn try_reuse_memo(
 
     let old_root_path = old_slice[0].path.as_str();
     let same_path = path_matches(old_root_path, parent_path, el.key.as_deref(), index);
-    if !same_path && built.has_path_bind {
+    if !same_path && !allow_rebase {
         return None;
     }
     let new_start = nodes.len();
-    let moved = same_path && ctx.committing;
+    // Keep `old_nodes` intact (don't leave moved stubs) if a reused virtual row holds an input,
+    // so `sync_requested_focus` and `apply` still see the prior commit's `old.input`.
+    let has_input = old_slice.iter().any(|old| old.input.is_some());
+    let moved = same_path && ctx.committing && !has_input;
     let root_taffy = old_slice[0].taffy;
 
     if moved {
@@ -713,7 +749,8 @@ pub(in crate::runtime) fn try_reuse_memo(
         ctx.old_cursor = end;
     }
     ctx.pending.push(PendingFlat {
-        built_id: built.id,
+        built_id,
+        is_list,
         start: new_start,
         len: flat.len,
         inherited,
@@ -727,6 +764,47 @@ pub(in crate::runtime) fn try_reuse_memo(
         moved,
     });
     Some(root_taffy)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runtime) fn try_reuse_memo(
+    el: &El,
+    parent: Option<usize>,
+    parent_path: &str,
+    index: usize,
+    motion: Spring,
+    in_row: RowLayout,
+    scale: f32,
+    taffy: &mut LayoutEngine,
+    nodes: &mut Vec<Node>,
+    ctx: &mut MemoFlattenCtx<'_>,
+) -> Option<SlotId> {
+    let built = el.memo_built()?;
+    if !built.reusable || !same_root_el(el, built, false) {
+        return None;
+    }
+    let flat = ctx.committed.get(&built.id)?;
+    let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale, ctx.foreground);
+    reuse_flattened_slice(flat, built.id, false, !built.has_path_bind, el, parent, parent_path, index, inherited, hover_within, taffy, nodes, ctx)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runtime) fn try_reuse_virtual_list(
+    el: &El,
+    list_id: u64,
+    parent: Option<usize>,
+    parent_path: &str,
+    index: usize,
+    motion: Spring,
+    in_row: RowLayout,
+    scale: f32,
+    taffy: &mut LayoutEngine,
+    nodes: &mut Vec<Node>,
+    ctx: &mut MemoFlattenCtx<'_>,
+) -> Option<SlotId> {
+    let flat = ctx.committed_lists.get(&list_id)?;
+    let (inherited, hover_within) = inherited_for(parent, nodes, motion, in_row, scale, ctx.foreground);
+    reuse_flattened_slice(flat, list_id, true, false, el, parent, parent_path, index, inherited, hover_within, taffy, nodes, ctx)
 }
 
 /// Puts `moved` slices and individually taken paths back into `old_nodes` with their pre-pass
@@ -778,9 +856,12 @@ impl crate::memo::MemoCache {
             self.reused_scratch = reused;
             return;
         };
-        // Nested memos inside an outer memo that was reused whole stay live at their rebased index.
-        if !self.flattened.is_empty() {
-            self.flattened.retain(|_, flat| {
+        // Nested memos and virtual lists inside an outer reused slice stay live at their rebased index.
+        let rebase = |map: &mut crate::runtime::HashMap<u64, FlattenedMemo>| {
+            if map.is_empty() {
+                return;
+            }
+            map.retain(|_, flat| {
                 let Some(span) = reused.iter().find(|s| {
                     flat.start >= s.old_start && flat.start + flat.len <= s.old_start + s.len
                 }) else {
@@ -793,12 +874,15 @@ impl crate::memo::MemoCache {
                 }
                 true
             });
-        }
+        };
+        rebase(&mut self.flattened);
+        rebase(&mut self.flattened_lists);
         for p in pending.drain(..) {
             if p.len == 0 || p.start + p.len > present_len {
                 continue;
             }
-            self.flattened.insert(
+            let target = if p.is_list { &mut self.flattened_lists } else { &mut self.flattened };
+            target.insert(
                 p.built_id,
                 FlattenedMemo {
                     start: p.start,
@@ -820,19 +904,23 @@ impl crate::memo::MemoCache {
         self.present_len = remap
             .get(..self.present_len.min(remap.len()))
             .map_or(0, |s| s.iter().filter(|r| r.is_some()).count());
-        self.flattened.retain(|_, flat| {
-            let Some(new_start) = remap.get(flat.start).copied().flatten() else {
-                return false;
-            };
-            let Some(new_last) = remap.get(flat.start + flat.len - 1).copied().flatten() else {
-                return false;
-            };
-            if new_last + 1 != new_start + flat.len {
-                return false;
-            }
-            flat.start = new_start;
-            true
-        });
+        let rebase = |map: &mut crate::runtime::HashMap<u64, FlattenedMemo>| {
+            map.retain(|_, flat| {
+                let Some(new_start) = remap.get(flat.start).copied().flatten() else {
+                    return false;
+                };
+                let Some(new_last) = remap.get(flat.start + flat.len - 1).copied().flatten() else {
+                    return false;
+                };
+                if new_last + 1 != new_start + flat.len {
+                    return false;
+                }
+                flat.start = new_start;
+                true
+            });
+        };
+        rebase(&mut self.flattened);
+        rebase(&mut self.flattened_lists);
     }
 }
 

@@ -97,6 +97,8 @@ pub(crate) struct ElCold {
     pub(crate) virtual_items: Option<Rc<dyn crate::el::items::VirtualItems>>,
     /// The memo this element was expanded from (`El::expand_memo`) to mount virtual rows.
     pub(crate) expanded_memo: Option<Rc<crate::memo::Built>>,
+    /// Per-list flattened-slice reuse tag for a `virtual_rows` list inside a kept `region`.
+    pub(crate) virtual_flat: VirtualFlat,
     pub(crate) glide: Option<crate::growth::FoldGlide>,
     pub(crate) input: Option<Box<InputSpec>>,
     pub(crate) time_scale: f32,
@@ -167,6 +169,7 @@ impl Empty for ElCold {
         virtual_overscan: None,
         virtual_items: None,
         expanded_memo: None,
+        virtual_flat: VirtualFlat::None,
         glide: None,
         input: None,
         time_scale: 1.0,
@@ -189,6 +192,17 @@ impl Empty for ElCold {
         #[cfg(debug_assertions)]
         virtual_items_source: None,
     };
+}
+
+/// Per-list flattened-slice reuse state for a `virtual_rows` list inside a kept `region`.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum VirtualFlat {
+    #[default]
+    None,
+    /// Record this list's flattened node slice under its `RowSource::id`.
+    Record(std::num::NonZeroU64),
+    /// Reuse the flattened node slice recorded under its `RowSource::id`.
+    Reuse(std::num::NonZeroU64),
 }
 
 /// An element's booleans and small enums, one bit (or two) each.
