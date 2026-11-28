@@ -148,6 +148,22 @@ pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface, color_space: crate:
     });
 }
 
+/// Sets `CAMetalLayer.drawableSize` to `(width, height)` (clamped to at least 1×1) on either
+/// Rune's native Metal backend or wgpu's Metal backend.
+///
+/// Shrinking to `1×1` while a window or overlay is hidden lets Core Animation release unused
+/// full-size drawables from the layer's pool while keeping any currently displayed surface intact;
+/// restoring `(config.width, config.height)` before the next show or draw keeps acquired
+/// drawables aligned with the surface configuration.
+pub(crate) fn set_drawable_size(surface: &wgpu::Surface<'_>, width: u32, height: u32) {
+    use objc2_core_foundation::CGSize;
+    let size = CGSize::new(f64::from(width.max(1)), f64::from(height.max(1)));
+    // SAFETY: `layer` is a live `CAMetalLayer` on the main thread under wgpu's lock.
+    crate::gpu::with_layer(surface, |layer| unsafe {
+        let _: () = msg_send![layer, setDrawableSize: size];
+    });
+}
+
 /// Matches the Metal layer's `contentsScale` to `scale` right away, closing the gap between a
 /// display-crossing `Moved`/`ScaleFactorChanged` surface resize and AppKit updating the backing
 /// view's root layer.

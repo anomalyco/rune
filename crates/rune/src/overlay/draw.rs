@@ -47,6 +47,8 @@ impl OverlayFrame<'_> {
         let ok = crate::window::reblend_core(&live.surface, gpu, &mut live.config, renderer, &mut live.alpha, self.app.rt_mut());
         #[cfg(target_os = "windows")]
         live.slot.reconfigured(ok);
+        #[cfg(target_os = "macos")]
+        if ok { let _ = live.hidden_drawable.step(crate::window::HiddenDrawableEvent::Configured); }
         ok
     }
 }
@@ -265,6 +267,8 @@ impl FrameHost for OverlayFrame<'_> {
         if self.core.poll_terminal_gpu_loss(self.app) {
             return Acquire::Missed(crate::window::Missed::Unconfigured);
         }
+        #[cfg(target_os = "macos")]
+        self.core.restore_hidden_drawable();
         let (Some(live), Some(gpu)) = (self.core.surface.live(), self.core.gpu.as_ref()) else {
             return Acquire::Missed(crate::window::Missed::Unconfigured);
         };

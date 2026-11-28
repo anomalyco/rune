@@ -131,18 +131,19 @@ impl Retire<Weak<Gpu>> {
     }
 
     /// Runs a due non-blocking poll, clearing once the tracked submission has retired or backing
-    /// off while it is still in flight.
-    pub(super) fn poll_due(&mut self, now: Instant) {
+    /// off while it is still in flight. Returns `true` when a pending retirement finishes.
+    pub(super) fn poll_due(&mut self, now: Instant) -> bool {
+        let was_pending = matches!(self, Retire::Pending { .. });
         for effect in self.step(RetireEvent::Due { now }) {
             match effect {
                 RetireEffect::PollNow => {
                     let (gpu, done) = match self {
                         Retire::Pending { gpu, done, .. } => (gpu.upgrade(), done.clone()),
-                        Retire::Idle => return,
+                        Retire::Idle => return was_pending,
                     };
                     let Some(gpu) = gpu.filter(|gpu| !gpu.is_lost()) else {
                         self.clear();
-                        return;
+                        return true;
                     };
                     match rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll) {
                         Ok(wgpu::PollStatus::Poll) if !done.load(Ordering::Acquire) => {
@@ -153,6 +154,7 @@ impl Retire<Weak<Gpu>> {
                 }
             }
         }
+        was_pending && matches!(self, Retire::Idle)
     }
 
     /// Upgrades and clears any pending shared device for one last non-blocking poll on drop.

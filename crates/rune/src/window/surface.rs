@@ -11,6 +11,8 @@ pub(in crate::window) mod configure;
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::window) mod corners;
 pub(crate) mod damage;
+#[cfg(all(not(target_arch = "wasm32"), any(test, target_os = "macos")))]
+pub(in crate::window) mod hidden_drawable;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod launch_drawables;
 #[cfg(not(target_arch = "wasm32"))]
@@ -32,6 +34,8 @@ pub(crate) use configure::{ConfigureError, configure, configure_checked};
 pub(crate) use configure::{ConfigureErrorKind, classify_scope_error};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use configure::configure_then;
+#[cfg(target_os = "macos")]
+pub(crate) use hidden_drawable::{HiddenDrawable, HiddenDrawableEffect, HiddenDrawableEvent};
 #[cfg(target_os = "macos")]
 pub(crate) use launch_drawables::LaunchDrawables;
 #[cfg(not(target_arch = "wasm32"))]

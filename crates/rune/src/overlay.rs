@@ -729,6 +729,9 @@ struct Live {
     /// Hardware media keys (`NSEventTypeSystemDefined`), while the overlay opts into `media_keys`.
     #[cfg(target_os = "macos")]
     media_keys: Option<crate::input::media_keys::MediaKeys>,
+    /// Whether the layer's `drawableSize` was shrunk to `1×1` while hidden.
+    #[cfg(target_os = "macos")]
+    hidden_drawable: crate::window::HiddenDrawable,
     /// Opt-in Windows 11 `El::system_material` visuals behind the swap chain.
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     materials: crate::system_material::windows::Materials,

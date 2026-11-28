@@ -124,6 +124,8 @@ impl OverlayCore {
             else { self.sync_origin(app.rt_mut(), &window); }
             if let Some(gpu) = self.gpu.clone() { self.rescale(app, &gpu, crate::window::backing_scale(&window)); }
             if self.surface.live().is_none() { return; }
+            #[cfg(target_os = "macos")]
+            self.restore_hidden_drawable();
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(app, crate::time::now()); }
@@ -385,6 +387,10 @@ impl OverlayCore {
                 presence::Effect::HideWindow { fade } => {
                     let surface_destroyed = self.hide_window(app, fade);
                     if !self.presence.drawing() {
+                        #[cfg(target_os = "macos")]
+                        if crate::window::HiddenDrawable::should_shrink_overlay(false, self.release == Release::Now) {
+                            self.shrink_hidden_drawable();
+                        }
                         self.after_hidden_did_hide(app, surface_destroyed);
                     }
                 }

@@ -475,6 +475,8 @@ impl OverlayCore {
             media_keys,
             #[cfg(target_os = "macos")]
             present: None,
+            #[cfg(target_os = "macos")]
+            hidden_drawable: crate::window::HiddenDrawable::Full,
             #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
             materials: crate::system_material::windows::Materials::new(),
             #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
@@ -512,7 +514,10 @@ impl OverlayCore {
             return;
         }
         #[cfg(target_os = "macos")]
-        crate::platform::macos::sync_contents_scale(&live.surface, scale);
+        {
+            let _ = live.hidden_drawable.step(crate::window::HiddenDrawableEvent::Configured);
+            crate::platform::macos::sync_contents_scale(&live.surface, scale);
+        }
         if let Some(alpha) = &mut live.alpha {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
@@ -552,6 +557,26 @@ impl Drop for OverlayCore {
 }
 
 impl OverlayCore {
+    #[cfg(target_os = "macos")]
+    pub(super) fn shrink_hidden_drawable(&mut self) {
+        let Some(live) = self.surface.live_mut() else { return };
+        for effect in live.hidden_drawable.step(crate::window::HiddenDrawableEvent::Hide) {
+            if effect == crate::window::HiddenDrawableEffect::Shrink {
+                crate::platform::macos::set_drawable_size(&live.surface, 1, 1);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn restore_hidden_drawable(&mut self) {
+        let Some(live) = self.surface.live_mut() else { return };
+        for effect in live.hidden_drawable.step(crate::window::HiddenDrawableEvent::Wake) {
+            if effect == crate::window::HiddenDrawableEffect::Restore {
+                crate::platform::macos::set_drawable_size(&live.surface, live.config.width, live.config.height);
+            }
+        }
+    }
+
     /// Its surface refused a new configuration: the overlay hides and drops it, so wgpu never
     /// panics on its next drawable. The next show tries a new one.
     pub(super) fn surface_refused(&mut self, app: &mut dyn OverlayApp, reason: String) {

@@ -482,7 +482,7 @@ impl Host {
         #[cfg(target_os = "windows")]
         { w.native.slot.reset(); w.native.dxgi_present.reset(); w.native.mode.rebind(); }
         #[cfg(target_os = "macos")]
-        { w.native.present = present; w.native.prime.stop(); }
+        { w.native.present = present; w.native.prime.stop(); w.note_surface_configured(); }
         self.sync_window_backdrop(true);
         true
     }

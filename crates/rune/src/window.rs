@@ -131,6 +131,8 @@ pub(crate) use surface::{Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
 pub(crate) use surface::{configure_then, damage};
 #[cfg(target_os = "macos")]
 pub(crate) use surface::native::Prime;
+#[cfg(target_os = "macos")]
+pub(crate) use surface::{HiddenDrawable, HiddenDrawableEffect, HiddenDrawableEvent};
 #[cfg(test)]
 pub(crate) use surface::{
     ConfigureErrorKind, classify_scope_error,
