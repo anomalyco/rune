@@ -2067,9 +2067,10 @@ its fill.
 
 `cx.system_languages()` returns the user's preferred BCP 47 language tags in
 preference order and `cx.locale()` returns the primary tag (`Option<&str>`). Both
-query the platform lazily on first call (`GetUserPreferredUILanguages` on Windows,
-`NSLocale.preferredLanguages` on macOS/iOS, `navigator.languages` on web with
-`languagechange` updates, and POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`
+query the platform lazily on first call (`GlobalizationPreferences.Languages` with
+`GetUserPreferredUILanguages` fallback and live `WM_SETTINGCHANGE` `"Intl"` updates
+on Windows, `NSLocale.preferredLanguages` on macOS/iOS, `navigator.languages` on web
+with `languagechange` updates, and POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`
 elsewhere), doing no work before the first frame. Tests and hosts can override the
 list with `rt.set_languages(["ar-EG", "en-US"])`, which re-runs the view and its
 memos when the normalized list changes.

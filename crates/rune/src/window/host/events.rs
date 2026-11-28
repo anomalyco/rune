@@ -999,7 +999,10 @@ impl Host {
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
             rt.set_system_text_scale(crate::platform::text_scale::cached());
             #[cfg(target_os = "windows")]
-            rt.sync_windows_tablet_mode_if_changed();
+            {
+                rt.sync_windows_tablet_mode_if_changed();
+                rt.sync_windows_languages_if_changed();
+            }
             #[cfg(target_os = "linux")]
             {
                 rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
