@@ -189,6 +189,7 @@ fn allocator_probe_detects_glibc_rejects_foreign_allocators_and_handles_concurre
 fn platform_guard_matches_target_abi_and_coalesces_live_trim() {
     let _guard = OPT_OUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_trim_enabled(true);
+    set_trim_c_heap(false);
 
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
     {

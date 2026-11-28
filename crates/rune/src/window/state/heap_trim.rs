@@ -14,7 +14,9 @@
 //!   glibc < 2.33) and `malloc_trim` via `dlsym(RTLD_DEFAULT, ...)`, allocates a 32 KiB block
 //!   through Rust's global allocator, and verifies glibc's `uordblks + hblkhd` grows and drops by
 //!   at least 32 KiB — automatically skipping custom `#[global_allocator]`s (mimalloc, jemalloc)
-//!   and `LD_PRELOAD` allocators;
+//!   and `LD_PRELOAD` allocators unless opted in via
+//!   [`App::trim_c_heap_at_rest(true)`](crate::App::trim_c_heap_at_rest) (which resolves glibc's
+//!   `malloc_trim` directly via `dlsym(RTLD_DEFAULT, ...)` to trim C-library arenas);
 //! - explicit state machine (`TrimState`): coalesces concurrent multi-window/overlay rests and
 //!   enforces a 30 s cooldown (`TRIM_MIN_GAP`), running once per rest and never on a periodic idle
 //!   timer;

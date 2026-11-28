@@ -1247,10 +1247,12 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   apps with allocating latency-sensitive threads can turn it off with
   `App::trim_heap_at_rest(false)` or `RUNE_MALLOC_TRIM=0` (Rune's own `AudioOutput` worker
   allocates nothing while playing). Apps using a custom `#[global_allocator]` (such as mimalloc
-  or jemalloc) or an `LD_PRELOAD` allocator see a no-op: a once-per-process runtime probe checks
-  whether Rust allocations move glibc's `mallinfo2`/`mallinfo` counters and skips trimming
-  otherwise, and non-glibc targets (macOS, Windows, musl, Android, iOS, and `wasm32`) compile it
-  out completely.
+  or jemalloc) or an `LD_PRELOAD` allocator see a no-op by default: a once-per-process runtime
+  probe checks whether Rust allocations move glibc's `mallinfo2`/`mallinfo` counters and skips
+  trimming otherwise. Apps with a custom Rust allocator that load glibc-allocating C libraries
+  (Mesa/Vulkan, GLib/GIO, fontconfig) can opt in with `App::trim_c_heap_at_rest(true)`, sharing
+  the same 30 s cooldown and `trim_heap_at_rest(false)` / `RUNE_MALLOC_TRIM=0` opt-outs.
+  Non-glibc targets (macOS, Windows, musl, Android, iOS, and `wasm32`) compile it out completely.
 - **Opt-in effect pipeline warming, per effect (`App::prewarm_effects(PrewarmEffects::BACKDROP_BLUR)`,
   `WindowSpec::prewarm_effects`, `Renderer::set_prewarm_effects`).** Off by default, so apps pay
   no background compilation CPU, driver memory, or worker thread for effects they never draw, and

@@ -256,8 +256,8 @@ impl<S: 'static> crate::App<S> {
     ///
     /// At runtime Rune probes once whether Rust's global allocator is backed by glibc `malloc`;
     /// binaries using a custom `#[global_allocator]` (such as mimalloc or jemalloc) or an
-    /// `LD_PRELOAD` allocator skip the trim automatically. Ignored on macOS, Windows, musl,
-    /// Android, iOS, and `wasm32`.
+    /// `LD_PRELOAD` allocator skip the trim automatically unless opted in via
+    /// [`Self::trim_c_heap_at_rest`]. Ignored on macOS, Windows, musl, Android, iOS, and `wasm32`.
     ///
     /// ```
     /// use rune::{App, AppSpec, el};
@@ -281,7 +281,17 @@ impl<S: 'static> crate::App<S> {
     /// global allocator. Apps that link heavy glibc-allocating C libraries (Mesa/Vulkan,
     /// GLib/GIO, fontconfig) can enable this so freed C-library arena pages still return to
     /// `VmRSS` at rest, sharing the same 30 s cooldown, off-UI-thread task pool, and
-    /// `.trim_heap_at_rest(false)` / `RUNE_MALLOC_TRIM=0` opt-outs. Ignored off Linux/glibc.
+    /// `.trim_heap_at_rest(false)` / `RUNE_MALLOC_TRIM=0` opt-outs. This setting is
+    /// process-wide (the last call wins), resolves `malloc_trim` dynamically via `dlsym`
+    /// (a no-op under `crt-static`), and is ignored on macOS, Windows, musl, Android, iOS,
+    /// and `wasm32`.
+    ///
+    /// ```
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let _app = App::new(AppSpec::new("MimallocApp", (640.0, 480.0), || (), |_, _| el()))
+    ///     .trim_c_heap_at_rest(true);
+    /// ```
     pub fn trim_c_heap_at_rest(self, enabled: bool) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         crate::window::rest::set_c_heap_trim_enabled(enabled);
