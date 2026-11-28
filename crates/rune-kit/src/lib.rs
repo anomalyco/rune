@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod budget;
+mod chart;
 mod containers;
 mod controls;
 pub mod diff;
@@ -41,6 +42,8 @@ mod tokens;
 mod tree;
 pub mod zoom_pan;
 
+pub use chart::BarChart;
+pub use chart::LineChart;
 pub use containers::accordion::Accordion;
 pub use containers::accordion::AccordionItem;
 pub use containers::badge::Badge;

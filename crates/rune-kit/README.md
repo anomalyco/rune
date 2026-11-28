@@ -214,7 +214,14 @@ RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inl
 triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and
 ToastRegion, Card, List, Accordion, Collapsible, Badge, Divider, Keybind, Spinner, Loader,
-Progress, ProgressCircle, SegmentedControl.
+Progress, ProgressCircle, SegmentedControl, LineChart, BarChart.
+
+`LineChart` (one or more series over shared x labels) and `BarChart` (categories, upright or
+`.horizontal()`) draw app data in theme colours: series take `icon_accent`, then the `success`,
+`warning`, `danger` and `info` icons, gridlines `border_weak` and labels `text_weak`. Hover is the
+app's state, like a tooltip's `open`: `.hovered(s.hover).on_hover(|s: &mut S, i| s.hover = i)`
+draws a guide and reads out the values at that index. Assistive technology reads each x band or
+category as a list item with its values (`Tue: CPU 30%, Memory 42%`); a gap reads as `–`.
 
 `Button::new(label).rolling("import-label")` rolls the label's changed characters
 (`RollingText`) and springs the button's width with it; `.label_with(|font, ink| ..)` draws any
