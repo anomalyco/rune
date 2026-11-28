@@ -6,8 +6,9 @@
 //! spaces or control characters. The check runs when the handler calls `open_url`; the open
 //! itself happens once the handler's frame is done.
 //!
-//! macOS asks `NSWorkspace`, Windows `ShellExecuteW`, Linux runs `xdg-open`. Headless runs and
-//! tests never open anything: they keep the requests for [`crate::Runtime::take_url_requests`].
+//! macOS asks `NSWorkspace`, Windows `ShellExecuteW`, Linux runs `xdg-open`, and Android sends
+//! `Intent.ACTION_VIEW`. Headless runs and tests never open anything: they keep the requests for
+//! [`crate::Runtime::take_url_requests`].
 //!
 //! [`Tx::open_url_then`](crate::Tx::open_url_then) also hands the app what came of the open, on
 //! a later frame, for an inline error or a link to copy instead.
@@ -79,8 +80,8 @@ impl crate::Tx {
     /// or [`OpenUrlError::Failed`] when it couldn't, so the app can show an inline error or
     /// the link to copy. A link refused here returns its error and `on_result` never runs.
     ///
-    /// What "took the link" means differs: macOS and Windows say whether a handler opened it;
-    /// Linux whether `xdg-open` started, not whether it found a browser. The web can't see a
+    /// What "took the link" means differs: macOS, Windows, and Android say whether a handler
+    /// opened it; Linux whether `xdg-open` started, not whether it found a browser. The web can't see a
     /// blocked tab, since a tab opened without an opener is never handed back; it fails a link
     /// asked for outside a click or key press, which browsers block, and reports `Ok(())` for
     /// the rest. Headless runs and tests record the link and report `Ok(())`.
@@ -343,7 +344,12 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
     Ok(())
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "macos", target_os = "windows", all(unix, not(any(target_os = "ios", target_os = "android"))))))]
+#[cfg(target_os = "android")]
+fn open(url: &str) -> Result<(), OpenUrlError> {
+    crate::platform::android::open_url(url).map_err(OpenUrlError::Failed)
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "macos", target_os = "windows", target_os = "android", all(unix, not(any(target_os = "ios", target_os = "android"))))))]
 fn open(_: &str) -> Result<(), OpenUrlError> { Err(OpenUrlError::Failed("this platform can't open links".into())) }
 
 #[cfg(test)]

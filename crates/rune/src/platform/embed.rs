@@ -435,6 +435,7 @@ impl<S: 'static> LayerHost<S> {
         let (mut core, size, scale, now) = unsafe { LayerHostCore::from_native_window(native_window, viewport, scale) }?;
         let mut rt = runtime_for_configured(spec, state, size, Env::new(dark, scale), wake, config);
         rt.set_touch_controls(true);
+        rt.core_mut().host.open_urls_natively = true;
         core.configure_runtime(rt.core_mut(), now);
         Ok(Self { core, compositor: None, rt })
     }

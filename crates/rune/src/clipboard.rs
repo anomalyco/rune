@@ -21,6 +21,10 @@ use crate::machine::Seq;
 use crate::Runtime;
 use crate::Waker;
 
+#[cfg(any(target_os = "android", test))]
+mod android;
+#[cfg(test)]
+mod android_tests;
 mod content;
 mod html;
 mod secret;
@@ -404,10 +408,10 @@ struct Board { content: Option<ClipboardContent>, revision: u64, fail: Option<St
 /// The OS clipboard's current change counter, when the platform exposes one without reading
 /// the clipboard's contents.
 ///
-/// Returns `Some(n)` on macOS (`NSPasteboard.changeCount`) and Windows
-/// (`GetClipboardSequenceNumber`), where the counter changes on every write to the system
-/// clipboard. Returns `None` on Linux, web, iOS and Android, which expose no portable
-/// generation counter.
+/// Returns `Some(n)` on macOS (`NSPasteboard.changeCount`), Windows
+/// (`GetClipboardSequenceNumber`), and Android (from `OnPrimaryClipChangedListener` once a
+/// `RuneView` has initialized), where the counter changes on every write to the system
+/// clipboard. Returns `None` on Linux, web, and iOS, which expose no portable generation counter.
 ///
 /// Reading the counter never opens or reads the clipboard's contents and starts no background
 /// work. Compare two readings for inequality (`!=`) rather than ordering, as the Windows
@@ -515,7 +519,7 @@ trait Backend {
 /// How often the worker checks that a held secret is still on the clipboard. Where there is no
 /// change count (Linux) it compares the text's fingerprint, so it checks less often.
 #[cfg(not(target_arch = "wasm32"))]
-const WATCH: Duration = if cfg!(any(target_os = "macos", target_os = "windows")) {
+const WATCH: Duration = if cfg!(any(target_os = "macos", target_os = "windows", target_os = "android")) {
     Duration::from_millis(250)
 } else {
     Duration::from_secs(1)

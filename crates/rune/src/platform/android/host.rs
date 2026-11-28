@@ -11,12 +11,11 @@
 use std::cell::RefCell;
 use std::ffi::{CStr, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jni_sys::{
-    JNI_EDETACHED, JNI_ERR, JNI_FALSE, JNI_OK, JNI_TRUE, JNI_VERSION_1_6, JNIEnv,
-    JNINativeMethod, JavaVM, jboolean, jclass, jfloat, jint, jlong, jmethodID, jobject, jvalue,
+    JNI_ERR, JNI_FALSE, JNI_OK, JNI_TRUE, JNI_VERSION_1_6, JNIEnv, JNINativeMethod, JavaVM,
+    jboolean, jclass, jfloat, jint, jlong, jmethodID, jobject, jvalue,
 };
 
 use crate::app::{App, RuntimeConfig, Shared};
@@ -26,10 +25,10 @@ use crate::runtime::Waker;
 use crate::tooling::AppSpec;
 use crate::{Haptic, Key, KeyEvent, Mods};
 
+use super::bridge::{self, jni_clear_exception, jni_delete_global_ref};
 use super::{haptics, logcat};
 use super::machine::{self, Effect, Event, State};
 
-static JAVA_VM: AtomicPtr<JavaVM> = AtomicPtr::new(ptr::null_mut());
 static APP_ENTRY: OnceLock<fn()> = OnceLock::new();
 
 /// JNI global reference to the live `dev.rune.RuneView` instance and its cached Java callbacks.
@@ -82,6 +81,7 @@ struct TypedRunner<S: 'static> {
     pending: Option<PendingAndroidApp<S>>,
     host: Option<LayerHost<S>>,
     shared: Arc<Shared<S>>,
+    clipboard: crate::clipboard::Client,
 }
 
 impl<S: 'static> AndroidRunner for TypedRunner<S> {
@@ -101,6 +101,7 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
             return Err("Android runner has neither pending app nor active LayerHost".into());
         };
         self.shared.connect(wake.clone());
+        self.clipboard.connect(wake.clone());
         // SAFETY: caller guarantees `native_window` is valid until `detach` or drop.
         let mut host = unsafe {
             LayerHost::from_native_window_configured(
@@ -166,14 +167,19 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
 
     fn drain_shared(&mut self) {
         if let Some(host) = &mut self.host {
+            let _ = self.clipboard.receive_core(host.runtime_mut().core_mut());
             let _ = self.shared.drain_window(host.runtime_mut(), |_| {});
+            self.clipboard.flush_core(host.runtime_mut().core_mut());
         }
     }
 
     fn frame(&mut self) -> Option<EmbedFrame> {
         let host = self.host.as_mut()?;
+        let _ = self.clipboard.receive_core(host.runtime_mut().core_mut());
         let _ = self.shared.drain_window(host.runtime_mut(), |_| {});
-        Some(host.frame())
+        let outcome = host.frame();
+        self.clipboard.flush_core(host.runtime_mut().core_mut());
+        Some(outcome)
     }
 
     fn take_haptics(&mut self) -> Vec<Haptic> {
@@ -221,6 +227,8 @@ impl Host {
         }
         self.runner = None;
         self.release_native_window();
+        // SAFETY: `env` is the UI thread's valid `JNIEnv*`.
+        unsafe { bridge::clear_link_target(env) };
         if let Some(bridge) = self.bridge.lock().unwrap_or_else(|e| e.into_inner()).take() {
             // SAFETY: `env` is the UI thread's valid `JNIEnv*` and `bridge.obj` is a live global ref.
             unsafe { jni_delete_global_ref(env, bridge.obj) };
@@ -257,6 +265,7 @@ pub(crate) fn run<S: 'static>(mut app: App<S>) -> Result<(), String> {
         }),
         host: None,
         shared,
+        clipboard: crate::clipboard::Client::default(),
     });
     HOST.with(|slot| {
         if let Some(host) = slot.borrow_mut().as_mut() {
@@ -279,7 +288,7 @@ pub unsafe fn jni_on_load(vm: *mut c_void, entry: fn()) -> i32 {
         return JNI_ERR;
     }
     let vm = vm.cast::<JavaVM>();
-    JAVA_VM.store(vm, Ordering::Release);
+    bridge::set_java_vm(vm);
     let _ = APP_ENTRY.set(entry);
     logcat::install();
 
@@ -301,6 +310,8 @@ pub unsafe fn jni_on_load(vm: *mut c_void, entry: fn()) -> i32 {
     if !registered {
         return JNI_ERR;
     }
+    // SAFETY: `env` is a valid JNIEnv; missing `RuneClipboard` class is handled non-fatally.
+    unsafe { bridge::register_clipboard_natives(env) };
     JNI_VERSION_1_6
 }
 
@@ -364,30 +375,6 @@ unsafe fn register_rune_view_natives(env: *mut JNIEnv) -> bool {
     }
 }
 
-unsafe fn jni_clear_exception(env: *mut JNIEnv) {
-    // SAFETY: `env` is a valid JNIEnv*.
-    unsafe {
-        if let Some(check) = (**env).ExceptionCheck
-            && check(env) != JNI_FALSE
-            && let Some(clear) = (**env).ExceptionClear
-        {
-            clear(env);
-        }
-    }
-}
-
-unsafe fn jni_delete_global_ref(env: *mut JNIEnv, obj: jobject) {
-    if obj.is_null() || env.is_null() {
-        return;
-    }
-    // SAFETY: `env` is a valid JNIEnv* and `obj` is a live global ref.
-    unsafe {
-        if let Some(del) = (**env).DeleteGlobalRef {
-            del(env, obj);
-        }
-    }
-}
-
 unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridge> {
     // SAFETY: `env` and `view` are valid JNI handles passed to `nativeInit`.
     unsafe {
@@ -404,17 +391,44 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         let schedule_wake_after = get_method(env, cls, c"scheduleWakeAfter".as_ptr(), c"(J)V".as_ptr());
         let post_wake = get_method(env, cls, c"postWake".as_ptr(), c"()V".as_ptr());
         let perform_haptic = get_method(env, cls, c"performHaptic".as_ptr(), c"(I)V".as_ptr());
-        if let Some(del) = (**env).DeleteLocalRef {
-            del(env, cls);
-        }
         if schedule_frame.is_null()
             || cancel_frame.is_null()
             || schedule_wake_after.is_null()
             || post_wake.is_null()
             || perform_haptic.is_null()
         {
+            if let Some(del) = (**env).DeleteLocalRef {
+                del(env, cls);
+            }
             jni_clear_exception(env);
             return None;
+        }
+        let open_url = get_method(
+            env,
+            cls,
+            c"openUrl".as_ptr(),
+            c"(Ljava/lang/String;)Ljava/lang/String;".as_ptr(),
+        );
+        if open_url.is_null() {
+            jni_clear_exception(env);
+        }
+        let get_clipboard = get_method(
+            env,
+            cls,
+            c"getClipboard".as_ptr(),
+            c"()Ldev/rune/RuneClipboard;".as_ptr(),
+        );
+        if get_clipboard.is_null() {
+            jni_clear_exception(env);
+        }
+        if let Some(del) = (**env).DeleteLocalRef {
+            del(env, cls);
+        }
+        if !open_url.is_null() {
+            bridge::set_link_target(env, view, open_url);
+        }
+        if !get_clipboard.is_null() {
+            bridge::init_clipboard(env, view, get_clipboard);
         }
         let global = new_global(env, view);
         if global.is_null() {
@@ -455,51 +469,15 @@ unsafe fn call_void_long(env: *mut JNIEnv, obj: jobject, method: jmethodID, valu
     }
 }
 
-fn post_wake_from_any_thread(bridge: &Mutex<Option<ViewBridge>>) {
-    let vm = JAVA_VM.load(Ordering::Acquire);
-    if vm.is_null() {
-        return;
-    }
-    let guard = bridge.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(view) = guard.as_ref() else {
-        return;
-    };
-    let mut env_ptr: *mut c_void = ptr::null_mut();
-    let mut attached_here = false;
-    // SAFETY: `vm` is valid for the lifetime of the ART process.
-    let rc = unsafe {
-        let Some(get_env) = (**vm).GetEnv else {
+fn post_wake_from_any_thread(view_bridge: &Mutex<Option<ViewBridge>>) {
+    let _ = bridge::with_jni_env(|env| {
+        let guard = view_bridge.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(view) = guard.as_ref() else {
             return;
         };
-        get_env(vm, &mut env_ptr, JNI_VERSION_1_6)
-    };
-    if rc == JNI_EDETACHED {
-        // SAFETY: attaching the current Rust thread to `vm` writes a valid `JNIEnv*` to `env_ptr`.
-        let attach_rc = unsafe {
-            let Some(attach) = (**vm).AttachCurrentThread else {
-                return;
-            };
-            attach(vm, &mut env_ptr, ptr::null_mut())
-        };
-        if attach_rc != JNI_OK || env_ptr.is_null() {
-            return;
-        }
-        attached_here = true;
-    } else if rc != JNI_OK || env_ptr.is_null() {
-        return;
-    }
-    let env = env_ptr.cast::<JNIEnv>();
-    // SAFETY: `env` is attached to this thread and `view` is held alive under `guard`.
-    unsafe { call_void_0(env, view.obj, view.post_wake) };
-    drop(guard);
-    if attached_here {
-        // SAFETY: we attached this thread above, so detaching balances the attach.
-        unsafe {
-            if let Some(detach) = (**vm).DetachCurrentThread {
-                let _ = detach(vm);
-            }
-        }
-    }
+        // SAFETY: `env` is attached to this thread and `view` is held alive under `guard`.
+        unsafe { call_void_0(env, view.obj, view.post_wake) };
+    });
 }
 
 fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativeWindow) -> bool {

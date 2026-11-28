@@ -1,7 +1,12 @@
 package dev.rune
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -27,9 +32,11 @@ open class RuneView(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var frameScheduled = false
     private val wakeRunnable = Runnable { nativeWake() }
+    private val clipboard: RuneClipboard
 
     init {
         System.loadLibrary(libName)
+        clipboard = RuneClipboard.getOrCreate(context)
         holder.addCallback(this)
         isFocusable = true
         isFocusableInTouchMode = true
@@ -133,6 +140,39 @@ open class RuneView(
      */
     fun performHaptic(feedbackConstant: Int) {
         performHapticFeedback(feedbackConstant)
+    }
+
+    /** Called by Rust during [nativeInit] to bind the process-wide clipboard wrapper. */
+    fun getClipboard(): RuneClipboard = clipboard
+
+    /**
+     * Called by Rust (via JNI) to open an `http:`, `https:`, or `mailto:` link using
+     * `Intent.ACTION_VIEW`. Returns `null` on success, or an error string when no app handles
+     * the link or the launch fails.
+     */
+    fun openUrl(url: String): String? {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        val target = findActivity(context)
+        if (target == null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            (target ?: context).startActivity(intent)
+            null
+        } catch (_: ActivityNotFoundException) {
+            "no app opens this link"
+        } catch (e: RuntimeException) {
+            e.message ?: e.javaClass.simpleName
+        }
+    }
+
+    private fun findActivity(ctx: Context): Activity? {
+        var cur: Context? = ctx
+        while (cur is ContextWrapper) {
+            if (cur is Activity) return cur
+            cur = cur.baseContext
+        }
+        return null
     }
 
     fun onResume() {

@@ -14,7 +14,8 @@ Rune runs natively on Android without `winit`'s event loop at runtime: a small K
   - Uses `wgpu::Limits::downlevel_defaults()` automatically on adapters with 16 KiB uniform buffer limits (Android GLES) while supporting Vulkan and GLES.
 - **Kotlin host (`crates/rune/android/src/main/java/dev/rune/`)**:
   - `RuneActivity`: full-screen edge-to-edge `Activity` using `SOFT_INPUT_ADJUST_NOTHING`, reading the shared library name from manifest meta-data `dev.rune.lib_name`.
-  - `RuneView`: `SurfaceView` + `Choreographer.FrameCallback` forwarding surface lifecycle, display density, system bars/display cutout, soft keyboard inset, dark mode, and Back presses.
+  - `RuneView`: `SurfaceView` + `Choreographer.FrameCallback` forwarding surface lifecycle, display density, system bars/display cutout, soft keyboard inset, dark mode, Back presses, and `Intent.ACTION_VIEW` link launches.
+  - `RuneClipboard` / `RuneClipboardProvider`: wraps Android's `ClipboardManager` for plain text, HTML, sensitive secrets (`ClipDescription.EXTRA_IS_SENSITIVE`), change revisions (`OnPrimaryClipChangedListener`), image paste via `ContentResolver`, and image copy via an unexported `ContentProvider`.
 - **Insets and Back**:
   - Hardware system bars and display cutouts map to `Cx::safe_area()` (`[top, right, bottom, left]` in dp).
   - Soft keyboard overlap maps separately to `Cx::keyboard_inset()` (dp from bottom) so `El::on_edge_drag` bands stay bound to hardware chrome while views can pad by `cx.safe_area()[2].max(cx.keyboard_inset())` and focused text fields auto-scroll above the keyboard.
@@ -67,3 +68,17 @@ rune::android_main!(start);
 ```
 
 Include `crates/rune/android/src/main/java` in your Android project and declare `dev.rune.RuneActivity` with `<meta-data android:name="dev.rune.lib_name" android:value="your_crate" />` and `android:windowSoftInputMode="adjustNothing"`.
+
+### Clipboard image copy (`RuneClipboardProvider`)
+
+Plain text, HTML, sensitive secret copy, and image paste work out of the box. To also allow `Tx::copy_image` and rich image copies on Android, declare `dev.rune.RuneClipboardProvider` inside `<application>` in your `AndroidManifest.xml` (unexported, with temporary URI grants enabled so only the pasting app can read the image):
+
+```xml
+<provider
+    android:name="dev.rune.RuneClipboardProvider"
+    android:authorities="${applicationId}.rune.clipboard"
+    android:exported="false"
+    android:grantUriPermissions="true" />
+```
+
+When packaging directly with `aapt2` without Gradle, substitute your manifest `package` name for `${applicationId}` (for example `dev.rune.hello.rune.clipboard`). Apps that omit the `<provider>` entry receive `CopyImageError::Failed` on image copy without crashing or modifying the existing clipboard.
