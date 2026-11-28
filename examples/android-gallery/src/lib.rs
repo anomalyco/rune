@@ -34,4 +34,24 @@ mod tests {
             rt.frame(1.0 / 60.0);
         }
     }
+
+    #[test]
+    fn android_gallery_manifest_hides_action_bar_and_pads_safe_area() {
+        let manifest = include_str!("../AndroidManifest.xml");
+        assert!(
+            manifest.contains(r#"android:theme="@android:style/Theme.DeviceDefault.NoActionBar""#),
+            "android-gallery manifest must set a NoActionBar theme so no system title bar covers Rune",
+        );
+
+        let mut rt = kit_gallery::build_app().headless_runtime((390.0, 844.0), Env::new(true, 3.0));
+        rt.set_safe_area([48.0, 0.0, 34.0, 0.0]);
+        rt.frame(0.0);
+        let scroll = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("index-scroll"))
+            .expect("index-scroll present")
+            .rect;
+        assert_eq!(scroll, [0.0, 48.0, 390.0, 844.0 - 48.0 - 34.0]);
+    }
 }

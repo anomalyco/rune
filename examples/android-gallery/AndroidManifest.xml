@@ -10,6 +10,7 @@
 
     <application
         android:label="Rune Gallery"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:hasCode="true">
         <activity
             android:name="dev.rune.RuneActivity"

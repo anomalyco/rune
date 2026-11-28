@@ -13,7 +13,7 @@ Rune runs natively on Android without `winit`'s event loop at runtime: a small K
   - Supports `LayerHost::detach_surface` and `LayerHost::attach_native_window` so the `Runtime<S>`, app state, and GPU device survive across Home/return surface destruction.
   - Uses `wgpu::Limits::downlevel_defaults()` automatically on adapters with 16 KiB uniform buffer limits (Android GLES) while supporting Vulkan and GLES.
 - **Kotlin host (`crates/rune/android/src/main/java/dev/rune/`)**:
-  - `RuneActivity`: full-screen edge-to-edge `Activity` using `SOFT_INPUT_ADJUST_NOTHING`, reading the shared library name from manifest meta-data `dev.rune.lib_name`, and launching Storage Access Framework document pickers for `RuneView`.
+  - `RuneActivity`: full-screen edge-to-edge `Activity` requesting `Window.FEATURE_NO_TITLE` and `SOFT_INPUT_ADJUST_NOTHING`, reading the shared library name from manifest meta-data `dev.rune.lib_name`, moving task-root activities to the back on unhandled Back so state survives launcher re-entry, and launching Storage Access Framework document pickers for `RuneView`.
   - `RuneView`: `SurfaceView` + `Choreographer.FrameCallback` forwarding surface lifecycle, display density, system bars/display cutout, soft keyboard inset, dark mode, Back presses, `Intent.ACTION_VIEW` link launches, and Storage Access Framework document picks (`onDocumentPick`, `onDocumentPickActivityResult`, `deliverDocumentPick`, `openDocumentFd`).
   - `RuneClipboard` / `RuneClipboardProvider`: wraps Android's `ClipboardManager` for plain text, HTML, sensitive secrets (`ClipDescription.EXTRA_IS_SENSITIVE`), change revisions (`OnPrimaryClipChangedListener`), image paste via `ContentResolver`, and image copy via an unexported `ContentProvider`.
 - **Document picker (`Tx::pick_file`, `Tx::pick_files`, `Tx::pick_save_file`)**:
@@ -71,7 +71,7 @@ pub fn start() {
 rune::android_main!(start);
 ```
 
-Include `crates/rune/android/src/main/java` in your Android project and declare `dev.rune.RuneActivity` with `<meta-data android:name="dev.rune.lib_name" android:value="your_crate" />` and `android:windowSoftInputMode="adjustNothing"`.
+Include `crates/rune/android/src/main/java` in your Android project and declare `dev.rune.RuneActivity` with `android:theme="@android:style/Theme.DeviceDefault.NoActionBar"` (avoiding a title bar on the starting window; `RuneActivity` also requests `Window.FEATURE_NO_TITLE`), `<meta-data android:name="dev.rune.lib_name" android:value="your_crate" />`, and `android:windowSoftInputMode="adjustNothing"`.
 
 ### Clipboard image copy (`RuneClipboardProvider`)
 
