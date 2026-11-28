@@ -536,15 +536,47 @@ impl RuntimeCore {
         let mut changed = moved && self.physical_focus_lost(app);
         let prev = self.kbd.focus.path();
         let next = path.as_deref();
-        let needs_sync = |p: &str, input: &crate::el::InputSpec, focused: bool| {
+        if sync_all {
+            self.kbd.synced_inputs_gen = self.kbd.synced_inputs_gen.wrapping_add(1);
+        }
+        let synced_gen = self.kbd.synced_inputs_gen;
+        let synced_inputs = &mut self.kbd.synced_inputs;
+        let mut sync_one = |p: &str, input: &mut crate::el::InputSpec, focused: bool| -> bool {
             let endpoint = prev == Some(p) || next == Some(p);
+            let desired = focus_machine::SyncedInputFlags::of(input, focused);
+            let mut flags_need_sync = false;
+            if input.access.is_some() {
+                if let Some((last, seen_gen)) = synced_inputs.get_mut(p) {
+                    if sync_all {
+                        *seen_gen = synced_gen;
+                    }
+                    flags_need_sync = *last != desired;
+                } else {
+                    flags_need_sync = desired.has_syncable();
+                }
+            }
             if !sync_all && !endpoint {
                 return false;
             }
-            if moved && !sync_all && endpoint {
-                return true;
+            let do_sync = (moved && !sync_all && endpoint)
+                || flags_need_sync
+                || input_needs_sync(input, focused, focused || input.edit.is_secure());
+            if !do_sync {
+                return false;
             }
-            input_needs_sync(input, focused, focused || input.edit.is_secure())
+            let did = sync_input_focus(input, app.states(), focused);
+            if input.access.is_some() {
+                if let Some((last, seen_gen)) = synced_inputs.get_mut(p) {
+                    *last = desired;
+                    *seen_gen = synced_gen;
+                } else {
+                    synced_inputs.insert(p.to_owned(), (desired, synced_gen));
+                }
+            }
+            // Calling the mutable accessor bumps a `Tracked<TextEdit>` even when the flags already
+            // matched; re-measure within this commit so any enclosing `region` records the new
+            // version instead of rebuilding once on the next unrelated commit.
+            did || (sync_all && flags_need_sync)
         };
         let mut reveal_caret = false;
         for n in &mut self.tree.nodes {
@@ -553,9 +585,7 @@ impl RuntimeCore {
                 if moved && focused && input.reveal_caret_on_focus {
                     reveal_caret = true;
                 }
-                if needs_sync(n.path.as_str(), input, focused) {
-                    changed |= sync_input_focus(input, app.states(), focused);
-                }
+                changed |= sync_one(n.path.as_str(), input, focused);
             }
         }
         for (p, input) in &mut self.commit.virtual_inputs {
@@ -563,9 +593,10 @@ impl RuntimeCore {
             if moved && focused && input.reveal_caret_on_focus {
                 reveal_caret = true;
             }
-            if needs_sync(p.as_str(), input, focused) {
-                changed |= sync_input_focus(input, app.states(), focused);
-            }
+            changed |= sync_one(p.as_str(), input, focused);
+        }
+        if sync_all && !synced_inputs.is_empty() {
+            synced_inputs.retain(|_, (_, g)| *g == synced_gen);
         }
         if reveal_caret {
             self.edit.caret_follow = true;

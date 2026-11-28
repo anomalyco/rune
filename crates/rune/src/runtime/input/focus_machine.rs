@@ -249,6 +249,37 @@ impl TypeSelect {
     pub(crate) fn reset(&mut self) { *self = Self::Idle; }
 }
 
+/// Requested flags last pushed into a bound input's app-owned `TextEdit` by `sync_input_focus`.
+/// Tracking this per path ensures a field whose `TextEdit` clone was pre-mutated before
+/// `text_input` still syncs on first mount and on flag changes, while staying quiet on unrelated
+/// commits once settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SyncedInputFlags {
+    pub(super) focused: bool,
+    pub(super) secure: bool,
+    pub(super) single_line: bool,
+    pub(super) revealed: Option<bool>,
+    pub(super) line_home_end: Option<bool>,
+}
+
+impl SyncedInputFlags {
+    #[inline]
+    pub(super) fn of(input: &crate::el::InputSpec, focused: bool) -> Self {
+        Self {
+            focused,
+            secure: input.edit.is_secure(),
+            single_line: input.single_line,
+            revealed: input.revealed_override,
+            line_home_end: input.line_home_end_override,
+        }
+    }
+
+    #[inline]
+    pub(super) fn has_syncable(self) -> bool {
+        self.secure || self.revealed.is_some() || self.line_home_end.is_some()
+    }
+}
+
 /// Keyboard focus, modal focus/scope, type-select, held keys and modifier tracking owned by
 /// [`crate::runtime::RuntimeCore`]. Ordered hot-first under `#[repr(C)]` so `modal_scope`
 /// (checked per interactive node in `register_node_hits`) sits at offset 0.
@@ -282,6 +313,11 @@ pub(crate) struct KeyboardState {
     /// Focused text fields that unmounted without being blurred: while another field holds focus,
     /// remounting one with its old `focused = true` flag does not steal focus back.
     pub(super) unmounted_focused: Vec<std::sync::Weak<crate::edit::History>>,
+    /// Requested flags last synced per bound input path, paired with a commit generation for O(1)
+    /// pruning when inputs unmount.
+    pub(super) synced_inputs: rustc_hash::FxHashMap<String, (SyncedInputFlags, u64)>,
+    /// Monotonic generation bumped on every full focus sync pass to prune unmounted inputs.
+    pub(super) synced_inputs_gen: u64,
     /// The modifiers `App::on_modifiers` last heard.
     mods_heard: crate::Mods,
     /// Modifier keys held now, as the window last reported them (`Tx::mods`).
@@ -333,6 +369,8 @@ impl KeyboardState {
             focus_returned: false,
             last_key_consumed: false,
             unmounted_focused: Vec::new(),
+            synced_inputs: rustc_hash::FxHashMap::default(),
+            synced_inputs_gen: 0,
             modal_scope: None,
         }
     }

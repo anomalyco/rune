@@ -376,6 +376,7 @@ pub(crate) fn name_field(e: El, label: Option<&str>, placeholder: &str, descript
 /// name the editor itself for assistive technology.
 pub struct TextInput {
     edit: TextEdit,
+    secure: bool,
     label: Option<String>,
     description: Option<String>,
     placeholder: String,
@@ -400,11 +401,10 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn secure(mut self) -> Self {
-        self.edit.set_secure(true);
+        self.secure = true;
         self
     }
     pub fn revealed(mut self, revealed: bool) -> Self {
-        self.edit.set_revealed(revealed);
         self.edits.visual(move |e| e.revealed(revealed));
         self
     }
@@ -456,6 +456,7 @@ impl TextInput {
     pub fn new(edit: &TextEdit) -> TextInput {
         TextInput {
             edit: edit.clone(),
+            secure: false,
             label: None,
             description: None,
             placeholder: String::new(),
@@ -651,6 +652,9 @@ impl TextInput {
         let mut field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled)
             .invalid(self.invalid)
             .read_only(self.read_only);
+        if self.secure {
+            field = field.secure();
+        }
         if let Some(mode) = self.auto_complete {
             field = field.auto_complete(mode);
         }
@@ -682,7 +686,7 @@ impl TextInput {
         if let Some(t) = self.trailing {
             e = e.child(row().key("trailing").self_center().center_y().child(t));
         }
-        if (self.copy && !self.edit.is_secure()) || self.clear {
+        if (self.copy && !(self.secure || self.edit.is_secure())) || self.clear {
             let (glyph, side, radius) =
                 if self.clear { (k.glyph.clear, 28.0, k.radius.md) } else { (k.glyph.copy, 20.0, k.radius.sm) };
             let mut b = row()
