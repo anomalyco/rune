@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use super::heap_trim::{
     PROBE_SIZE, TRIM_MIN_GAP, TrimEffect, TrimEvent, TrimState, env_allows_trim,
-    maybe_trim_heap, probe_glibc_used, set_trim_enabled, step, test_support, trim_enabled,
-    uses_glibc_allocator,
+    maybe_trim_heap, probe_glibc_used, set_trim_c_heap, set_trim_enabled, step, test_support,
+    trim_c_heap_enabled, trim_enabled, uses_glibc_allocator,
 };
 use super::rest::{self, REST_AFTER, Rest, RestEffect, RestEvent};
 use crate::time::Instant;
@@ -109,6 +109,15 @@ fn env_override_and_app_builder_opt_out_toggle_trim_enabled() {
     let _app2 = crate::App::new(spec2).trim_heap_at_rest(true);
     assert!(trim_enabled());
     set_trim_enabled(true);
+
+    assert!(!trim_c_heap_enabled());
+    let spec3 = crate::AppSpec::new("TrimCHeapOn", (320.0, 200.0), || (), |_, _| crate::el());
+    let _app3 = crate::App::new(spec3).trim_c_heap_at_rest(true);
+    assert!(trim_c_heap_enabled());
+    let spec4 = crate::AppSpec::new("TrimCHeapOff", (320.0, 200.0), || (), |_, _| crate::el());
+    let _app4 = crate::App::new(spec4).trim_c_heap_at_rest(false);
+    assert!(!trim_c_heap_enabled());
+    set_trim_c_heap(false);
 }
 
 #[test]
@@ -180,6 +189,7 @@ fn allocator_probe_detects_glibc_rejects_foreign_allocators_and_handles_concurre
 fn platform_guard_matches_target_abi_and_coalesces_live_trim() {
     let _guard = OPT_OUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_trim_enabled(true);
+    set_trim_c_heap(false);
 
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
     {
