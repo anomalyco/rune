@@ -26,6 +26,8 @@ pub(crate) use super::page::PageEntry;
 #[cfg(target_os = "android")]
 use super::host::ViewBridge;
 #[cfg(target_os = "android")]
+use super::ime_window::{ImeEdit, ImeWindow, WindowSync};
+#[cfg(target_os = "android")]
 use super::input::TextInputAction;
 #[cfg(target_os = "android")]
 use super::picker::{PickAnswer, PickStep};
@@ -176,6 +178,18 @@ impl PageStack {
     }
 
     #[cfg(target_os = "android")]
+    pub(crate) fn ime_edit(&mut self, edit: ImeEdit) -> bool {
+        let env = self.env;
+        let wake = self.waker.clone();
+        self.top_page_mut().is_some_and(|p| p.ime_edit(edit, env, &wake))
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn ime_window(&self) -> Option<&ImeWindow> {
+        self.top_page().map(AndroidPage::ime_window)
+    }
+
+    #[cfg(target_os = "android")]
     pub(crate) fn key_up(&mut self, ev: KeyEvent) -> bool {
         let env = self.env;
         let wake = self.waker.clone();
@@ -186,6 +200,13 @@ impl PageStack {
     pub(crate) fn finish_composition(&mut self) {
         if let Some(top) = self.top_page_mut() {
             top.finish_composition();
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn clear_ime_window(&mut self) {
+        for page in self.slots.iter_mut().flatten() {
+            page.clear_ime_window();
         }
     }
 
@@ -595,7 +616,7 @@ impl PageStack {
     }
 
     #[cfg(target_os = "android")]
-    pub(crate) fn draw_top(&mut self, surface: &mut AndroidSurface) -> Option<(EmbedFrame, Vec<Haptic>, PickStep, EditorSnapshot)> {
+    pub(crate) fn draw_top(&mut self, surface: &mut AndroidSurface) -> Option<(EmbedFrame, Vec<Haptic>, PickStep, (EditorSnapshot, WindowSync))> {
         let _ = self.pump();
         let top_slot = *self.visible_stack.last()?;
         let env = self.env;
@@ -619,7 +640,7 @@ impl PageStack {
         }
         let editor = self
             .top_page_mut()
-            .map_or(EditorSnapshot::default(), |p| p.sample_editor());
+            .map_or((EditorSnapshot::default(), WindowSync::NONE), |p| p.sample_editor());
         Some((frame, haptics, pick_step, editor))
     }
 

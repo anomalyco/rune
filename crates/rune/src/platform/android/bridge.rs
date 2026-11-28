@@ -14,8 +14,8 @@ use std::sync::{Mutex, OnceLock};
 
 use jni_sys::{
     JNI_EDETACHED, JNI_FALSE, JNI_OK, JNI_TRUE, JNI_VERSION_1_6, JNIEnv, JNINativeMethod, JavaVM,
-    jbyte, jbyteArray, jclass, jint, jlong, jmethodID, jobject, jobjectArray, jsize, jstring,
-    jvalue,
+    jbyte, jbyteArray, jclass, jint, jintArray, jlong, jmethodID, jobject, jobjectArray, jsize,
+    jstring, jvalue,
 };
 
 static JAVA_VM: AtomicPtr<JavaVM> = AtomicPtr::new(ptr::null_mut());
@@ -204,6 +204,30 @@ pub(super) unsafe fn call_void_bool_bool_int_int(
     }
 }
 
+pub(super) unsafe fn call_void_4_ints(
+    env: *mut JNIEnv,
+    obj: jobject,
+    method: jmethodID,
+    a: jint,
+    b: jint,
+    c: jint,
+    d: jint,
+) {
+    let args = [
+        jvalue { i: a },
+        jvalue { i: b },
+        jvalue { i: c },
+        jvalue { i: d },
+    ];
+    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `(IIII)V` method.
+    unsafe {
+        if let Some(call) = (**env).CallVoidMethodA {
+            call(env, obj, method, args.as_ptr());
+            jni_clear_exception(env);
+        }
+    }
+}
+
 unsafe fn jni_delete_local_ref(env: *mut JNIEnv, obj: jobject) {
     if obj.is_null() || env.is_null() {
         return;
@@ -218,7 +242,7 @@ unsafe fn jni_delete_local_ref(env: *mut JNIEnv, obj: jobject) {
 
 /// Encodes a Rust UTF-8 string into a Java `String` via UTF-16 (`NewString`), avoiding
 /// Modified UTF-8 aborts on supplementary-plane emoji and embedded NULs.
-unsafe fn to_jstring(env: *mut JNIEnv, s: &str) -> Option<jstring> {
+pub(super) unsafe fn to_jstring(env: *mut JNIEnv, s: &str) -> Option<jstring> {
     let utf16: Vec<u16> = s.encode_utf16().collect();
     let len = jsize::try_from(utf16.len()).ok()?;
     // SAFETY: `env` is valid; `NewString` reads `len` UTF-16 code units without dereferencing when 0.
@@ -254,6 +278,29 @@ pub(super) unsafe fn from_jstring(env: *mut JNIEnv, jstr: jstring) -> Option<Str
             release(env, jstr, chars);
         }
         Some(out)
+    }
+}
+
+pub(super) unsafe fn to_jint_array(env: *mut JNIEnv, values: &[jint]) -> Option<jintArray> {
+    let len = jsize::try_from(values.len()).ok()?;
+    // SAFETY: `env` is valid; `SetIntArrayRegion` copies `len` ints when non-empty.
+    unsafe {
+        let arr = (**env).NewIntArray?(env, len);
+        if jni_clear_exception(env) || arr.is_null() {
+            return None;
+        }
+        if !values.is_empty() {
+            let Some(set_region) = (**env).SetIntArrayRegion else {
+                jni_delete_local_ref(env, arr);
+                return None;
+            };
+            set_region(env, arr, 0, len, values.as_ptr());
+            if jni_clear_exception(env) {
+                jni_delete_local_ref(env, arr);
+                return None;
+            }
+        }
+        Some(arr)
     }
 }
 

@@ -391,25 +391,108 @@ pub(crate) fn apply_text_input(rt: &mut RuntimeCore, action: TextInputAction) ->
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]
 pub(super) mod jni {
-    use jni_sys::{JNI_FALSE, JNI_TRUE, JNIEnv, jboolean, jint, jobject, jstring};
+    use std::ffi::c_void;
+    use std::ptr;
 
-    use super::{
-        TextInputAction, clamp_delete_count, commit_text_event, composing_text_event,
-        map_editor_action, map_key_event,
+    use jni_sys::{
+        JNI_FALSE, JNI_TRUE, JNIEnv, JNINativeMethod, jboolean, jint, jintArray, jobject, jstring,
     };
+
+    use super::{TextInputAction, map_editor_action, map_key_event};
+    use crate::platform::android::ime_window::ImeEdit;
     use crate::platform::android::{bridge, host};
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_commit_text(
+    pub(in crate::platform::android) fn native_methods() -> Vec<JNINativeMethod> {
+        vec![
+            bridge::jni_method(
+                c"nativeCommitText",
+                c"(Ljava/lang/String;)V",
+                native_commit_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeSetComposingText",
+                c"(Ljava/lang/String;I)V",
+                native_set_composing_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeFinishComposingText",
+                c"()V",
+                native_finish_composing_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeSetComposingRegion",
+                c"(II)V",
+                native_set_composing_region as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeSetSelection",
+                c"(II)V",
+                native_set_selection as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeDeleteSurroundingText",
+                c"(II)V",
+                native_delete_surrounding_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeDeleteSurroundingTextInCodePoints",
+                c"(II)V",
+                native_delete_surrounding_text_in_code_points as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeGetTextBeforeCursor",
+                c"(I)Ljava/lang/String;",
+                native_get_text_before_cursor as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeGetTextAfterCursor",
+                c"(I)Ljava/lang/String;",
+                native_get_text_after_cursor as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeGetSelectedText",
+                c"()Ljava/lang/String;",
+                native_get_selected_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeGetWindowText",
+                c"()Ljava/lang/String;",
+                native_get_window_text as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeGetSelection",
+                c"()[I",
+                native_get_selection as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeEditorAction",
+                c"(I)Z",
+                native_editor_action as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeKeyDown",
+                c"(IIIIZ)Z",
+                native_key_down as *const () as *mut c_void,
+            ),
+            bridge::jni_method(
+                c"nativeKeyUp",
+                c"(IIII)Z",
+                native_key_up as *const () as *mut c_void,
+            ),
+        ]
+    }
+
+    unsafe extern "system" fn native_commit_text(
         env: *mut JNIEnv,
         _this: jobject,
         text: jstring,
     ) {
         // SAFETY: `env` and `text` are valid JNI handles on the UI thread.
         let text = unsafe { bridge::from_jstring(env, text) }.unwrap_or_default();
-        let _ = host::deliver_text_input(env, TextInputAction::Ime(commit_text_event(text)));
+        let _ = host::deliver_ime_edit(env, ImeEdit::CommitText(text));
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_set_composing_text(
+    unsafe extern "system" fn native_set_composing_text(
         env: *mut JNIEnv,
         _this: jobject,
         text: jstring,
@@ -417,33 +500,127 @@ pub(super) mod jni {
     ) {
         // SAFETY: `env` and `text` are valid JNI handles on the UI thread.
         let text = unsafe { bridge::from_jstring(env, text) }.unwrap_or_default();
-        let _ = host::deliver_text_input(
+        let _ = host::deliver_ime_edit(
             env,
-            TextInputAction::Ime(composing_text_event(text, new_cursor_position)),
+            ImeEdit::SetComposingText {
+                text,
+                new_cursor_position,
+            },
         );
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_finish_composing_text(
-        env: *mut JNIEnv,
-        _this: jobject,
-    ) {
-        let _ = host::deliver_text_input(env, TextInputAction::FinishCompositionFromIme);
+    unsafe extern "system" fn native_finish_composing_text(env: *mut JNIEnv, _this: jobject) {
+        let _ = host::deliver_ime_edit(env, ImeEdit::FinishComposingText);
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_delete_surrounding_text(
+    unsafe extern "system" fn native_set_composing_region(
+        env: *mut JNIEnv,
+        _this: jobject,
+        start: jint,
+        end: jint,
+    ) {
+        let _ = host::deliver_ime_edit(env, ImeEdit::SetComposingRegion { start, end });
+    }
+
+    unsafe extern "system" fn native_set_selection(
+        env: *mut JNIEnv,
+        _this: jobject,
+        start: jint,
+        end: jint,
+    ) {
+        let _ = host::deliver_ime_edit(env, ImeEdit::SetSelection { start, end });
+    }
+
+    unsafe extern "system" fn native_delete_surrounding_text(
         env: *mut JNIEnv,
         _this: jobject,
         before: jint,
         after: jint,
     ) {
-        let before = clamp_delete_count(before);
-        let after = clamp_delete_count(after);
-        if before > 0 || after > 0 {
-            let _ = host::deliver_text_input(env, TextInputAction::DeleteSurrounding { before, after });
-        }
+        let _ = host::deliver_ime_edit(
+            env,
+            ImeEdit::DeleteSurrounding {
+                before,
+                after,
+                in_code_points: false,
+            },
+        );
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_editor_action(
+    unsafe extern "system" fn native_delete_surrounding_text_in_code_points(
+        env: *mut JNIEnv,
+        _this: jobject,
+        before: jint,
+        after: jint,
+    ) {
+        let _ = host::deliver_ime_edit(
+            env,
+            ImeEdit::DeleteSurrounding {
+                before,
+                after,
+                in_code_points: true,
+            },
+        );
+    }
+
+    unsafe fn return_opt_jstring(env: *mut JNIEnv, text: Option<String>) -> jstring {
+        let Some(s) = text else {
+            return ptr::null_mut();
+        };
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { bridge::to_jstring(env, &s) }.unwrap_or(ptr::null_mut())
+    }
+
+    unsafe extern "system" fn native_get_text_before_cursor(
+        env: *mut JNIEnv,
+        _this: jobject,
+        n: jint,
+    ) -> jstring {
+        let text = host::query_ime_window(|w| w.text_before_cursor(n)).flatten();
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { return_opt_jstring(env, text) }
+    }
+
+    unsafe extern "system" fn native_get_text_after_cursor(
+        env: *mut JNIEnv,
+        _this: jobject,
+        n: jint,
+    ) -> jstring {
+        let text = host::query_ime_window(|w| w.text_after_cursor(n)).flatten();
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { return_opt_jstring(env, text) }
+    }
+
+    unsafe extern "system" fn native_get_selected_text(
+        env: *mut JNIEnv,
+        _this: jobject,
+    ) -> jstring {
+        let text = host::query_ime_window(|w| w.selected_text()).flatten();
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { return_opt_jstring(env, text) }
+    }
+
+    unsafe extern "system" fn native_get_window_text(
+        env: *mut JNIEnv,
+        _this: jobject,
+    ) -> jstring {
+        let text = host::query_ime_window(|w| w.window_text()).flatten();
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { return_opt_jstring(env, text) }
+    }
+
+    unsafe extern "system" fn native_get_selection(
+        env: *mut JNIEnv,
+        _this: jobject,
+    ) -> jintArray {
+        let Some(sel) = host::query_ime_window(|w| w.selection_state()).flatten() else {
+            return ptr::null_mut();
+        };
+        // SAFETY: `env` is a valid UI-thread `JNIEnv*`.
+        unsafe { bridge::to_jint_array(env, &sel.to_array()) }.unwrap_or(ptr::null_mut())
+    }
+
+    unsafe extern "system" fn native_editor_action(
         env: *mut JNIEnv,
         _this: jobject,
         action_code: jint,
@@ -458,7 +635,7 @@ pub(super) mod jni {
         }
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_key_down(
+    unsafe extern "system" fn native_key_down(
         env: *mut JNIEnv,
         _this: jobject,
         key_code: jint,
@@ -483,7 +660,7 @@ pub(super) mod jni {
         }
     }
 
-    pub(in crate::platform::android) unsafe extern "system" fn native_key_up(
+    unsafe extern "system" fn native_key_up(
         env: *mut JNIEnv,
         _this: jobject,
         key_code: jint,
