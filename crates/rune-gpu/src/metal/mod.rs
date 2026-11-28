@@ -135,6 +135,9 @@ pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
 /// The most immediate data a pipeline takes: what `setVertexBytes` and `setFragmentBytes` copy.
 const MAX_IMMEDIATE_SIZE: u32 = 4096;
 
+/// Whether `instance` is this backend's.
+pub fn owns_instance(instance: &wgpu::Instance) -> bool { instance.as_custom::<MetalInstance>().is_some() }
+
 /// Whether `adapter` is this backend's.
 pub(crate) fn owns_adapter(adapter: &wgpu::Adapter) -> bool { adapter.as_custom::<MetalAdapter>().is_some() }
 
@@ -218,7 +221,16 @@ impl InstanceInterface for MetalInstance {
         Ok(unsafe { surface::create(target) })
     }
     fn request_adapter(&self, options: &wgpu::RequestAdapterOptions<'_, '_>) -> Pin<Box<dyn RequestAdapterFuture>> {
-        let device = preferred(devices(), options.power_preference).expect("Rune's Metal backend needs a Metal device");
+        let Some(device) = preferred(devices(), options.power_preference) else {
+            return Box::pin(ready(Err(wgpu::RequestAdapterError::NotFound {
+                active_backends: wgpu::Backends::METAL,
+                requested_backends: wgpu::Backends::METAL,
+                supported_backends: wgpu::Backends::METAL,
+                no_fallback_backends: wgpu::Backends::empty(),
+                no_adapter_backends: wgpu::Backends::METAL,
+                incompatible_surface_backends: wgpu::Backends::empty(),
+            })));
+        };
         Box::pin(ready(Ok(DispatchAdapter::custom(MetalAdapter { device }))))
     }
     fn poll_all_devices(&self, _: bool) -> bool { true }
@@ -267,8 +279,9 @@ fn limits() -> wgpu::Limits {
 
 impl AdapterInterface for MetalAdapter {
     fn request_device(&self, desc: &wgpu::DeviceDescriptor<'_>) -> Pin<Box<dyn RequestDeviceFuture>> {
-        let (device, queue) = device::new(self.device.clone(), desc);
-        Box::pin(ready(Ok((DispatchDevice::custom(device), DispatchQueue::custom(queue)))))
+        Box::pin(ready(device::new(self.device.clone(), desc).map(|(device, queue)| {
+            (DispatchDevice::custom(device), DispatchQueue::custom(queue))
+        })))
     }
     fn is_surface_supported(&self, _: &DispatchSurface) -> bool { true }
     fn features(&self) -> wgpu::Features {

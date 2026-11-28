@@ -59,12 +59,43 @@ fn env() -> Option<String> {
     rune_core::env::var("RUNE_GPU_BACKEND")
 }
 
+/// Reason Rune's native Metal backend could not initialize on this host (for example, a driver
+/// without `MTLSharedEvent`). Once latched, subsequent GPUs draw with wgpu directly.
+static UNAVAILABLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Whether `instance` is Rune's native Metal backend's.
+pub fn native_instance(instance: &wgpu::Instance) -> bool {
+    #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+    return crate::metal::owns_instance(instance);
+    #[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
+    {
+        let _ = instance;
+        false
+    }
+}
+
+/// Latches that Rune's native Metal backend could not initialize on this host (for example, a
+/// driver without `MTLSharedEvent`) so subsequent GPUs draw with wgpu directly. Logs once.
+pub fn mark_metal_unavailable(reason: impl Into<String>) {
+    let reason = reason.into();
+    if UNAVAILABLE.set(reason.clone()).is_ok() {
+        eprintln!("rune: Rune's Metal backend could not initialize ({reason}); drawing with wgpu");
+    }
+}
+
+/// Why Rune's native Metal backend was latched unavailable on this host, if it was.
+pub fn unavailable_reason() -> Option<&'static str> {
+    UNAVAILABLE.get().map(String::as_str)
+}
+
 /// The backend GPUs are made with: `RUNE_GPU_BACKEND` (`wgpu` or `metal`) over the app's
 /// choice, over the default.
 pub fn current() -> GpuBackend {
-    let backend = gate(resolve(env().as_deref(), chosen()), os_major());
+    let requested = resolve(env().as_deref(), chosen());
+    let unavailable = UNAVAILABLE.get().is_some();
+    let backend = gate(requested, os_major(), unavailable);
     #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
-    if backend == GpuBackend::Wgpu && resolve(env().as_deref(), chosen()) == GpuBackend::Metal && !defaulted(env().as_deref(), chosen()) {
+    if backend == GpuBackend::Wgpu && requested == GpuBackend::Metal && !unavailable && !defaulted(env().as_deref(), chosen()) {
         static SAID: std::sync::Once = std::sync::Once::new();
         SAID.call_once(|| eprintln!("rune: Rune's Metal backend needs macOS {MACOS_FLOOR} or iOS {IOS_FLOOR}; drawing with wgpu"));
     }
@@ -76,9 +107,13 @@ pub fn current() -> GpuBackend {
 const MACOS_FLOOR: u32 = 13;
 const IOS_FLOOR: u32 = 16;
 
-/// `backend`, or wgpu when it is the native one and the OS (`os_major`) is older than it runs on.
-/// An unknown version (`None`) keeps `backend`.
-fn gate(backend: GpuBackend, os_major: Option<u32>) -> GpuBackend {
+/// `backend`, or wgpu when it is the native one and either the host driver failed native Metal
+/// initialization (`unavailable`) or the OS (`os_major`) is older than it runs on. An unknown
+/// version (`None`) keeps `backend` unless `unavailable`.
+fn gate(backend: GpuBackend, os_major: Option<u32>, unavailable: bool) -> GpuBackend {
+    if backend == GpuBackend::Metal && unavailable {
+        return GpuBackend::Wgpu;
+    }
     let floor = if cfg!(target_os = "ios") { IOS_FLOOR } else { MACOS_FLOOR };
     match os_major {
         Some(major) if backend == GpuBackend::Metal && major < floor => GpuBackend::Wgpu,
@@ -181,17 +216,7 @@ fn reason(native: bool) -> String {
     {
         let (env, chosen) = (env(), chosen());
         let missing = *MISSING.lock().unwrap_or_else(|e| e.into_inner());
-        return match (native, env.as_deref(), chosen) {
-            (true, Some("metal"), _) => "RUNE_GPU_BACKEND=metal".into(),
-            (true, _, Some(GpuBackend::Metal)) => "App::gpu_backend chose it".into(),
-            (true, ..) => "the default".into(),
-            (false, Some("wgpu"), _) => "RUNE_GPU_BACKEND=wgpu".into(),
-            (false, _, Some(GpuBackend::Wgpu)) => "App::gpu_backend chose it".into(),
-            (false, ..) if DEFAULT == GpuBackend::Wgpu => "the default here".into(),
-            (false, ..) if gate(GpuBackend::Metal, os_major()) == GpuBackend::Wgpu => format!("Rune's Metal backend needs macOS {MACOS_FLOOR} or iOS {IOS_FLOOR}"),
-            (false, ..) if !missing.is_empty() => format!("a compositor wants {missing}, which Rune's Metal backend lacks"),
-            (false, ..) => String::new(),
-        };
+        return reason_for(native, env.as_deref(), chosen, DEFAULT, os_major(), unavailable_reason(), missing);
     }
     #[cfg(all(target_vendor = "apple", not(feature = "metal-backend")))]
     return if native { String::new() } else { "Rune's metal-backend feature is off".into() };
@@ -199,6 +224,39 @@ fn reason(native: bool) -> String {
     {
         let _ = native;
         String::new()
+    }
+}
+
+#[cfg_attr(not(any(test, all(target_vendor = "apple", feature = "metal-backend"))), allow(dead_code))]
+fn reason_for(
+    native: bool,
+    env: Option<&str>,
+    chosen: Option<GpuBackend>,
+    default_backend: GpuBackend,
+    os_major: Option<u32>,
+    unavailable: Option<&str>,
+    missing: wgpu::Features,
+) -> String {
+    let requested = match env {
+        Some("metal") => GpuBackend::Metal,
+        Some("wgpu") => GpuBackend::Wgpu,
+        _ => chosen.unwrap_or(default_backend),
+    };
+    match (native, env, chosen) {
+        (true, Some("metal"), _) => "RUNE_GPU_BACKEND=metal".into(),
+        (true, _, Some(GpuBackend::Metal)) => "App::gpu_backend chose it".into(),
+        (true, ..) => "the default".into(),
+        (false, Some("wgpu"), _) => "RUNE_GPU_BACKEND=wgpu".into(),
+        (false, _, Some(GpuBackend::Wgpu)) => "App::gpu_backend chose it".into(),
+        (false, ..) if requested == GpuBackend::Wgpu => "the default here".into(),
+        (false, ..) if gate(GpuBackend::Metal, os_major, false) == GpuBackend::Wgpu => {
+            format!("Rune's Metal backend needs macOS {MACOS_FLOOR} or iOS {IOS_FLOOR}")
+        }
+        (false, ..) if unavailable.is_some() => {
+            format!("Rune's Metal backend unavailable: {}", unavailable.unwrap_or_default())
+        }
+        (false, ..) if !missing.is_empty() => format!("a compositor wants {missing}, which Rune's Metal backend lacks"),
+        (false, ..) => String::new(),
     }
 }
 
@@ -230,17 +288,54 @@ fn defaulted(env: Option<&str>, chosen: Option<GpuBackend>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT, GpuBackend, defaulted, gate, resolve};
+    use super::{DEFAULT, GpuBackend, defaulted, gate, reason_for, resolve};
 
     #[test]
     fn the_native_backend_falls_back_to_wgpu_below_its_os_floor() {
         let floor = if cfg!(target_os = "ios") { 16 } else { 13 };
-        assert_eq!(gate(GpuBackend::Metal, Some(floor - 2)), GpuBackend::Wgpu, "macOS 11 / iOS 14");
-        assert_eq!(gate(GpuBackend::Metal, Some(floor - 1)), GpuBackend::Wgpu, "macOS 12 / iOS 15");
-        assert_eq!(gate(GpuBackend::Metal, Some(floor)), GpuBackend::Metal);
-        assert_eq!(gate(GpuBackend::Metal, Some(26)), GpuBackend::Metal);
-        assert_eq!(gate(GpuBackend::Metal, None), GpuBackend::Metal, "an unknown version keeps the choice");
-        assert_eq!(gate(GpuBackend::Wgpu, Some(11)), GpuBackend::Wgpu);
+        assert_eq!(gate(GpuBackend::Metal, Some(floor - 2), false), GpuBackend::Wgpu, "macOS 11 / iOS 14");
+        assert_eq!(gate(GpuBackend::Metal, Some(floor - 1), false), GpuBackend::Wgpu, "macOS 12 / iOS 15");
+        assert_eq!(gate(GpuBackend::Metal, Some(floor), false), GpuBackend::Metal);
+        assert_eq!(gate(GpuBackend::Metal, Some(26), false), GpuBackend::Metal);
+        assert_eq!(gate(GpuBackend::Metal, None, false), GpuBackend::Metal, "an unknown version keeps the choice");
+        assert_eq!(gate(GpuBackend::Wgpu, Some(11), false), GpuBackend::Wgpu);
+    }
+
+    #[test]
+    fn the_native_backend_falls_back_to_wgpu_when_latched_unavailable() {
+        let floor = if cfg!(target_os = "ios") { 16 } else { 13 };
+        assert_eq!(gate(GpuBackend::Metal, Some(floor), true), GpuBackend::Wgpu);
+        assert_eq!(gate(GpuBackend::Metal, Some(26), true), GpuBackend::Wgpu);
+        assert_eq!(gate(GpuBackend::Metal, None, true), GpuBackend::Wgpu);
+        assert_eq!(gate(GpuBackend::Wgpu, Some(26), true), GpuBackend::Wgpu);
+    }
+
+    #[test]
+    fn describe_reason_reports_unavailable_native_metal_even_when_app_or_env_chose_metal() {
+        let floor = if cfg!(target_os = "ios") { 16 } else { 13 };
+        let why = Some("Metal device does not support MTLSharedEvent");
+        let empty = wgpu::Features::empty();
+        assert_eq!(
+            reason_for(false, None, Some(GpuBackend::Metal), GpuBackend::Metal, Some(floor + 1), why, empty),
+            "Rune's Metal backend unavailable: Metal device does not support MTLSharedEvent",
+        );
+        assert_eq!(
+            reason_for(false, None, None, GpuBackend::Metal, Some(floor + 1), why, empty),
+            "Rune's Metal backend unavailable: Metal device does not support MTLSharedEvent",
+        );
+        assert_eq!(
+            reason_for(false, Some("metal"), None, GpuBackend::Wgpu, Some(floor + 1), why, empty),
+            "Rune's Metal backend unavailable: Metal device does not support MTLSharedEvent",
+        );
+        // Explicit wgpu opt-out keeps its own reason even if Metal was latched unavailable.
+        assert_eq!(
+            reason_for(false, Some("wgpu"), Some(GpuBackend::Metal), GpuBackend::Metal, Some(floor + 1), why, empty),
+            "RUNE_GPU_BACKEND=wgpu",
+        );
+        assert_eq!(
+            reason_for(false, None, Some(GpuBackend::Wgpu), GpuBackend::Metal, Some(floor + 1), why, empty),
+            "App::gpu_backend chose it",
+        );
     }
 
     #[test]

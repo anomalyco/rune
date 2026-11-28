@@ -64,7 +64,32 @@ impl Gpu {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn try_picked(mut instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
+    fn try_picked(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
+        let fallback = surface.is_none() && crate::gpu::backend::native_instance(&instance);
+        Self::try_picked_with_fallback(instance, surface, wanted, translucent, presented, fallback, Self::fallback_from_native_metal)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn try_picked_with_fallback(
+        instance: wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        wanted: wgpu::Features,
+        translucent: bool,
+        presented: bool,
+        can_switch_backend: bool,
+        switch_backend: impl FnOnce(&str) -> wgpu::Instance,
+    ) -> Result<Gpu, String> {
+        match Self::try_picked_once(instance, surface, wanted, translucent, presented) {
+            Ok(gpu) => Ok(gpu),
+            Err(error) if can_switch_backend => {
+                Self::try_picked_once(switch_backend(&error), None, wanted, translucent, presented)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_picked_once(mut instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, wanted: wgpu::Features, translucent: bool, presented: bool) -> Result<Gpu, String> {
         use crate::gpu::fallback::{self, Candidate, Effect, Event, Failure, Policy, State};
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         // D3D12 keeps one device per adapter in a process: while a removed one is still held, a
@@ -94,72 +119,47 @@ impl Gpu {
         let mut adapters: Vec<wgpu::Adapter> = Vec::new();
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut widened = false;
+        let enumerate = |inst: &wgpu::Instance, tried: &[Candidate]| {
+            let list = pollster::block_on(inst.enumerate_adapters(wgpu::Backends::all()));
+            let cands: Vec<_> = list.iter().enumerate().map(|(i, o)| Self::candidate_info(i, o, surface)).collect();
+            let ordered = fallback::order_fallbacks(tried, &cands, &crate::gpu::pick::display_devices(), compositor.as_deref(), translucent);
+            (list, cands, ordered)
+        };
         loop {
             let mut next_event = None;
             for effect in fallback::step(&mut state, event) {
                 match effect {
                     Effect::EnumerateFallbacks => {
-                        adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-                        candidates = adapters
-                            .iter()
-                            .enumerate()
-                            .map(|(i, other)| Self::candidate_info(i, other, surface))
-                            .collect();
-                        let ordered = fallback::order_fallbacks(
-                            &tried,
-                            &candidates,
-                            &crate::gpu::pick::display_devices(),
-                            compositor.as_deref(),
-                            translucent,
-                        );
+                        let ordered;
+                        (adapters, candidates, ordered) = enumerate(&instance, &tried);
                         next_event = Some(Event::Candidates(ordered));
                     }
-                    Effect::TryCandidate(index) => {
-                        let other = &adapters[index];
-                        match Self::device_on(other, wanted) {
-                            Ok((device, queue)) => {
-                                let info = other.get_info();
-                                let first_error = state.first_error().unwrap_or("");
-                                eprintln!(
-                                    "rune: {} ({:?}) made no device ({first_error}); falling back to {} ({:?}, {:?})",
-                                    first_info.name, first_info.backend, info.name, info.backend, info.device_type
-                                );
-                                crate::native_surface::note_device(&device, draws_surfaces);
-                                return Ok(Gpu::made(instance, other.clone(), device, queue, draws_surfaces));
-                            }
-                            Err(error) => {
-                                tried.push(candidates[index].clone());
-                                next_event = Some(Event::Failed { kind: Failure::DeviceCreate, error });
-                            }
+                    Effect::TryCandidate(index) => match Self::device_on(&adapters[index], wanted) {
+                        Ok((device, queue)) => {
+                            let info = adapters[index].get_info();
+                            let first_error = state.first_error().unwrap_or("");
+                            eprintln!(
+                                "rune: {} ({:?}) made no device ({first_error}); falling back to {} ({:?}, {:?})",
+                                first_info.name, first_info.backend, info.name, info.backend, info.device_type
+                            );
+                            crate::native_surface::note_device(&device, draws_surfaces);
+                            return Ok(Gpu::made(instance, adapters[index].clone(), device, queue, draws_surfaces));
                         }
-                    }
+                        Err(error) => {
+                            tried.push(candidates[index].clone());
+                            next_event = Some(Event::Failed { kind: Failure::DeviceCreate, error });
+                        }
+                    },
                     Effect::FinishOk { .. } => unreachable!("unexpected fallback effect in try_picked"),
                     Effect::FinishErr(error) => {
-                        if surface.is_none()
-                            && !widened
-                            && policy == Policy::Automatic
-                            && Self::is_direct_driver_instance(&instance)
-                        {
+                        if surface.is_none() && !widened && policy == Policy::Automatic && Self::is_direct_driver_instance(&instance) {
                             widened = true;
                             Self::mark_direct_vulkan_bypassed();
-                            eprintln!(
-                                "rune: direct Vulkan driver made no device ({error}); retrying with all installed Vulkan drivers"
-                            );
+                            eprintln!("rune: direct Vulkan driver made no device ({error}); retrying with all installed Vulkan drivers");
                             // Already holding `GPU_INIT`; build/fetch the unlimited instance directly.
                             instance = Self::wgpu_instance_on(wgpu::Backends::all(), true);
-                            adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-                            candidates = adapters
-                                .iter()
-                                .enumerate()
-                                .map(|(i, other)| Self::candidate_info(i, other, surface))
-                                .collect();
-                            let ordered = fallback::order_fallbacks(
-                                &tried,
-                                &candidates,
-                                &crate::gpu::pick::display_devices(),
-                                compositor.as_deref(),
-                                translucent,
-                            );
+                            let ordered;
+                            (adapters, candidates, ordered) = enumerate(&instance, &tried);
                             state = State::need_fallbacks(error);
                             next_event = Some(Event::Candidates(ordered));
                             continue;
