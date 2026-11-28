@@ -147,6 +147,11 @@ fn check_project(manifest: &Path, rune_manifest: Option<&Path>) -> usize {
     ) {
         let lock_path = meta.workspace_root.join("Cargo.lock");
         let lock_text = fs::read_to_string(&lock_path).ok();
+        if lock_text.is_none() {
+            println!(
+                "[info] lockfile: no Cargo.lock yet (run `cargo generate-lockfile` or `rune dev` to generate one)"
+            );
+        }
         match combine_workspace_and_crate_if_needed(
             &ws_manifest,
             &ws_text,

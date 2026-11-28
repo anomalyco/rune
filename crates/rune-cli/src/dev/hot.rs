@@ -1,5 +1,6 @@
 //! Guarded live hot-patching loop powered by Dioxus CLI (`dx`) and the embedded AST guard.
 
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::Command;
 use std::thread;
@@ -193,6 +194,54 @@ pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
     args
 }
 
+/// Ensures `<workspace_root>/Cargo.lock` exists before mirroring and spawning `dx`.
+///
+/// Stock `dx` aborts `cargo metadata` after ~200 s with a misleading `--offline` hint when a
+/// project has no `Cargo.lock` and must resolve a full dependency graph from scratch. Generating
+/// the lockfile up front lets Cargo stream its real progress and diagnostics without any hidden
+/// timeout, and lets `sync_mirror` stage `Cargo.lock` so `dx`'s `cargo metadata` finishes in
+/// seconds.
+pub fn ensure_workspace_lockfile(
+    manifest_path: &Path,
+    workspace_root: &Path,
+) -> Result<bool, CliError> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    ensure_workspace_lockfile_with(&cargo, manifest_path, workspace_root)
+}
+
+/// Testable implementation of `ensure_workspace_lockfile` using an explicit `cargo` binary.
+pub fn ensure_workspace_lockfile_with(
+    cargo_bin: &OsStr,
+    manifest_path: &Path,
+    workspace_root: &Path,
+) -> Result<bool, CliError> {
+    if workspace_root.join("Cargo.lock").is_file() {
+        return Ok(false);
+    }
+    println!(
+        "rune dev: no Cargo.lock in {}; running `cargo generate-lockfile` before starting dx...",
+        workspace_root.display()
+    );
+    let status = Command::new(cargo_bin)
+        .arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .current_dir(workspace_root)
+        .status()
+        .map_err(|err| CliError::new(format!("failed to invoke cargo generate-lockfile: {err}")))?;
+    if status.success() {
+        Ok(true)
+    } else {
+        let code = status.code().unwrap_or(1);
+        Err(CliError::with_code(
+            format!(
+                "cargo generate-lockfile failed (status {code}); fix the manifest or network/registry issue above and retry (passing --offline only works when all dependencies are already cached locally)"
+            ),
+            code,
+        ))
+    }
+}
+
 /// Runs the guarded hot-patching loop with a fixed config.
 pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> {
     let initial = cfg.clone();
@@ -243,6 +292,8 @@ where
         if std::mem::take(&mut clear_fingerprints_next) {
             clear_manifest_fingerprints(&target_dir, HOT_PROFILE_NAME, &cfg.package);
         }
+
+        ensure_workspace_lockfile(&cfg.meta.manifest_path, &cfg.meta.workspace_root)?;
 
         let layout = discover_layout(&cfg.meta.manifest_path)?;
         let sources = layout.source_entries();
