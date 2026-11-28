@@ -52,11 +52,9 @@ mod host {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) type Tracking = ();
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn show(_: &Arc<Window>, _: Show, _: Rc<Session>, _: Option<Waker>) -> bool { false }
+    pub(super) fn show(_: &Arc<Window>, _: Show, _: bool, _: Rc<Session>, _: Option<Waker>) -> bool { false }
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn stop(_: Tracking) {}
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn scheme(_: bool) {}
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn start(_: Waker) {}
 }
@@ -620,9 +618,9 @@ impl Presenter {
             redraw = true;
             if let (Some(show), Some(window)) = (show, window) {
                 // As dark as what the window draws, which may not be the system's appearance.
-                host::scheme(rt.backdrop_dark().unwrap_or(rt.env.system_dark));
+                let dark = rt.backdrop_dark().unwrap_or(rt.env.system_dark);
                 let session = Rc::new(Session::default());
-                if host::show(window, show, session.clone(), self.wake.clone()) {
+                if host::show(window, show, dark, session.clone(), self.wake.clone()) {
                     self.session = Some(session);
                     return true;
                 }

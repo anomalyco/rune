@@ -616,7 +616,11 @@ impl OverlayCore {
             use winit::platform::macos::WindowAttributesExtMacOS;
             attrs = attrs.with_has_shadow(false);
         }
-        let window = match event_loop.create_window(attrs) {
+        #[cfg(target_os = "windows")]
+        let created = crate::platform::win32::dark_mode::with_system_theme_query(|| event_loop.create_window(attrs));
+        #[cfg(not(target_os = "windows"))]
+        let created = event_loop.create_window(attrs);
+        let window = match created {
             Ok(window) => Arc::new(window),
             Err(error) => {
                 self.fail(app, format!("could not create its window: {error}"));

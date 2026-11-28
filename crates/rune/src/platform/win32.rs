@@ -371,17 +371,19 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             input.clicks.borrow_mut().push_back((down, point));
         }
         WM_CAPTURECHANGED => input.captured.set(false),
-        WM_SETTINGCHANGE if dark_mode::should_refresh_color_policy(lparam) => {
-            dark_mode::refresh_color_policy();
-        }
         _ => {}
     }
+    let refresh_theme = message == WM_SETTINGCHANGE && dark_mode::should_refresh_color_policy(lparam);
     #[cfg(feature = "windows-system-material")]
     if matches!(message, WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED) {
         crate::system_material::windows::notify_wm_setting_change();
     }
     // SAFETY: forwards the unhandled message to the next procedure in this window's subclass chain.
-    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    if refresh_theme {
+        dark_mode::with_system_theme_query_and_flush(|| unsafe { DefSubclassProc(hwnd, message, wparam, lparam) })
+    } else {
+        unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    }
 }
 
 /// Per-window input owner; the shared low-level hook observes but never consumes events.

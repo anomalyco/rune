@@ -89,6 +89,11 @@ impl Host {
                 (*done, *readback, *paused, *since) = (None, None, true, now);
             }
             if self.life.shown() {
+                let menu_scheme = match self.args.theme.as_deref() {
+                    Some("light") => crate::ColorScheme::Light,
+                    Some("dark") => crate::ColorScheme::Dark,
+                    _ => self.color_scheme.effective_for_window(crate::window::app_color_scheme()),
+                };
                 sync_platform_core(
                     l,
                     self.app.rt_mut(),
@@ -96,6 +101,7 @@ impl Host {
                     &mut self.ime,
                     self.ime_waits,
                     &self.clipboard,
+                    menu_scheme,
                 );
                 crate::haptics::flush_live(self.app.rt_mut(), self.life.uncovered() && !l.minimized());
                 if self.app.rt_mut().take_urgent_frame() && !l.backing_off(now) {
@@ -444,6 +450,8 @@ impl Host {
                 self.app.window_focus(focused);
                 // The key window's App takes the menu bar, so its items act in this window.
                 if focused { self.menus.claim(); }
+                #[cfg(target_os = "windows")]
+                if focused { self.sync_windows_menu_theme(); }
                 self.shell(event_loop);
                 if self.life.finished() || self.win.is_none() { return; }
             }

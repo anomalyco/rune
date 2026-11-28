@@ -432,7 +432,7 @@ impl super::OverlayCore {
         if let Some(p) = super::placement::position(event_loop, self.at, &self.options) {
             attrs = attrs.with_position(p);
         }
-        let window = match event_loop.create_window(attrs) {
+        let window = match crate::platform::win32::dark_mode::with_system_theme_query(|| event_loop.create_window(attrs)) {
             Ok(window) => std::sync::Arc::new(window),
             Err(error) => {
                 self.fail(app, format!("could not create its window: {error}"));
