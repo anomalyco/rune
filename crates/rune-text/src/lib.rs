@@ -16,8 +16,7 @@ use std::rc::Rc;
 use parley::fontique::{Collection, CollectionOptions, FallbackKey, FamilyId, Script, SourceCache};
 use parley::{Alignment, FontContext, FontFamilyName, FontStyle, FontWeight, Layout, LayoutContext, PositionedLayoutItem};
 use swash::FontRef;
-use swash::scale::image::Content;
-use swash::scale::{Render, ScaleContext, Source, StrikeWith};
+use swash::scale::ScaleContext;
 
 use rune_core::color::Color;
 use rune_core::{HashMap as FxHashMap, HashSet as FxHashSet};
@@ -281,22 +280,6 @@ use raster::{macos, support, windfoil, windows};
 
 /// Lean of a synthetic oblique, in degrees, for faces with no italic.
 const SYNTHETIC_OBLIQUE: u8 = 12;
-
-/// The colour image of `glyph` (COLR layers or an embedded bitmap scaled to size), or None
-/// when the font draws it as an outline.
-fn rasterize_color(scaler: &mut swash::scale::Scaler<'_>, glyph: u16) -> Option<(rune_image::pixels::Pixels, swash::zeno::Placement)> {
-    if !scaler.has_color_bitmaps() && !scaler.has_color_outlines() {
-        return None;
-    }
-    let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit)]).render(scaler, glyph)?;
-    let (w, h) = (image.placement.width, image.placement.height);
-    if image.content != Content::Color || w == 0 || h == 0 || image.data.len() != (w * h * 4) as usize {
-        return None;
-    }
-    let pixels = rune_image::pixels::Pixels::new();
-    pixels.set(w, h, image.data);
-    Some((pixels, image.placement))
-}
 
 // ---------------------------------------------------------------------------------------------
 
@@ -944,6 +927,9 @@ impl TextSystem {
 
 #[cfg(all(test, target_os = "macos"))]
 mod core_text_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod emoji_tests;
 
 #[cfg(test)]
 mod quality_tests;
