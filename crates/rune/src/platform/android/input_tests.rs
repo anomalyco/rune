@@ -2,9 +2,9 @@
 //! and end-to-end `InputConnection` text editing through `Runtime` and `ImeSync`.
 
 use crate::edit::{Ime, TextEdit};
-use crate::input::host_events::{ImeSync, ime_sync_step};
 use crate::{Cx, El, Env, Key, KeyEvent, MediaKey, Mods, Runtime, TextStyle, col, text_input};
 
+use super::editor::{EditorConfig, sample_editor};
 use super::input::*;
 use super::machine::{self, Effect, Event, State};
 
@@ -240,7 +240,6 @@ fn make_form_runtime() -> Runtime<FormState> {
 #[test]
 fn end_to_end_input_connection_flow_and_ime_sync_on_host() {
     let mut rt = make_form_runtime();
-    let mut ime_sync = ImeSync::default();
     let mut host = State::default();
     let _ = machine::step(&mut host, Event::Resumed);
     let _ = machine::step(
@@ -254,30 +253,37 @@ fn end_to_end_input_connection_flow_and_ime_sync_on_host() {
     );
     let _ = machine::step(&mut host, Event::Frame);
 
-    // Before focusing a field, ImeSync keeps IME disabled.
-    let step = ime_sync_step(rt.core_mut(), &mut ime_sync, host.resumed);
-    assert_eq!(step.set_allowed, None);
-    assert!(!host.ime_enabled);
+    // Before focusing a field, editor sampling keeps IME disabled.
+    let snap = sample_editor(rt.core_mut());
+    assert_eq!(snap.config, None);
+    assert_eq!(host.ime_editor, None);
 
-    // Focus the first text field -> ImeSync enables IME and host state machine shows keyboard.
+    // Focus the first text field -> host state machine shows keyboard.
     rt.pointer_down(20.0, 18.0);
     rt.pointer_up(20.0, 18.0);
     rt.frame(0.016);
-    let step = ime_sync_step(rt.core_mut(), &mut ime_sync, host.resumed);
-    assert_eq!(step.set_allowed, Some(true));
+    let snap = sample_editor(rt.core_mut());
+    assert_eq!(snap.config, Some(EditorConfig::default_multiline()));
     let effects: Vec<_> = machine::step(
         &mut host,
         Event::FrameDone {
             animating: false,
             wake_after_secs: None,
-            ime_allowed: step.set_allowed,
-            ime_restart: step.cancel,
+            editor: snap.config,
+            ime_restart: snap.reset,
+            field_tap: snap.field_tap,
         },
     )
     .into_iter()
     .collect();
-    assert_eq!(effects, [Effect::SetImeEnabled { enabled: true, restart: true }]);
-    assert!(host.ime_enabled);
+    assert_eq!(
+        effects,
+        [Effect::SetIme {
+            editor: Some(EditorConfig::default_multiline()),
+            restart: true,
+        }],
+    );
+    assert!(host.ime_editor.is_some());
 
     // 1. setComposingText -> preedit appears without committing yet.
     assert!(apply_text_input(
@@ -310,9 +316,9 @@ fn end_to_end_input_connection_flow_and_ime_sync_on_host() {
     rt.frame(0.016);
     assert_eq!(rt.state.first.text, "hello 👋!");
     assert_eq!(rt.state.first.preedit(), None);
-    let step = ime_sync_step(rt.core_mut(), &mut ime_sync, host.resumed);
-    assert!(!step.cancel, "finishComposingText from IME must not request restartInput");
-    assert_eq!(step.set_allowed, None);
+    let snap = sample_editor(rt.core_mut());
+    assert!(!snap.reset, "finishComposingText from IME must not request restartInput");
+    assert_eq!(snap.config, Some(EditorConfig::default_multiline()));
 
     // 4. deleteSurroundingText removes characters before and after the caret.
     assert!(apply_text_input(
@@ -356,24 +362,25 @@ fn end_to_end_input_connection_flow_and_ime_sync_on_host() {
     rt.frame(0.016);
     assert_eq!(rt.state.second.text, "second");
 
-    // 8. Blurring (Escape or tapping outside) closes the keyboard via ImeSync.
+    // 8. Blurring (Escape or tapping outside) closes the keyboard.
     rt.key(KeyEvent::from(Key::Escape));
     rt.frame(0.016);
-    let step = ime_sync_step(rt.core_mut(), &mut ime_sync, host.resumed);
-    assert_eq!(step.set_allowed, Some(false));
+    let snap = sample_editor(rt.core_mut());
+    assert_eq!(snap.config, None);
     let effects: Vec<_> = machine::step(
         &mut host,
         Event::FrameDone {
             animating: false,
             wake_after_secs: None,
-            ime_allowed: step.set_allowed,
-            ime_restart: step.cancel,
+            editor: snap.config,
+            ime_restart: snap.reset,
+            field_tap: snap.field_tap,
         },
     )
     .into_iter()
     .collect();
-    assert_eq!(effects, [Effect::SetImeEnabled { enabled: false, restart: true }]);
-    assert!(!host.ime_enabled);
+    assert_eq!(effects, [Effect::SetIme { editor: None, restart: true }]);
+    assert_eq!(host.ime_editor, None);
 }
 
 #[test]

@@ -4,6 +4,7 @@
 //! Every mode is encoded explicitly in [`State`] and [`Surface`]; [`step`] returns declarative
 //! [`Effect`]s instead of performing JNI or GPU work directly.
 
+use super::editor::EditorConfig;
 use super::touch;
 use crate::TouchPhase;
 use crate::machine::Effects;
@@ -38,8 +39,8 @@ pub(crate) struct State {
     /// System long-press delay in seconds from `ViewConfiguration.getLongPressTimeout()`,
     /// when positive (`None` keeps Rune's 0.5 s default).
     pub(crate) long_press_secs: Option<f64>,
-    /// Whether `RuneView` currently advertises an active `InputConnection` / soft keyboard.
-    pub(crate) ime_enabled: bool,
+    /// Currently active `EditorInfo` configuration advertised by `RuneView` (`None` when disabled).
+    pub(crate) ime_editor: Option<EditorConfig>,
     pub(crate) destroyed: bool,
 }
 
@@ -53,7 +54,7 @@ impl Default for State {
             safe_area: [0.0; 4],
             keyboard_inset: 0.0,
             long_press_secs: None,
-            ime_enabled: false,
+            ime_editor: None,
             destroyed: false,
         }
     }
@@ -94,12 +95,13 @@ pub(crate) enum Event {
     SurfaceDestroyed,
     /// Choreographer vsync callback fired.
     Frame,
-    /// Outcome of [`Effect::DrawFrame`], including post-frame `ImeSync` decisions.
+    /// Outcome of [`Effect::DrawFrame`], including post-frame editor configuration and re-tap.
     FrameDone {
         animating: bool,
         wake_after_secs: Option<f64>,
-        ime_allowed: Option<bool>,
+        editor: Option<EditorConfig>,
         ime_restart: bool,
+        field_tap: bool,
     },
     /// Background thread or timer woke the runtime.
     Wake,
@@ -160,12 +162,12 @@ pub(crate) enum Effect {
     /// Queue `Key::Escape`, run one synchronous zero-dt frame to route it, and feed
     /// [`Event::BackDone`] with whether Rune consumed the key (`Runtime::take_key_consumed`).
     DispatchBack,
-    /// Enable or disable `RuneView`'s `InputConnection` and show or hide the soft keyboard.
-    SetImeEnabled {
-        enabled: bool,
+    /// Synchronize `RuneView`'s `InputConnection`, `EditorInfo`, and soft keyboard visibility.
+    SetIme {
+        editor: Option<EditorConfig>,
         restart: bool,
     },
-    /// Commit any open composition and clear host `ImeSync` when pausing while an editor is active.
+    /// Commit any open composition when pausing while an editor is active.
     FinishComposition,
     ScheduleFrame,
     CancelFrame,
@@ -311,11 +313,10 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
                 state.pending_wake = true;
                 effects.push(Effect::CancelFrame);
             }
-            if state.ime_enabled {
-                state.ime_enabled = false;
+            if state.ime_editor.take().is_some() {
                 effects.push(Effect::FinishComposition);
-                effects.push(Effect::SetImeEnabled {
-                    enabled: false,
+                effects.push(Effect::SetIme {
+                    editor: None,
                     restart: true,
                 });
             }
@@ -332,40 +333,42 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         Event::FrameDone {
             animating,
             wake_after_secs,
-            ime_allowed,
+            editor,
             ime_restart,
+            field_tap,
         } => {
             if !state.can_draw() {
                 return effects;
             }
-            match ime_allowed {
-                Some(true) => {
-                    let was = state.ime_enabled;
-                    if !was || ime_restart {
-                        state.ime_enabled = true;
-                        effects.push(Effect::SetImeEnabled {
-                            enabled: true,
-                            restart: !was || ime_restart,
-                        });
-                    }
+            match (state.ime_editor, editor) {
+                (None, Some(next)) => {
+                    state.ime_editor = Some(next);
+                    effects.push(Effect::SetIme {
+                        editor: Some(next),
+                        restart: true,
+                    });
                 }
-                Some(false) => {
-                    if state.ime_enabled {
-                        state.ime_enabled = false;
-                        effects.push(Effect::SetImeEnabled {
-                            enabled: false,
-                            restart: true,
-                        });
-                    }
+                (Some(prev), Some(next)) if prev != next || ime_restart => {
+                    state.ime_editor = Some(next);
+                    effects.push(Effect::SetIme {
+                        editor: Some(next),
+                        restart: true,
+                    });
                 }
-                None => {
-                    if ime_restart && state.ime_enabled {
-                        effects.push(Effect::SetImeEnabled {
-                            enabled: true,
-                            restart: true,
-                        });
-                    }
+                (Some(_), Some(next)) if field_tap => {
+                    effects.push(Effect::SetIme {
+                        editor: Some(next),
+                        restart: false,
+                    });
                 }
+                (Some(_), None) => {
+                    state.ime_editor = None;
+                    effects.push(Effect::SetIme {
+                        editor: None,
+                        restart: true,
+                    });
+                }
+                _ => {}
             }
             if animating || state.pending_wake {
                 request_frame(state, &mut effects);
@@ -458,10 +461,9 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         Event::Destroy => {
             state.destroyed = true;
             state.resumed = false;
-            if state.ime_enabled {
-                state.ime_enabled = false;
-                effects.push(Effect::SetImeEnabled {
-                    enabled: false,
+            if state.ime_editor.take().is_some() {
+                effects.push(Effect::SetIme {
+                    editor: None,
                     restart: false,
                 });
             }

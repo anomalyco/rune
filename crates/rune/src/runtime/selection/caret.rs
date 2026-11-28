@@ -66,6 +66,9 @@ pub(crate) struct TextInputState {
     pub(crate) ime_option_as_alt: crate::OptionAsAlt,
     /// The shell cancels native composition before enabling the new text focus.
     pub(crate) ime_reset: bool,
+    /// A finger tap landed on an editable text field since the host last polled it, so mobile
+    /// hosts can re-show a soft keyboard hidden by Back while the field kept focus.
+    pub(crate) field_tap: bool,
     /// The focused spellchecked field's word at the caret (`spell::pause`).
     pub(in crate::runtime) spell_watch: Option<crate::spell::pause::Watch>,
     /// Linux's primary selection (`runtime/input/primary_selection.rs`).
@@ -107,6 +110,7 @@ impl TextInputState {
             app_ime_comp: Default::default(),
             ime_option_as_alt: crate::OptionAsAlt::None,
             ime_reset: false,
+            field_tap: false,
             spell_watch: None,
             #[cfg(any(target_os = "linux", test))]
             primary: Default::default(),

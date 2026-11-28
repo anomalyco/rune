@@ -26,10 +26,11 @@ use crate::windows::{AnyWindowSpec, Display, WindowSpec};
 use crate::{Key, KeyEvent};
 
 use super::bridge::{
-    self, call_void_0, call_void_bool_bool, call_void_long, jni_clear_exception,
+    self, call_void_0, call_void_bool_bool_int_int, call_void_long, jni_clear_exception,
     jni_delete_global_ref, jni_method,
 };
 use super::document;
+use super::editor::EditorConfig;
 use super::input::{self, TextInputAction};
 use super::machine::{self, Effect, Event, State};
 use super::picker::{PickAnswer, PickRequest, PickStep};
@@ -47,7 +48,7 @@ pub(super) struct ViewBridge {
     schedule_wake_after: jmethodID,
     post_wake: jmethodID,
     perform_haptic: jmethodID,
-    set_ime_enabled: jmethodID,
+    set_ime_state: jmethodID,
     schedule_a11y_wake_after: jmethodID,
     cancel_a11y_wake: jmethodID,
     api_level: i32,
@@ -267,7 +268,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         let schedule_wake_after = get_method(env, cls, c"scheduleWakeAfter".as_ptr(), c"(J)V".as_ptr());
         let post_wake = get_method(env, cls, c"postWake".as_ptr(), c"()V".as_ptr());
         let perform_haptic = get_method(env, cls, c"performHaptic".as_ptr(), c"(I)V".as_ptr());
-        let set_ime_enabled = get_method(env, cls, c"setImeEnabled".as_ptr(), c"(ZZ)V".as_ptr());
+        let set_ime_state = get_method(env, cls, c"setImeState".as_ptr(), c"(ZZII)V".as_ptr());
         let schedule_a11y_wake_after =
             get_method(env, cls, c"scheduleA11yWakeAfter".as_ptr(), c"(JJ)V".as_ptr());
         let cancel_a11y_wake = get_method(env, cls, c"cancelA11yWake".as_ptr(), c"()V".as_ptr());
@@ -284,7 +285,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             || schedule_wake_after.is_null()
             || post_wake.is_null()
             || perform_haptic.is_null()
-            || set_ime_enabled.is_null()
+            || set_ime_state.is_null()
             || schedule_a11y_wake_after.is_null()
             || cancel_a11y_wake.is_null()
             || start_document_pick.is_null()
@@ -314,7 +315,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             schedule_wake_after,
             post_wake,
             perform_haptic,
-            set_ime_enabled,
+            set_ime_state,
             schedule_a11y_wake_after,
             cancel_a11y_wake,
             api_level,
@@ -416,7 +417,7 @@ fn dispatch(
 ) -> bool {
     let mut consumed_back = false;
     let mut pending_window = pending_window;
-    let mut pending_ime: Option<(jobject, jmethodID, bool, bool)> = None;
+    let mut pending_ime: Option<(jobject, jmethodID, Option<EditorConfig>, bool)> = None;
     let mut pending_picks: Vec<(Arc<Mutex<Option<ViewBridge>>>, PickRequest)> = Vec::new();
     let mut shutdown_bridge: Option<ViewBridge> = None;
     #[cfg(feature = "accessibility")]
@@ -507,12 +508,10 @@ fn dispatch(
                 }
                 Effect::FinishComposition => {
                     host.stack.finish_composition();
-                    host.stack.clear_ime_sync();
                 }
-                Effect::SetImeEnabled { enabled, restart } => {
-                    if !enabled { host.stack.clear_ime_sync(); }
+                Effect::SetIme { editor, restart } => {
                     if let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                        pending_ime = Some((v.obj, v.set_ime_enabled, enabled, restart));
+                        pending_ime = Some((v.obj, v.set_ime_state, editor, restart));
                     }
                 }
                 Effect::CancelFrame => {
@@ -528,9 +527,9 @@ fn dispatch(
                     #[cfg(feature = "accessibility")]
                     let _ = host.stack.a11y_receive(&mut host.a11y);
                     let frame_result = host.surface.as_mut().and_then(|surface| {
-                        host.stack.draw_top(surface, host.state.resumed)
+                        host.stack.draw_top(surface)
                     });
-                    if let Some((outcome, pending_haptics, pick_step, ime)) = frame_result {
+                    if let Some((outcome, pending_haptics, pick_step, editor)) = frame_result {
                         if !pending_haptics.is_empty()
                             && let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
                         {
@@ -548,14 +547,15 @@ fn dispatch(
                             Event::FrameDone {
                                 animating: needs_redraw,
                                 wake_after_secs: outcome.wake_after_secs,
-                                ime_allowed: ime.set_allowed,
-                                ime_restart: ime.cancel,
+                                editor: editor.config,
+                                ime_restart: editor.reset,
+                                field_tap: editor.field_tap,
                             },
                         );
                         for next in follow {
-                            if let Effect::SetImeEnabled { enabled, restart } = next {
+                            if let Effect::SetIme { editor, restart } = next {
                                 if let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                                    pending_ime = Some((v.obj, v.set_ime_enabled, enabled, restart));
+                                    pending_ime = Some((v.obj, v.set_ime_state, editor, restart));
                                 }
                             } else {
                                 apply_view_schedule(env, &host.bridge, next);
@@ -593,12 +593,16 @@ fn dispatch(
     #[cfg(not(feature = "accessibility"))]
     let _ = view_obj;
 
-    // Run `setImeEnabled` and SAF pickers after releasing the `HOST` RefCell borrow so
+    // Run `setImeState` and SAF pickers after releasing the `HOST` RefCell borrow so
     // synchronous Java callbacks cannot re-enter a borrowed `HOST`.
-    if let Some((obj, method, enabled, restart)) = pending_ime {
+    if let Some((obj, method, editor, restart)) = pending_ime {
+        let (enabled, input_type, ime_options) = match editor {
+            Some(cfg) => (true, cfg.input_type, cfg.ime_options),
+            None => (false, 0, 0),
+        };
         // SAFETY: `env` is the UI thread's `JNIEnv*` and `obj` stays live until
         // `shutdown_bridge` is deleted right below.
-        unsafe { call_void_bool_bool(env, obj, method, enabled, restart) };
+        unsafe { call_void_bool_bool_int_int(env, obj, method, enabled, restart, input_type, ime_options) };
     }
     if let Some(bridge) = shutdown_bridge {
         // SAFETY: `env` is the UI thread's `JNIEnv*` and `bridge.obj` is a live global ref.

@@ -180,18 +180,22 @@ pub(super) unsafe fn call_void_long(env: *mut JNIEnv, obj: jobject, method: jmet
     }
 }
 
-pub(super) unsafe fn call_void_bool_bool(
+pub(super) unsafe fn call_void_bool_bool_int_int(
     env: *mut JNIEnv,
     obj: jobject,
     method: jmethodID,
     first: bool,
     second: bool,
+    third: jint,
+    fourth: jint,
 ) {
     let args = [
         jvalue { z: if first { JNI_TRUE } else { JNI_FALSE } },
         jvalue { z: if second { JNI_TRUE } else { JNI_FALSE } },
+        jvalue { i: third },
+        jvalue { i: fourth },
     ];
-    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `(ZZ)V` method.
+    // SAFETY: `env`, `obj`, and `method` are valid JNI handles for a `(ZZII)V` method.
     unsafe {
         if let Some(call) = (**env).CallVoidMethodA {
             call(env, obj, method, args.as_ptr());

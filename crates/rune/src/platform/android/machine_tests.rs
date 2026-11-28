@@ -16,8 +16,9 @@ fn frame_done(animating: bool, wake_after_secs: Option<f64>) -> Event {
     Event::FrameDone {
         animating,
         wake_after_secs,
-        ime_allowed: None,
+        editor: None,
         ime_restart: false,
+        field_tap: false,
     }
 }
 
@@ -515,6 +516,9 @@ fn touch_events_scale_to_dp_deduplicate_frames_and_replay_long_press_timeout() {
 
 #[test]
 fn ime_sync_enables_restarts_pauses_and_hides_keyboard() {
+    use super::editor::EditorConfig;
+
+    let text = EditorConfig::default_multiline();
     let mut s = State::default();
     let _ = run(&mut s, Event::Resumed);
     let _ = run(&mut s, Event::SurfaceCreated { width_px: 1080, height_px: 2400, scale: 3.0, dark: true });
@@ -524,25 +528,34 @@ fn ime_sync_enables_restarts_pauses_and_hides_keyboard() {
     let e = run(&mut s, Event::FrameDone {
         animating: false,
         wake_after_secs: None,
-        ime_allowed: Some(true),
+        editor: Some(text),
         ime_restart: false,
+        field_tap: false,
     });
-    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
-    assert!(s.ime_enabled);
+    assert_eq!(e, [Effect::SetIme { editor: Some(text), restart: true }]);
+    assert_eq!(s.ime_editor, Some(text));
 
     // Steady frame while focused emits no duplicate IME calls.
-    assert!(run(&mut s, frame_done(false, None)).is_empty());
-    assert!(s.ime_enabled);
+    let e = run(&mut s, Event::FrameDone {
+        animating: false,
+        wake_after_secs: None,
+        editor: Some(text),
+        ime_restart: false,
+        field_tap: false,
+    });
+    assert!(e.is_empty());
+    assert_eq!(s.ime_editor, Some(text));
 
     // Resetting mid-composition (e.g. caret jump) restarts input while keeping keyboard open.
     let e = run(&mut s, Event::FrameDone {
         animating: false,
         wake_after_secs: None,
-        ime_allowed: Some(true),
+        editor: Some(text),
         ime_restart: true,
+        field_tap: false,
     });
-    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
-    assert!(s.ime_enabled);
+    assert_eq!(e, [Effect::SetIme { editor: Some(text), restart: true }]);
+    assert_eq!(s.ime_editor, Some(text));
 
     // Pausing finishes open composition and hides the keyboard.
     let e = run(&mut s, Event::Paused);
@@ -550,49 +563,52 @@ fn ime_sync_enables_restarts_pauses_and_hides_keyboard() {
         e,
         [
             Effect::FinishComposition,
-            Effect::SetImeEnabled { enabled: false, restart: true },
+            Effect::SetIme { editor: None, restart: true },
         ],
     );
-    assert!(!s.ime_enabled);
+    assert_eq!(s.ime_editor, None);
 
-    // Resuming redraws and re-enables the keyboard when ImeSync reports allowed again.
+    // Resuming redraws and re-enables the keyboard when editor sampling reports an active field.
     assert_eq!(run(&mut s, Event::Resumed), [Effect::ScheduleFrame]);
     assert_eq!(run(&mut s, Event::Frame), [Effect::DrawFrame]);
     let e = run(&mut s, Event::FrameDone {
         animating: false,
         wake_after_secs: None,
-        ime_allowed: Some(true),
+        editor: Some(text),
         ime_restart: false,
+        field_tap: false,
     });
-    assert_eq!(e, [Effect::SetImeEnabled { enabled: true, restart: true }]);
-    assert!(s.ime_enabled);
+    assert_eq!(e, [Effect::SetIme { editor: Some(text), restart: true }]);
+    assert_eq!(s.ime_editor, Some(text));
 
     // Blurring hides the keyboard.
     let e = run(&mut s, Event::FrameDone {
         animating: false,
         wake_after_secs: None,
-        ime_allowed: Some(false),
+        editor: None,
         ime_restart: false,
+        field_tap: false,
     });
-    assert_eq!(e, [Effect::SetImeEnabled { enabled: false, restart: true }]);
-    assert!(!s.ime_enabled);
+    assert_eq!(e, [Effect::SetIme { editor: None, restart: true }]);
+    assert_eq!(s.ime_editor, None);
 
     // Destroying while enabled hides the keyboard without restarting input.
     let _ = run(&mut s, Event::FrameDone {
         animating: false,
         wake_after_secs: None,
-        ime_allowed: Some(true),
+        editor: Some(text),
         ime_restart: false,
+        field_tap: false,
     });
-    assert!(s.ime_enabled);
+    assert_eq!(s.ime_editor, Some(text));
     let e = run(&mut s, Event::Destroy);
     assert_eq!(
         e,
         [
-            Effect::SetImeEnabled { enabled: false, restart: false },
+            Effect::SetIme { editor: None, restart: false },
             Effect::DetachSurface,
             Effect::Shutdown,
         ],
     );
-    assert!(!s.ime_enabled);
+    assert_eq!(s.ime_editor, None);
 }

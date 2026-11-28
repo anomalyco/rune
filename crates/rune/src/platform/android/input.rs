@@ -345,11 +345,20 @@ pub(crate) fn clamp_delete_count(count: i32) -> usize {
 /// accepted work and needs a frame.
 pub(crate) fn apply_text_input(rt: &mut RuntimeCore, action: TextInputAction) -> bool {
     match action {
-        TextInputAction::Ime(ev) => {
+        TextInputAction::Ime(mut ev) => {
+            if rt.has_secure_focus() {
+                return match ev {
+                    Ime::Commit(ref mut text) => rt.commit_secure_text(std::mem::take(text)),
+                    _ => false,
+                };
+            }
             rt.ime(ev);
             true
         }
         TextInputAction::FinishCompositionFromIme => {
+            if rt.has_secure_focus() {
+                return false;
+            }
             rt.finish_composition_from_ime();
             true
         }
