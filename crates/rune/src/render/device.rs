@@ -191,6 +191,9 @@ impl Gpu {
         wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env()
     }
 
+    /// Active DX12 shader compiler: full-path `dxcompiler.dll` beside the executable, else FXC.
+    pub(crate) fn dx12_compiler() -> wgpu::Dx12Compiler { crate::gpu::dx12_compiler::pick() }
+
     /// Whether this process has fallen back from direct Linux Vulkan driver loading to an
     /// unlimited instance with all installed drivers.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -528,10 +531,8 @@ impl Gpu {
         // A window waits for room in its swap chain itself, in the loop rather than in
         // `acquire` (`window::slot`).
         descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
-        // FXC ships with Windows (d3dcompiler_47.dll in System32). wgpu's default looks for
-        // dxcompiler.dll on PATH, where another app's incompatible copy crashes the first
-        // shader compile (Hex #587).
-        descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+        // Shipped `dxcompiler.dll` beside the executable by full path, else FXC (`d3dcompiler_47.dll`).
+        descriptor.backend_options.dx12.shader_compiler = Self::dx12_compiler();
         descriptor
     }
 

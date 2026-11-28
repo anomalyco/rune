@@ -13,7 +13,7 @@ fn default_instance_descriptor_hides_noncompliant_adapters() {
         desc.backend_options.dx12.latency_waitable_object,
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait,
     ));
-    assert!(matches!(desc.backend_options.dx12.shader_compiler, wgpu::Dx12Compiler::Fxc));
+    assert_eq!(format!("{:?}", desc.backend_options.dx12.shader_compiler), format!("{:?}", Gpu::dx12_compiler()));
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn dx12_presentation_system_env_child() {
         desc.backend_options.dx12.latency_waitable_object,
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait,
     ));
-    assert!(matches!(desc.backend_options.dx12.shader_compiler, wgpu::Dx12Compiler::Fxc));
+    assert_eq!(format!("{:?}", desc.backend_options.dx12.shader_compiler), format!("{:?}", Gpu::dx12_compiler()));
     #[cfg(target_os = "windows")]
     {
         let instance = Gpu::instance();
