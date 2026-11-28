@@ -597,3 +597,156 @@ fn scroll_xy_remounts_nested_virtual_rows_without_running_view() {
     direct.commit.set_state_unchanged(true);
     assert_eq!(direct.commit_kind(&Tx::default()), CommitKind::Rebuild);
 }
+
+#[test]
+fn nested_virtual_rows_scroll_remounts_without_rebuilding_view_or_outer_row() {
+    struct Nested {
+        views: Rc<Cell<usize>>,
+        outer_group_builds: Rc<Cell<usize>>,
+        inner_builds: Rc<Cell<usize>>,
+    }
+
+    fn view(s: &Nested, _: &mut Cx<Nested>) -> El {
+        s.views.set(s.views.get() + 1);
+        let outer = col()
+            .key("outer")
+            .w_full()
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                40,
+                40.0,
+                |_: &Nested, i| std::borrow::Cow::Owned(if i == 1 { "group".into() } else { format!("o{i}") }),
+                |s: &Nested, i| {
+                    if i == 1 {
+                        s.outer_group_builds.set(s.outer_group_builds.get() + 1);
+                        let inner = col()
+                            .key("inner")
+                            .w_full()
+                            .growth(GrowthSpec::default())
+                            .virtual_rows(
+                                150,
+                                30.0,
+                                |_: &Nested, j| std::borrow::Cow::Owned(format!("step-{j}")),
+                                |s: &Nested, j| {
+                                    s.inner_builds.set(s.inner_builds.get() + 1);
+                                    row().w_full().h(30.0).child(text(format!("Step {j}")))
+                                },
+                            );
+                        col().w_full().child(row().key("hdr").w_full().h(28.0).child(text("Group"))).child(inner)
+                    } else {
+                        row().w_full().h(40.0).child(text(format!("Outer {i}")))
+                    }
+                },
+            );
+        col().size(400.0, 240.0).child(
+            col().key("viewport").w_full().h(240.0).scroll(ScrollSpec { stick_bottom: false }).child(outer),
+        )
+    }
+
+    let (views, outer_builds, inner_builds) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let mut rt = Runtime::new(
+        Nested { views: Rc::clone(&views), outer_group_builds: Rc::clone(&outer_builds), inner_builds: Rc::clone(&inner_builds) },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    for _ in 0..20 {
+        rt.frame(1.0 / 60.0);
+    }
+    rt.commit.set_state_unchanged(true);
+    assert_eq!(rt.commit_kind(&Tx::default()), crate::runtime::relayout::CommitKind::Remount, "nested virtual_rows must take CommitKind::Remount");
+
+    let views_before = views.get();
+    let outer_before = outer_builds.get();
+    let inner_before = inner_builds.get();
+
+    // Scroll deep into the nested list while the outer group row stays mounted.
+    for _ in 0..8 {
+        rt.wheel(200.0, 120.0, -300.0);
+        for _ in 0..6 {
+            rt.frame(1.0 / 60.0);
+        }
+    }
+    for _ in 0..30 {
+        if !rt.frame(1.0 / 60.0) {
+            break;
+        }
+    }
+
+    assert_eq!(views.get(), views_before, "scrolling inside nested virtual_rows must not rebuild view");
+    assert_eq!(outer_builds.get(), outer_before, "scrolling inside nested virtual_rows must not rebuild the staying outer group row");
+    assert!(inner_builds.get() > inner_before, "inner list must mount entering steps as it scrolls");
+    let inner_path = rt.commit.virtuals.keys().find(|p| p.ends_with("/inner")).expect("inner list mounted").clone();
+    assert!(rt.commit.virtuals[&inner_path].range.start > 10, "inner window moved past initial steps: {:?}", rt.commit.virtuals[&inner_path].range);
+
+    // Verify every mounted nested node's geometry matches a fresh rebuild at the same scroll offset.
+    let scroll_path = rt.commit.virtuals[&inner_path].scroll_path.clone();
+    let scroll_id = rt.tree.path_ids[&scroll_path];
+    let inner_nodes_remount: Vec<(String, [f32; 4])> = rt
+        .tree
+        .nodes
+        .iter()
+        .filter(|n| n.path.starts_with(&inner_path))
+        .map(|n| (n.path.clone(), n.target))
+        .collect();
+    rt.invalidate();
+    rt.frame(1.0 / 60.0);
+    let inner_nodes_fresh: std::collections::HashMap<String, [f32; 4]> = rt
+        .tree
+        .nodes
+        .iter()
+        .filter(|n| n.path.starts_with(&inner_path))
+        .map(|n| (n.path.clone(), n.target))
+        .collect();
+    for (path, rect) in &inner_nodes_remount {
+        assert_eq!(inner_nodes_fresh.get(path), Some(rect), "remounted geometry for {path} must match full rebuild");
+    }
+
+    // Scrolling far past the end of the nested group unmounts the outer group row via Fallback and prunes cleanly.
+    rt.scroll.scrolls.get_mut(&scroll_id).unwrap().offset = 5600.0;
+    for _ in 0..20 {
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(
+        !rt.commit.virtuals.contains_key(&inner_path),
+        "unmounting the outer row holding a nested virtual list must prune the nested list"
+    );
+
+    // A nested virtual_rows returned directly as an outer growth-stack row (no wrapper) falls back
+    // to Rebuild so flatten preserves its animate_layout-derived child_in_row.
+    struct Direct;
+    fn direct_view(_: &Direct, _: &mut Cx<Direct>) -> El {
+        let outer = col()
+            .key("outer")
+            .w_full()
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                2,
+                40.0,
+                |_: &Direct, i| std::borrow::Cow::Owned(format!("o{i}")),
+                |_: &Direct, i| {
+                    if i == 0 {
+                        col().w_full().growth(GrowthSpec::default()).virtual_rows(
+                            20,
+                            24.0,
+                            |_: &Direct, j| std::borrow::Cow::Owned(format!("s{j}")),
+                            |_: &Direct, j| row().w_full().h(24.0).child(text(format!("S {j}"))),
+                        )
+                    } else {
+                        row().w_full().h(40.0).child(text("Tail"))
+                    }
+                },
+            );
+        col().size(400.0, 200.0).child(col().key("vp").w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(outer))
+    }
+    let mut direct = Runtime::new(Direct, direct_view, (400.0, 200.0), Env::new(true, 1.0));
+    for _ in 0..10 {
+        direct.frame(1.0 / 60.0);
+    }
+    direct.commit.set_state_unchanged(true);
+    assert_eq!(
+        direct.commit_kind(&Tx::default()),
+        crate::runtime::relayout::CommitKind::Rebuild,
+        "direct-child nested virtual_rows in a growth stack must fall back to Rebuild"
+    );
+}

@@ -72,10 +72,16 @@ impl CommitState {
         }) {
             return false;
         }
-        let has_nested = |path: &str| {
-            self.virtuals.keys().chain(self.virtual_items.keys()).any(|other| {
+        let has_nested_items = |path: &str| {
+            self.virtual_items.keys().any(|other| {
                 other != path && other.strip_prefix(path).is_some_and(|r| r.starts_with('/'))
             })
+        };
+        let has_nested = |path: &str| {
+            has_nested_items(path)
+                || self.virtuals.keys().any(|other| {
+                    other != path && other.strip_prefix(path).is_some_and(|r| r.starts_with('/'))
+                })
         };
         for (path, v) in &self.virtuals {
             if !v.indexed || !v.selection.pins.source().and_then(|s| s.rebuild()).is_some_and(|s| s.count == v.keys.len()) {
@@ -83,7 +89,15 @@ impl CommitState {
             }
             let Some(&list_id) = tree.path_ids.get(path) else { return false };
             let Some(&list_idx) = tree.node_index.get(&list_id) else { return false };
-            if !tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.virtual_list && n.growth.is_some()) {
+            if !tree.nodes.get(list_idx).is_some_and(|n| {
+                n.id == list_id
+                    && n.path == *path
+                    && n.virtual_list
+                    && n.growth.is_some()
+                    // A list that is itself a direct child of a growth stack computes `child_in_row`
+                    // from its own `animate_layout` flag in `flatten`, which `Node` does not retain.
+                    && !(n.in_row == RowLayout::Free && n.parent.is_some_and(|p| tree.nodes[p].growth.is_some()))
+            }) {
                 return false;
             }
             let Some(&scroll_id) = tree.path_ids.get(&v.scroll_path) else { return false };
@@ -98,7 +112,9 @@ impl CommitState {
             }) {
                 return false;
             }
-            if has_nested(path) {
+            // Nested `virtual_rows` inside `virtual_rows` remount recursively; `virtual_items`
+            // nested inside `virtual_rows` still fall back to a full rebuild.
+            if has_nested_items(path) {
                 return false;
             }
         }
@@ -112,6 +128,7 @@ impl CommitState {
                     && !n.virtual_list
                     && n.growth.is_none()
                     && !(n.scroll.is_some() && n.scroll_axes.x())
+                    && !(n.in_row == RowLayout::Free && n.parent.is_some_and(|p| tree.nodes[p].growth.is_some()))
             }) {
                 return false;
             }
@@ -170,6 +187,209 @@ fn move_slice(
     });
 }
 
+struct EmitCtx<'a> {
+    old_nodes: &'a mut [Node],
+    node_index: &'a NodeIndex,
+    committing: bool,
+    empty_committed: &'a HashMap<u64, memo_reuse::FlattenedMemo>,
+    path_ids: &'a mut HashMap<String, NodeId>,
+    next_id: &'a mut u64,
+    foreground: Option<Color>,
+    scale: f32,
+    virtuals: &'a HashMap<String, crate::el::virtual_list::VirtualList>,
+    on_spine: &'a [bool],
+    plans: Vec<Option<Plan>>,
+    taffy: LayoutEngine,
+    nodes: Vec<Node>,
+    pending: Vec<memo_reuse::PendingFlat>,
+    reused: Vec<memo_reuse::ReusedSpan>,
+    path_buf: String,
+    old_to_new: Vec<u32>,
+}
+
+impl EmitCtx<'_> {
+    fn take_plan(&mut self, old_idx: usize) -> Option<Plan> {
+        self.plans.iter_mut().find(|p| p.as_ref().is_some_and(|p| p.old_idx() == old_idx))?.take()
+    }
+
+    fn has_plan_in(&self, range: Range<usize>) -> bool {
+        self.plans.iter().any(|p| p.as_ref().is_some_and(|p| range.start <= p.old_idx() && p.old_idx() < range.end))
+    }
+
+    fn move_container(&mut self, old_idx: usize, virtual_mount: bool) -> (usize, NodeId, SlotId, Spring, RowLayout) {
+        let new_idx = self.nodes.len();
+        self.old_to_new[old_idx] = new_idx as u32;
+        let slot = &mut self.old_nodes[old_idx];
+        let old_parent = slot.parent;
+        let stub = Node::moved_stub(slot);
+        let mut n = std::mem::replace(slot, stub);
+        if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
+            n.text_layout = None;
+            n.elided = None;
+            n.clear_tabular_layout();
+        }
+        n.clear_run_layout();
+        n.scale_track = false;
+        n.group_fade = false;
+        n.virtual_mount = virtual_mount;
+        n.parent = old_parent.map(|p| self.old_to_new[p] as usize);
+        n.target = [0.0; 4];
+        n.local = MRect::ZERO;
+        n.inset = [0.0; 4];
+        let info = (new_idx, n.id, n.taffy, n.motion, n.in_row);
+        self.nodes.push(n);
+        self.reused.push(memo_reuse::ReusedSpan {
+            new_start: new_idx,
+            old_start: old_idx,
+            len: 1,
+            same_path: true,
+            moved: true,
+        });
+        info
+    }
+
+    fn flatten_child(
+        &mut self,
+        el: El,
+        parent_idx: usize,
+        pos: usize,
+        motion: Spring,
+        in_row: RowLayout,
+        parent_row: bool,
+    ) -> (SlotId, bool) {
+        self.path_buf.clear();
+        self.path_buf.push_str(&self.nodes[parent_idx].path);
+        let mut memo_ctx = memo_reuse::MemoFlattenCtx {
+            old_nodes: &mut *self.old_nodes,
+            old_present_len: 0,
+            old_node_index: self.node_index,
+            old_cursor: 0,
+            committing: self.committing,
+            committed: self.empty_committed,
+            pending: std::mem::take(&mut self.pending),
+            reused: std::mem::take(&mut self.reused),
+            taken_paths: Vec::new(),
+            path_ids: &mut *self.path_ids,
+            next_id: &mut *self.next_id,
+            foreground: self.foreground,
+            missed_virtual_memo: false,
+        };
+        let res = flatten_with_buf(el, Some(parent_idx), &mut self.path_buf, pos, motion, in_row, parent_row, &mut self.taffy, &mut self.nodes, self.scale, &mut memo_ctx);
+        self.pending = memo_ctx.pending;
+        self.reused = memo_ctx.reused;
+        res
+    }
+
+    fn sync_container(
+        &mut self,
+        new_idx: usize,
+        id: NodeId,
+        expected_taffy: SlotId,
+        style: CompactStyle,
+        child_slots: Vec<SlotId>,
+        children_dirty: bool,
+    ) -> bool {
+        let child_mark = self.taffy.begin_children();
+        for s in child_slots {
+            self.taffy.push_child(s);
+        }
+        let (slot, dirty) = self.taffy.sync_node(id.0, new_idx as u32, style, None, false, child_mark, children_dirty);
+        debug_assert_eq!(slot, expected_taffy);
+        if dirty {
+            self.taffy.mark_dirty_and_ancestors(
+                expected_taffy,
+                std::iter::successors(self.nodes[new_idx].parent, |&p| self.nodes[p].parent).map(|p| self.nodes[p].taffy),
+            );
+        }
+        dirty
+    }
+
+    /// Emits old nodes in `range`, splicing any `Plan`s at their old indices (including nested
+    /// `virtual_rows` inside staying rows of an outer `virtual_rows`). Returns whether any plan
+    /// inside `range` dirtied layout.
+    fn emit_range(&mut self, range: Range<usize>, root_virtual_mount: Option<bool>) -> bool {
+        let mut any_dirty = false;
+        let mut old_idx = range.start;
+        while old_idx < range.end {
+            let root_vm = (old_idx == range.start).then_some(root_virtual_mount).flatten();
+            if let Some(plan) = self.take_plan(old_idx) {
+                match plan {
+                    Plan::List(plan) => {
+                        let (new_list_idx, list_id, list_taffy, list_motion, list_in_row) =
+                            self.move_container(old_idx, root_vm.unwrap_or(false));
+                        let mut list_style = self.taffy.style(list_taffy).clone();
+                        list_style.set_pad_top(plan.pad_top);
+                        list_style.set_pad_bottom(plan.pad_bottom);
+                        let parent_row = matches!(list_style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+
+                        let mut row_slots = Vec::with_capacity(plan.range.len());
+                        let mut any_row_dirty = false;
+                        let mut built_iter = plan.built_rows.into_iter().peekable();
+                        let keys = &self.virtuals[&plan.path].keys;
+                        for (pos, row_i) in plan.range.clone().enumerate() {
+                            if built_iter.peek().is_some_and(|(p, _)| *p == pos) {
+                                let (_, row_el) = built_iter.next().unwrap();
+                                let (kid_slot, kid_dirty) =
+                                    self.flatten_child(row_el, new_list_idx, pos, list_motion, list_in_row, parent_row);
+                                row_slots.push(kid_slot);
+                                any_row_dirty |= kid_dirty;
+                            } else {
+                                let &(rs, re) = &plan.mounted_rows[&keys[row_i]];
+                                let row_taffy = self.old_nodes[rs].taffy;
+                                if self.has_plan_in(rs..re) {
+                                    any_row_dirty |= self.emit_range(rs..re, Some(plan.quiet[pos]));
+                                } else {
+                                    move_slice(self.old_nodes, rs..re, &mut self.nodes, &mut self.old_to_new, &mut self.taffy, &mut self.reused, Some(plan.quiet[pos]));
+                                }
+                                row_slots.push(row_taffy);
+                            }
+                        }
+                        any_dirty |= self.sync_container(new_list_idx, list_id, list_taffy, list_style, row_slots, any_row_dirty);
+                        old_idx = plan.list_subtree_end;
+                    }
+                    Plan::Items(plan) => {
+                        let (new_container_idx, container_id, container_taffy, container_motion, container_in_row) =
+                            self.move_container(old_idx, root_vm.unwrap_or(false));
+                        let container_style = self.taffy.style(container_taffy).clone();
+                        let parent_row = matches!(container_style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+
+                        let mut item_slots = Vec::with_capacity(plan.next_mounted.len());
+                        let mut any_item_dirty = false;
+                        let mut built_iter = plan.built_items.into_iter().peekable();
+                        for (pos, key) in plan.next_mounted.iter().enumerate() {
+                            if built_iter.peek().is_some_and(|(p, _)| *p == pos) {
+                                let (_, item_el) = built_iter.next().unwrap();
+                                let (kid_slot, kid_dirty) =
+                                    self.flatten_child(item_el, new_container_idx, pos, container_motion, container_in_row, parent_row);
+                                item_slots.push(kid_slot);
+                                any_item_dirty |= kid_dirty;
+                            } else {
+                                let &(rs, re) = &plan.mounted_items[key];
+                                let item_taffy = self.old_nodes[rs].taffy;
+                                move_slice(self.old_nodes, rs..re, &mut self.nodes, &mut self.old_to_new, &mut self.taffy, &mut self.reused, Some(false));
+                                item_slots.push(item_taffy);
+                            }
+                        }
+                        any_dirty |= self.sync_container(new_container_idx, container_id, container_taffy, container_style, item_slots, any_item_dirty);
+                        old_idx = plan.subtree_end;
+                    }
+                }
+            } else if self.on_spine[old_idx] {
+                move_slice(self.old_nodes, old_idx..old_idx + 1, &mut self.nodes, &mut self.old_to_new, &mut self.taffy, &mut self.reused, root_vm);
+                old_idx += 1;
+            } else {
+                let mut sub_end = old_idx + 1;
+                while sub_end < range.end && self.old_nodes[sub_end].parent.is_some_and(|p| p >= old_idx) {
+                    sub_end += 1;
+                }
+                move_slice(self.old_nodes, old_idx..sub_end, &mut self.nodes, &mut self.old_to_new, &mut self.taffy, &mut self.reused, root_vm);
+                old_idx = sub_end;
+            }
+        }
+        any_dirty
+    }
+}
+
 fn build_indexed_row(
     rows: &crate::el::virtual_rows::RowSource,
     state: crate::states::StatesRef<'_>,
@@ -196,10 +416,16 @@ impl Measurement<'_> {
         self.virtual_culled.clear();
         self.virtual_inputs.clear();
 
-        let mut plans: Vec<Plan> = Vec::with_capacity(self.virtuals.len() + self.virtual_items.keys().count());
-        for (path, v) in self.virtuals.iter_mut() {
-            let list_id = self.path_ids[path];
-            let old_list_idx = self.node_index[&list_id];
+        let mut ordered_virtuals: Vec<(usize, String)> = self
+            .virtuals
+            .keys()
+            .map(|path| (self.node_index[&self.path_ids[path]], path.clone()))
+            .collect();
+        // Plan outer lists before nested ones, matching `window_tree` pre-order.
+        ordered_virtuals.sort_unstable_by_key(|(idx, _)| *idx);
+        let mut plans: Vec<Plan> = Vec::with_capacity(ordered_virtuals.len() + self.virtual_items.keys().count());
+        for (old_list_idx, path) in ordered_virtuals {
+            let Some(v) = self.virtuals.get_mut(&path) else { continue };
             let scroll_id = self.path_ids[&v.scroll_path];
             let scroll_idx = self.node_index[&scroll_id];
 
@@ -241,7 +467,7 @@ impl Measurement<'_> {
             let shown = std::mem::take(&mut v.shown);
             v.select(offset, pinned, Some(&shown));
             for key in shown.iter().filter(|k| v.index_of(k).is_some_and(|i| !v.range.contains(&i))) {
-                self.virtual_culled.insert(node_path(path, Some(key), 0));
+                self.virtual_culled.insert(node_path(&path, Some(key), 0));
             }
             v.shown = shown;
 
@@ -299,6 +525,29 @@ impl Measurement<'_> {
             plans.extend(item_plans.into_iter().map(Plan::Items));
         }
         plans.sort_unstable_by_key(Plan::old_idx);
+
+        // If an outer list unmounts a row containing a nested virtual list, fall back to a full
+        // rebuild so pruning and exits tear down the nested list cleanly.
+        for (i, plan) in plans.iter().enumerate() {
+            let Plan::List(outer) = plan else { continue };
+            let outer_keys = &self.virtuals[&outer.path].keys;
+            for child in &plans[i + 1..] {
+                let child_idx = child.old_idx();
+                if child_idx >= outer.list_subtree_end {
+                    break;
+                }
+                let in_staying_row = outer.range.clone().any(|row_i| {
+                    outer
+                        .mounted_rows
+                        .get(&outer_keys[row_i])
+                        .is_some_and(|&(rs, re)| rs <= child_idx && child_idx < re)
+                });
+                if !in_staying_row {
+                    self.virtual_items.clear_staged();
+                    return RemountOutcome::Fallback;
+                }
+            }
+        }
 
         let mut kept_rows = HashSet::default();
         for plan in &plans {
@@ -457,280 +706,28 @@ impl Measurement<'_> {
         path_buf.clear();
         let empty_committed = HashMap::default();
 
-        let mut old_to_new = vec![u32::MAX; self.nodes.len()];
-        let mut plan_iter = plans.into_iter().peekable();
-        let mut old_idx = 0usize;
-        while old_idx < self.nodes.len() {
-            if plan_iter.peek().is_some_and(|p| p.old_idx() == old_idx) {
-                match plan_iter.next().unwrap() {
-                Plan::List(plan) => {
-                let new_list_idx = nodes.len();
-                old_to_new[old_idx] = new_list_idx as u32;
-                let (list_id, list_taffy, list_motion, list_in_row) = {
-                    let slot = &mut self.nodes[old_idx];
-                    let old_parent = slot.parent;
-                    let stub = Node::moved_stub(slot);
-                    let mut n = std::mem::replace(slot, stub);
-                    n.text_layout = None;
-                    n.elided = None;
-                    n.clear_run_layout();
-        n.clear_tabular_layout();
-                    n.scale_track = false;
-                    n.group_fade = false;
-                    n.virtual_mount = false;
-                    n.parent = old_parent.map(|p| old_to_new[p] as usize);
-                    n.target = [0.0; 4];
-                    n.local = MRect::ZERO;
-                    n.inset = [0.0; 4];
-                    let info = (n.id, n.taffy, n.motion, n.in_row);
-                    nodes.push(n);
-                    info
-                };
-                reused.push(memo_reuse::ReusedSpan {
-                    new_start: new_list_idx,
-                    old_start: old_idx,
-                    len: 1,
-                    same_path: true,
-                    moved: true,
-                });
-
-                let mut list_style = taffy.style(list_taffy).clone();
-                list_style.set_pad_top(plan.pad_top);
-                list_style.set_pad_bottom(plan.pad_bottom);
-                let parent_row = matches!(
-                    list_style.flex_direction(),
-                    FlexDirection::Row | FlexDirection::RowReverse
-                );
-
-                let mut row_slots = Vec::with_capacity(plan.range.len());
-                let mut any_row_dirty = false;
-                let mut built_iter = plan.built_rows.into_iter().peekable();
-                let keys = &self.virtuals[&plan.path].keys;
-                for (pos, row_i) in plan.range.clone().enumerate() {
-                    if built_iter.peek().is_some_and(|(p, _)| *p == pos) {
-                        let (_, row_el) = built_iter.next().unwrap();
-                        path_buf.clear();
-                        path_buf.push_str(&nodes[new_list_idx].path);
-                        let mut memo_ctx = memo_reuse::MemoFlattenCtx {
-                            old_nodes: &mut *self.nodes,
-                            old_present_len: 0,
-                            old_node_index: &*self.node_index,
-                            old_cursor: 0,
-                            committing: self.committing,
-                            committed: &empty_committed,
-                            pending,
-                            reused,
-                            taken_paths: Vec::new(),
-                            path_ids: &mut *self.path_ids,
-                            next_id: &mut *self.next_id,
-                            foreground: self.defaults.foreground,
-                            missed_virtual_memo: false,
-                        };
-                        let (kid_slot, kid_dirty) = flatten_with_buf(
-                            row_el,
-                            Some(new_list_idx),
-                            &mut path_buf,
-                            pos,
-                            list_motion,
-                            list_in_row,
-                            parent_row,
-                            &mut taffy,
-                            &mut nodes,
-                            scale,
-                            &mut memo_ctx,
-                        );
-                        pending = memo_ctx.pending;
-                        reused = memo_ctx.reused;
-                        row_slots.push(kid_slot);
-                        any_row_dirty |= kid_dirty;
-                    } else {
-                        let &(rs, re) = &plan.mounted_rows[&keys[row_i]];
-                        let row_taffy = self.nodes[rs].taffy;
-                        move_slice(
-                            self.nodes,
-                            rs..re,
-                            &mut nodes,
-                            &mut old_to_new,
-                            &mut taffy,
-                            &mut reused,
-                            Some(plan.quiet[pos]),
-                        );
-                        row_slots.push(row_taffy);
-                    }
-                }
-
-                let child_mark = taffy.begin_children();
-                for s in row_slots {
-                    taffy.push_child(s);
-                }
-                let (slot, dirty) = taffy.sync_node(
-                    list_id.0,
-                    new_list_idx as u32,
-                    list_style,
-                    None,
-                    false,
-                    child_mark,
-                    any_row_dirty,
-                );
-                debug_assert_eq!(slot, list_taffy);
-                if dirty {
-                    taffy.mark_dirty_and_ancestors(
-                        list_taffy,
-                        std::iter::successors(nodes[new_list_idx].parent, |&p| nodes[p].parent)
-                            .map(|p| nodes[p].taffy),
-                    );
-                }
-                old_idx = plan.list_subtree_end;
-                }
-                Plan::Items(plan) => {
-                    let new_container_idx = nodes.len();
-                    old_to_new[old_idx] = new_container_idx as u32;
-                    let (container_id, container_taffy, container_motion, container_in_row) = {
-                        let slot = &mut self.nodes[old_idx];
-                        let old_parent = slot.parent;
-                        let stub = Node::moved_stub(slot);
-                        let mut n = std::mem::replace(slot, stub);
-                        if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
-                            n.text_layout = None;
-                            n.elided = None;
-                            n.clear_tabular_layout();
-                        }
-                        n.clear_run_layout();
-                        n.scale_track = false;
-                        n.group_fade = false;
-                        n.virtual_mount = false;
-                        n.parent = old_parent.map(|p| old_to_new[p] as usize);
-                        n.target = [0.0; 4];
-                        n.local = MRect::ZERO;
-                        n.inset = [0.0; 4];
-                        let info = (n.id, n.taffy, n.motion, n.in_row);
-                        nodes.push(n);
-                        info
-                    };
-                    reused.push(memo_reuse::ReusedSpan {
-                        new_start: new_container_idx,
-                        old_start: old_idx,
-                        len: 1,
-                        same_path: true,
-                        moved: true,
-                    });
-
-                    let container_style = taffy.style(container_taffy).clone();
-                    let parent_row = matches!(
-                        container_style.flex_direction(),
-                        FlexDirection::Row | FlexDirection::RowReverse
-                    );
-
-                    let mut item_slots = Vec::with_capacity(plan.next_mounted.len());
-                    let mut any_item_dirty = false;
-                    let mut built_iter = plan.built_items.into_iter().peekable();
-                    for (pos, key) in plan.next_mounted.iter().enumerate() {
-                        if built_iter.peek().is_some_and(|(p, _)| *p == pos) {
-                            let (_, item_el) = built_iter.next().unwrap();
-                            path_buf.clear();
-                            path_buf.push_str(&nodes[new_container_idx].path);
-                            let mut memo_ctx = memo_reuse::MemoFlattenCtx {
-                                old_nodes: &mut *self.nodes,
-                                old_present_len: 0,
-                                old_node_index: &*self.node_index,
-                                old_cursor: 0,
-                                committing: self.committing,
-                                committed: &empty_committed,
-                                pending,
-                                reused,
-                                taken_paths: Vec::new(),
-                                path_ids: &mut *self.path_ids,
-                                next_id: &mut *self.next_id,
-                                foreground: self.defaults.foreground,
-                                missed_virtual_memo: false,
-                            };
-                            let (kid_slot, kid_dirty) = flatten_with_buf(
-                                item_el,
-                                Some(new_container_idx),
-                                &mut path_buf,
-                                pos,
-                                container_motion,
-                                container_in_row,
-                                parent_row,
-                                &mut taffy,
-                                &mut nodes,
-                                scale,
-                                &mut memo_ctx,
-                            );
-                            pending = memo_ctx.pending;
-                            reused = memo_ctx.reused;
-                            item_slots.push(kid_slot);
-                            any_item_dirty |= kid_dirty;
-                        } else {
-                            let &(rs, re) = &plan.mounted_items[key];
-                            let item_taffy = self.nodes[rs].taffy;
-                            move_slice(
-                                self.nodes,
-                                rs..re,
-                                &mut nodes,
-                                &mut old_to_new,
-                                &mut taffy,
-                                &mut reused,
-                                Some(false),
-                            );
-                            item_slots.push(item_taffy);
-                        }
-                    }
-
-                    let child_mark = taffy.begin_children();
-                    for s in item_slots {
-                        taffy.push_child(s);
-                    }
-                    let (slot, dirty) = taffy.sync_node(
-                        container_id.0,
-                        new_container_idx as u32,
-                        container_style,
-                        None,
-                        false,
-                        child_mark,
-                        any_item_dirty,
-                    );
-                    debug_assert_eq!(slot, container_taffy);
-                    if dirty {
-                        taffy.mark_dirty_and_ancestors(
-                            container_taffy,
-                            std::iter::successors(nodes[new_container_idx].parent, |&p| nodes[p].parent)
-                                .map(|p| nodes[p].taffy),
-                        );
-                    }
-                    old_idx = plan.subtree_end;
-                }
-                }
-            } else if on_spine[old_idx] {
-                move_slice(
-                    self.nodes,
-                    old_idx..old_idx + 1,
-                    &mut nodes,
-                    &mut old_to_new,
-                    &mut taffy,
-                    &mut reused,
-                    None,
-                );
-                old_idx += 1;
-            } else {
-                let mut sub_end = old_idx + 1;
-                while sub_end < self.nodes.len()
-                    && self.nodes[sub_end].parent.is_some_and(|p| p >= old_idx)
-                {
-                    sub_end += 1;
-                }
-                move_slice(
-                    self.nodes,
-                    old_idx..sub_end,
-                    &mut nodes,
-                    &mut old_to_new,
-                    &mut taffy,
-                    &mut reused,
-                    None,
-                );
-                old_idx = sub_end;
-            }
-        }
+        let old_len = self.nodes.len();
+        let mut emit = EmitCtx {
+            old_nodes: self.nodes,
+            node_index: self.node_index,
+            committing: self.committing,
+            empty_committed: &empty_committed,
+            path_ids: self.path_ids,
+            next_id: self.next_id,
+            foreground: self.defaults.foreground,
+            scale,
+            virtuals: self.virtuals,
+            on_spine: &on_spine,
+            plans: plans.into_iter().map(Some).collect(),
+            taffy,
+            nodes,
+            pending,
+            reused,
+            path_buf,
+            old_to_new: vec![u32::MAX; old_len],
+        };
+        emit.emit_range(0..old_len, None);
+        let EmitCtx { mut taffy, nodes, mut pending, mut reused, mut path_buf, .. } = emit;
 
         path_buf.clear();
         self.memo.path_scratch = path_buf;
