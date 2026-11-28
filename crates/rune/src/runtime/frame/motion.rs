@@ -136,6 +136,7 @@ impl RuntimeCore {
         let edge = self.laid_edge_scroll(app);
         if edge.repaint { animating |= self.build(); }
         animating |= edge.queued;
+        self.laid_autoscroll();
         self.report_at_bottom();
         animating |= self.report_visible_rows();
         self.report_layout();
