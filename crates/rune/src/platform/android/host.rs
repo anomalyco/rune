@@ -24,9 +24,9 @@ use crate::compose::Compositor;
 use crate::platform::embed::{EmbedFrame, LayerHost};
 use crate::runtime::Waker;
 use crate::tooling::AppSpec;
-use crate::{Key, KeyEvent, Mods};
+use crate::{Haptic, Key, KeyEvent, Mods};
 
-use super::logcat;
+use super::{haptics, logcat};
 use super::machine::{self, Effect, Event, State};
 
 static JAVA_VM: AtomicPtr<JavaVM> = AtomicPtr::new(ptr::null_mut());
@@ -39,6 +39,8 @@ struct ViewBridge {
     cancel_frame: jmethodID,
     schedule_wake_after: jmethodID,
     post_wake: jmethodID,
+    perform_haptic: jmethodID,
+    api_level: i32,
 }
 
 // SAFETY: JNI global references and `jmethodID`s are process-wide and safe to pass across threads
@@ -66,6 +68,7 @@ trait AndroidRunner {
     fn send_escape(&mut self);
     fn drain_shared(&mut self);
     fn frame(&mut self) -> Option<EmbedFrame>;
+    fn take_haptics(&mut self) -> Vec<Haptic>;
 }
 
 struct PendingAndroidApp<S: 'static> {
@@ -171,6 +174,10 @@ impl<S: 'static> AndroidRunner for TypedRunner<S> {
         let host = self.host.as_mut()?;
         let _ = self.shared.drain_window(host.runtime_mut(), |_| {});
         Some(host.frame())
+    }
+
+    fn take_haptics(&mut self) -> Vec<Haptic> {
+        self.host.as_mut().map(LayerHost::take_haptics).unwrap_or_default()
     }
 }
 
@@ -396,6 +403,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
         let cancel_frame = get_method(env, cls, c"cancelFrame".as_ptr(), c"()V".as_ptr());
         let schedule_wake_after = get_method(env, cls, c"scheduleWakeAfter".as_ptr(), c"(J)V".as_ptr());
         let post_wake = get_method(env, cls, c"postWake".as_ptr(), c"()V".as_ptr());
+        let perform_haptic = get_method(env, cls, c"performHaptic".as_ptr(), c"(I)V".as_ptr());
         if let Some(del) = (**env).DeleteLocalRef {
             del(env, cls);
         }
@@ -403,6 +411,7 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             || cancel_frame.is_null()
             || schedule_wake_after.is_null()
             || post_wake.is_null()
+            || perform_haptic.is_null()
         {
             jni_clear_exception(env);
             return None;
@@ -412,12 +421,15 @@ unsafe fn build_view_bridge(env: *mut JNIEnv, view: jobject) -> Option<ViewBridg
             jni_clear_exception(env);
             return None;
         }
+        let api_level = haptics::read_sdk_int(env);
         Some(ViewBridge {
             obj: global,
             schedule_frame,
             cancel_frame,
             schedule_wake_after,
             post_wake,
+            perform_haptic,
+            api_level,
         })
     }
 }
@@ -533,6 +545,7 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                 }
                 Effect::DetachSurface => {
                     if let Some(runner) = &mut host.runner {
+                        let _ = runner.take_haptics();
                         runner.detach();
                     }
                     host.release_native_window();
@@ -577,7 +590,15 @@ fn dispatch(env: *mut JNIEnv, event: Event, pending_window: *mut ndk_sys::ANativ
                     }
                 }
                 Effect::DrawFrame => {
-                    if let Some(outcome) = host.runner.as_mut().and_then(|r| r.frame()) {
+                    if let Some((outcome, pending)) =
+                        host.runner.as_mut().and_then(|r| Some((r.frame()?, r.take_haptics())))
+                    {
+                        if !pending.is_empty()
+                            && let Some(v) = host.bridge.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                        {
+                            // SAFETY: `env` is the UI thread's `JNIEnv*` and `v` is locked.
+                            unsafe { haptics::flush_jni(env, v.obj, v.perform_haptic, v.api_level, outcome.drew, pending) };
+                        }
                         let follow = machine::step(
                             &mut host.state,
                             Event::FrameDone {
@@ -730,6 +751,11 @@ unsafe extern "system" fn native_resume(env: *mut JNIEnv, _this: jobject) {
 }
 
 unsafe extern "system" fn native_pause(env: *mut JNIEnv, _this: jobject) {
+    HOST.with(|slot| {
+        if let Some(runner) = slot.borrow_mut().as_mut().and_then(|h| h.runner.as_mut()) {
+            let _ = runner.take_haptics();
+        }
+    });
     let _ = dispatch(env, Event::Paused, ptr::null_mut());
 }
 
@@ -753,6 +779,9 @@ unsafe extern "system" fn native_wake(env: *mut JNIEnv, _this: jobject) {
             && let Some(runner) = &mut host.runner
         {
             runner.drain_shared();
+            if !host.state.resumed {
+                let _ = runner.take_haptics();
+            }
         }
     });
     let _ = dispatch(env, Event::Wake, ptr::null_mut());
