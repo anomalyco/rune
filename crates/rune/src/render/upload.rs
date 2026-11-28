@@ -155,35 +155,60 @@ impl Renderer {
         staging.write_texture_rows(texture, y0, &data[(y0 * row) as usize..(y1 * row) as usize]);
     }
 
-    /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
-    /// first use. Note: `ImageCache` decodes on CPU only; `upload_images`, `FillPass`, and
-    /// `build_surfaces` run strictly inside frame preparation, which is unreachable once
-    /// `GpuLossPolicy::Terminal` latches.
+    /// Uploads changed rectangles of the runtime's image atlas (`El::pixels`), creating its
+    /// texture on first use, then releases any retained CPU `ImagePage::data` shadow buffers so
+    /// steady GPU frames hold zero full-page CPU copies. Note: `ImageCache` decodes on CPU only;
+    /// `upload_images`, `FillPass`, and `build_surfaces` run strictly inside frame preparation,
+    /// which is unreachable once `GpuLossPolicy::Terminal` latches.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
-        if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
+        self.upload_images_inner(device, queue, images, false);
+    }
+
+    /// Like [`Self::upload_images`], but keeps CPU `ImagePage::data` buffers while a CPU painter
+    /// still shares the atlas (e.g. during Windows CPU-to-GPU handover before commit).
+    #[cfg(target_os = "windows")]
+    pub(crate) fn upload_images_retaining_cpu(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
+        self.upload_images_inner(device, queue, images, true);
+    }
+
+    fn upload_images_inner(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas, retain_cpu: bool) {
+        if images.pages.is_empty() && self.images.is_empty() {
+            if !retain_cpu { images.release_cpu_pages(); }
+            return self.refresh_layer_bindings(device);
+        }
         let staging = self.uploads.staging(device, queue);
         if staging.lost() != self.uploads.lost.1 {
             self.uploads.lost.1 = staging.lost();
-            for page in &mut images.pages { page.dirty = Some((0, page.height)); }
+            images.invalidate();
         }
         let mut changed = self.images.len() != images.pages.len();
         self.images.resize_with(images.pages.len(), || None);
-        for (index, page) in images.pages.iter_mut().enumerate() {
+        for index in 0..images.pages.len() {
+            let (active, width, height) = {
+                let page = &images.pages[index];
+                (page.is_active(), page.width, page.height)
+            };
             // A page past the device's largest texture (placed before this renderer said its limit)
             // draws nothing rather than failing validation.
-            if page.data.is_empty() || page.width.max(page.height) > self.max_texture_dim {
-                changed |= self.images[index].is_some(); self.images[index] = None; continue;
+            if !active || width.max(height) > self.max_texture_dim {
+                changed |= self.images[index].is_some();
+                self.images[index] = None;
+                images.clear_page_uploads(index);
+                continue;
             }
-            if self.images[index].as_ref().is_none_or(|(t, _)| t.width() != page.width || t.height() != page.height) {
-                let texture = Self::image_texture(device, page.width, page.height);
+            let recreated = self.images[index].as_ref().is_none_or(|(t, _)| t.width() != width || t.height() != height);
+            if recreated {
+                let texture = Self::image_texture(device, width, height);
                 let bind = Self::bind_group(device, &self.bind_layout, &self.globals, self.uber.outlines(), &self.atlas, &texture, None);
                 self.images[index] = Some((texture, bind));
                 changed = true;
-                page.dirty = Some((0, page.height));
             }
-            let Some(rows) = page.dirty.take() else { continue };
-            Self::write_rows(&staging, &self.images[index].as_ref().unwrap().0, &page.data, rows);
+            let texture = &self.images[index].as_ref().unwrap().0;
+            images.drain_page_uploads(index, recreated, |x, y, w, h, bytes| {
+                staging.write_texture_rect(texture, x, y, w, h, bytes);
+            });
         }
+        if !retain_cpu { images.release_cpu_pages(); }
         if changed { self.images_changed(); }
         self.refresh_layer_bindings(device);
     }
@@ -216,7 +241,7 @@ impl Renderer {
             self.images.truncate(images.pages.len());
         }
         for (slot, page) in self.images.iter_mut().zip(&images.pages) {
-            if (page.data.is_empty()
+            if (!page.is_active()
                 || slot.as_ref().is_some_and(|(t, _)| t.width() != page.width || t.height() != page.height))
                 && slot.take().is_some()
             {

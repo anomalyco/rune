@@ -380,8 +380,9 @@ fn overlay_give_back_drops_freed_image_textures_at_rest_and_all_on_hide_then_wak
     overlay.note_presented_with(t0, false);
     overlay.wake_due(t0 + REST_AFTER);
     assert_eq!(overlay.rest, Rest::Idle);
-    assert!(overlay.rt.images.pages[0].data.is_empty());
-    assert!(!overlay.rt.images.pages[1].data.is_empty());
+    assert!(!overlay.rt.images.pages[0].is_active());
+    assert!(overlay.rt.images.pages[1].is_active());
+    assert_eq!(overlay.rt.images.cpu_bytes(), 0);
     assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_count(), 1, "visible page stays resident at rest");
     assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_bytes(), page1_bytes);
     #[cfg(feature = "test-gpu-counters")]

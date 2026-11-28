@@ -169,14 +169,33 @@ impl Shelves {
     }
 }
 
+/// A dirty rectangle queued for direct GPU upload when no CPU page shadow buffer is retained.
+pub(crate) struct PendingWrite {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    pub(crate) level: usize,
+    pub(crate) frame: usize,
+    pub(crate) data: crate::pixels::FrameData,
+}
+
 /// One stable shelf page, or an exact-size standalone page for a large image.
 pub struct ImagePage {
     pub width: u32,
     pub height: u32,
+    /// Optional CPU-side RGBA8 shadow buffer (empty in GPU-backed mode once uploaded).
     pub data: Vec<u8>,
     /// Rows `[y0, y1)` changed since the last upload.
     pub dirty: Option<(u32, u32)>,
     pub(crate) shelves: Shelves,
+    /// Whether this page currently owns an allocated shelf or standalone surface (true even when
+    /// `data` has been released in GPU-backed mode).
+    active: bool,
+    /// Whether the entire page needs re-upload from live slots on the next GPU upload.
+    pub(crate) full_upload: bool,
+    /// Dirty slot writes queued since the last GPU upload in GPU-backed mode.
+    pub(crate) pending: Vec<PendingWrite>,
     /// Drawn from in the last completed frame.
     pub(crate) shown: bool,
     /// Drawn from in this frame so far; only ever set until the frame ends.
@@ -194,62 +213,110 @@ impl ImagePage {
         (pw as usize).saturating_mul(ph as usize).saturating_mul(4)
     }
 
+    /// Whether this page currently holds a live allocation (distinct from `data.is_empty()`, which
+    /// is also true in GPU-backed mode once the CPU shadow buffer is released).
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Logical RGBA8 footprint of this page's texture in bytes, or 0 when inactive.
+    pub fn pixel_bytes(&self) -> usize {
+        if self.active {
+            (self.width as usize).saturating_mul(self.height as usize).saturating_mul(4)
+        } else {
+            0
+        }
+    }
+
+    /// CPU heap bytes currently retained in `self.data`.
+    pub fn cpu_bytes(&self) -> usize {
+        self.data.len()
+    }
+
     pub(crate) fn is_shelf(&self) -> bool {
-        self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE
+        self.active && self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE
     }
 
     /// Whether this page might accept a relocated slot without evicting a currently shown page.
     pub(crate) fn has_free_space(&self) -> bool {
-        self.data.is_empty() || !self.shown || (self.is_shelf() && self.shelves.has_free_space())
+        !self.active || !self.shown || (self.is_shelf() && self.shelves.has_free_space())
     }
 
     /// A shelf page starts with the rows its first image needs (at least
     /// `IMAGE_PAGE_START_ROWS`) and grows as its shelves fill (`allocate`), up to
     /// `IMAGE_ATLAS_SIZE`: a window that shows a few icons holds 512 KiB of it, not 4 MiB.
-    pub(crate) fn new(w: u32, h: u32) -> Self {
+    /// In GPU-backed mode (`retain_cpu == false`), `data` stays empty (0 bytes) and dirty
+    /// rectangles upload directly from `Pixels`.
+    pub(crate) fn new(w: u32, h: u32, retain_cpu: bool) -> Self {
         let (width, height) = Self::initial_size(w, h);
         Self {
             width,
             height,
-            data: vec![0; width as usize * height as usize * 4],
+            data: if retain_cpu { vec![0; width as usize * height as usize * 4] } else { Vec::new() },
             dirty: None,
             shelves: Shelves::default(),
+            active: true,
+            full_upload: true,
+            pending: Vec::new(),
             shown: false,
             touched: false,
         }
     }
 
+    pub(crate) fn drop_cpu_data(&mut self) {
+        self.data = Vec::new();
+    }
+
+    pub(crate) fn queue_pending(&mut self, write: PendingWrite) {
+        if let Some(existing) = self.pending.iter_mut().find(|p| p.x == write.x && p.y == write.y && p.w == write.w && p.h == write.h) {
+            *existing = write;
+        } else {
+            self.pending.push(write);
+        }
+    }
+
     pub(crate) fn free_rect(&mut self, x: u32, y: u32, w: u32) {
-        if !self.data.is_empty() {
+        if self.active {
             self.shelves.free(self.is_shelf(), x, y, w);
+            self.pending.retain(|p| !(p.x == x && p.y == y && p.w == w));
         }
     }
 
     pub(crate) fn empty(&mut self) {
         self.shelves.reset();
+        self.active = false;
         self.dirty = None;
+        self.full_upload = false;
+        self.pending.clear();
         self.data = Vec::new();
     }
 
     pub(crate) fn shrink_to_fit_rows(&mut self) {
-        if self.data.is_empty() || !self.is_shelf() { return; }
+        if !self.active || !self.is_shelf() { return; }
         let target_h = self.shelves.used_rows().next_power_of_two().clamp(IMAGE_PAGE_START_ROWS, IMAGE_ATLAS_SIZE);
         if target_h < self.height {
             self.height = target_h;
-            self.data.truncate(self.width as usize * self.height as usize * 4);
-            self.data.shrink_to_fit();
+            if !self.data.is_empty() {
+                self.data.truncate(self.width as usize * self.height as usize * 4);
+                self.data.shrink_to_fit();
+            }
+            self.full_upload = true;
             self.dirty = Some((0, self.height));
         }
     }
 
     pub(crate) fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        if !self.active { return None; }
         if !self.is_shelf() {
             return self.shelves.alloc_standalone(self.width, self.height, w, h);
         }
         let at = self.shelves.alloc_shelf(w, h)?;
         if self.shelves.used_rows() > self.height {
             self.height = self.shelves.used_rows().next_power_of_two().min(IMAGE_ATLAS_SIZE);
-            self.data.resize(self.width as usize * self.height as usize * 4, 0);
+            if !self.data.is_empty() {
+                self.data.resize(self.width as usize * self.height as usize * 4, 0);
+            }
+            self.full_upload = true;
             self.dirty = Some((0, self.height));
         }
         Some(at)

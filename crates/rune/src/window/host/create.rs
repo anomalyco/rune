@@ -563,7 +563,11 @@ impl Host {
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
-        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
+        {
+            let rt = self.app.rt_mut();
+            rt.set_renderer_kind(crate::RendererKind::Gpu);
+            rt.images.set_backing(crate::pixels::Backing::Gpu);
+        }
         #[cfg(target_os = "linux")]
         self.apply_window_color_scheme();
         self.sync_window_backdrop(false);

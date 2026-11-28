@@ -539,7 +539,9 @@ impl super::OverlayCore {
         );
         self.cpu_layered_failed = true;
         self.release_cpu();
-        app.rt_mut().set_renderer_kind(RendererKind::Gpu);
+        let rt = app.rt_mut();
+        rt.set_renderer_kind(RendererKind::Gpu);
+        rt.images.set_backing(crate::pixels::Backing::Gpu);
         self.prepare(app, event_loop, showing);
     }
 

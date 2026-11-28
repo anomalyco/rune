@@ -361,3 +361,63 @@ fn oversized_evicts_after_idle_flushes_and_on_trim_oversized() {
     assert_eq!(kept_oversized(&st2), (0, 0), "trim_oversized drops returned and free oversized chunks");
     assert_eq!(kept_normal_bytes(&st2), CHUNK, "trim_oversized keeps normal <= 4 MiB chunks");
 }
+
+#[test]
+fn write_texture_rect_writes_unaligned_subrects_without_clobbering_neighbors() {
+    let Some((device, queue)) = gpu() else { return };
+    let (w, h) = (32u32, 16u32);
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("staging rect test"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let st = Staging::new(&device, &queue);
+    // Two unaligned-width sub-rectangles on the same rows: 13x7 at (2, 3) and 11x7 at (17, 3).
+    let left = [200u8, 40, 20, 255].repeat(13 * 7);
+    let right = [30u8, 180, 240, 255].repeat(11 * 7);
+    st.write_texture_rect(&tex, 2, 3, 13, 7, &left);
+    st.write_texture_rect(&tex, 17, 3, 11, 7, &right);
+    flush_and_wait(&device, &queue, &st);
+
+    // Update only the left sub-rectangle; right sub-rectangle on the same rows must stay intact.
+    let left2 = [10u8, 220, 90, 255].repeat(13 * 7);
+    st.write_texture_rect(&tex, 2, 3, 13, 7, &left2);
+    flush_and_wait(&device, &queue, &st);
+
+    let bpr = padded_row_bytes(w, 4);
+    let rb = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("staging rect readback"),
+        size: u64::from(bpr) * u64::from(h),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        tex.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &rb,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    let slice = rb.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let pixels = unpad_rows(&slice.get_mapped_range().unwrap(), w as usize * 4, h, bpr);
+    let px = |x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * w + x) * 4) as usize;
+        pixels[i..i + 4].try_into().unwrap()
+    };
+    assert_eq!(px(0, 0), [0, 0, 0, 0], "untouched corner stays zero");
+    assert_eq!(px(2, 3), [10, 220, 90, 255], "updated left rect top-left");
+    assert_eq!(px(14, 9), [10, 220, 90, 255], "updated left rect bottom-right");
+    assert_eq!(px(15, 5), [0, 0, 0, 0], "gap between rects stays zero");
+    assert_eq!(px(17, 3), [30, 180, 240, 255], "untouched right rect top-left preserved");
+    assert_eq!(px(27, 9), [30, 180, 240, 255], "untouched right rect bottom-right preserved");
+}
