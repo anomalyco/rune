@@ -52,7 +52,7 @@ impl RuntimeCore {
             default_button: n.focus.default,
             labelled: n.label.as_deref().is_some_and(|l| !l.trim().is_empty()),
             keyed: n.key.is_some(),
-            has_text: text.is_some_and(|t| !t.source_text().trim().is_empty() || t.redacted),
+            has_text: text.is_some_and(|t| !super::text::spoken_text(t).trim().is_empty() || t.redacted),
             image: n.vis.pixels.is_some() || n.vis.surface.is_some(),
         };
         // A control the keyboard reaches (or that declares custom accessibility actions) is always
@@ -146,7 +146,7 @@ impl RuntimeCore {
             ).hash(&mut h);
             for l in &t.cold.links { (l.start, l.end, &l.id, &l.href, l.role, &l.label).hash(&mut h); }
             for p in &t.cold.pills {
-                if let Some(b) = p.bare.as_deref().filter(|b| b.label.is_some()) { (p.start, &b.label, &b.help).hash(&mut h); }
+                if let Some(b) = p.bare.as_deref().filter(|b| b.label.is_some()) { (p.start, p.end, b.replace.is_some(), &b.label, &b.help).hash(&mut h); }
             }
         }
         // A text's lines come from its layout and where it scrolled; a long field's drawn lines
@@ -233,7 +233,7 @@ impl RuntimeCore {
             if let Some(input) = n.input.as_deref() {
                 input.edit.text.hash(&mut h);
             } else if let Some(t) = n.text.as_deref() {
-                t.source_text().hash(&mut h);
+                super::text::spoken_text(t).hash(&mut h);
             }
         }
         content_print.hash(&mut h);
@@ -249,7 +249,7 @@ impl RuntimeCore {
             let n = &self.tree.nodes[j];
             let own = if n.a11y.hidden || n.role == "list-marker" || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
                 else if let Some(l) = n.label.as_deref() { hash_str(l) }
-                else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(t.source_text())) };
+                else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(&super::text::spoken_text(t))) };
             sub[j] = mix(sub[j], own);
             if let Some(p) = n.parent { sub[p] = mix(sub[p], sub[j]); }
         }
@@ -279,11 +279,11 @@ impl RuntimeCore {
         let labelled = related(more.and_then(|m| m.labelled_by.as_deref()));
         let label = n.label.as_deref().filter(|l| !l.trim().is_empty()).or(labelled.as_deref());
         if let Some(label) = label { node.set_label(label); }
+        let spoken = text.filter(|_| !secure).map(super::text::spoken_text);
         // A secret's text never reaches the tree; its label must describe it instead.
-        match (text, role) {
-            (Some(_), _) if secure => {}
-            (Some(t), Role::Label) => node.set_value(t.source_text()),
-            (Some(t), _) if label.is_none() => node.set_label(t.source_text()),
+        match (spoken.as_deref(), role) {
+            (Some(s), Role::Label) => node.set_value(s),
+            (Some(s), _) if label.is_none() => node.set_label(s),
             _ => {}
         }
         if label.is_none() && text.is_none() && roles::named_from_content(role) {
@@ -293,7 +293,7 @@ impl RuntimeCore {
         let described = related(more.and_then(|m| m.described_by.as_deref()));
         // A tooltip describes the element unless it only repeats its name, or shows only while
         // the text is cut short and it isn't.
-        let name = label.or(text.filter(|_| !secure).map(|t| t.source_text()));
+        let name = label.or(spoken.as_deref());
         let help = n.help.as_deref()
             .filter(|_| !n.help_cut || n.text_cut(self.env.scale))
             .filter(|h| name.is_none_or(|name| !h.trim().starts_with(name.trim())))
@@ -607,7 +607,7 @@ impl RuntimeCore {
             if n.label.as_deref().is_some_and(|l| !l.trim().is_empty()) { continue; }
             let more = n.a11y.more.as_deref();
             if more.and_then(|m| m.labelled_by.as_deref()).and_then(|k| self.a11y_keyed(i, k)).is_some_and(|j| !self.a11y_words(j).is_empty()) { continue; }
-            if !field && (n.text.as_deref().is_some_and(|t| !t.source_text().trim().is_empty()) || !self.a11y_content_name(i).is_empty()) { continue; }
+            if !field && (n.text.as_deref().is_some_and(|t| !super::text::spoken_text(t).trim().is_empty()) || !self.a11y_content_name(i).is_empty()) { continue; }
             let site: String = n.path.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
             if !WARNED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_default().insert(site) { continue; }
             let what = if field { "text field" } else { n.role };
@@ -637,7 +637,7 @@ impl RuntimeCore {
         let n = &self.tree.nodes[j];
         if n.is_secure() { return String::new(); }
         n.label.as_deref().filter(|l| !l.trim().is_empty()).map(str::to_owned)
-            .or_else(|| n.text.as_deref().filter(|_| n.input.is_none()).map(|t| t.source_text().trim().to_owned()))
+            .or_else(|| n.text.as_deref().filter(|_| n.input.is_none()).map(|t| super::text::spoken_text(t).trim().to_owned()))
             .unwrap_or_else(|| self.a11y_content_name(j))
     }
 
@@ -662,7 +662,7 @@ impl RuntimeCore {
                 push_words(&mut out, l);
                 skip = Some(j);
             } else if let Some(t) = n.text.as_deref().filter(|_| n.input.is_none()) {
-                push_words(&mut out, t.source_text());
+                push_words(&mut out, &super::text::spoken_text(t));
             }
             if out.len() >= NAME_MAX { break; }
             j += 1;

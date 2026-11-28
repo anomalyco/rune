@@ -308,19 +308,41 @@ pub(crate) fn round1(v: f32) -> f32 { (v * 10.0).round() / 10.0 }
 pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> String {
     let a = a.min(spec.content.len());
     let b = b.min(spec.content.len()).max(a);
-    if spec.cold.uncopied.is_empty() {
+    let has_labels = spec.cold.pills.iter().any(|p| p.bare.as_deref().is_some_and(|bare| bare.replace.is_some() && bare.label.is_some()));
+    if spec.cold.uncopied.is_empty() && !has_labels {
         return spec.content[a..b].to_owned();
     }
+    let push_clean = |out: &mut String, from: usize, to: usize| {
+        if spec.cold.uncopied.is_empty() {
+            if from < to { out.push_str(&spec.content[from..to]); }
+            return;
+        }
+        let mut cur = from;
+        for &(ua, ub) in &spec.cold.uncopied {
+            let (ua, ub) = (ua as usize, ub as usize);
+            if ub <= cur || ua >= to { continue; }
+            let stop = ua.max(cur).min(to);
+            if cur < stop { out.push_str(&spec.content[cur..stop]); }
+            cur = ub.min(to);
+        }
+        if cur < to { out.push_str(&spec.content[cur..to]); }
+    };
     let mut out = String::with_capacity(b - a);
-    let mut cur = a;
-    for &(ua, ub) in &spec.cold.uncopied {
-        let (ua, ub) = (ua as usize, ub as usize);
-        if ub <= cur || ua >= b { continue; }
-        let stop = ua.max(cur).min(b);
-        if cur < stop { out.push_str(&spec.content[cur..stop]); }
-        cur = ub.min(b);
+    if !has_labels {
+        push_clean(&mut out, a, b);
+        return out;
     }
-    if cur < b { out.push_str(&spec.content[cur..b]); }
+    let mut cur = a;
+    for p in &spec.cold.pills {
+        let Some(label) = p.bare.as_deref().filter(|bare| bare.replace.is_some()).and_then(|bare| bare.label.as_deref()) else { continue };
+        let (pa, pb) = (p.start as usize, p.end as usize);
+        if pb <= cur || pa >= b { continue; }
+        let stop = pa.max(cur).min(b);
+        if cur < stop { push_clean(&mut out, cur, stop); }
+        out.push_str(label);
+        cur = pb.min(b);
+    }
+    if cur < b { push_clean(&mut out, cur, b); }
     out
 }
 

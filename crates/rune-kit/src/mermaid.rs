@@ -22,8 +22,10 @@ use rune::El;
 
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
-pub use rune_mermaid::{DiagramStyle, Drawing, Hover, may_draw, supported, supported_with};
-pub use rune_mermaid::DrawingModel;
+pub use rune_mermaid::{
+    DiagramStyle, Drawing, DrawingModel, Hover, may_draw, render_svg, render_svg_bare, supported,
+    supported_with,
+};
 
 /// Prepare the drawn label runs for a viewer that searches and highlights a diagram.
 pub fn prepare(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<DrawingModel> {
@@ -37,6 +39,17 @@ pub fn prepare(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<Drawi
 /// the supported subset.
 pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
     diagram(src, &style.diagram, false, false)
+}
+
+/// `src` rendered as a static, self-contained framed-card SVG document with `style`'s diagram
+/// colours, or `None` when it is outside the supported subset.
+pub fn svg(src: &str, style: &MarkdownStyle) -> Option<String> {
+    rune_mermaid::render_svg(src, &self::style(&style.diagram))
+}
+
+/// Like [`svg`], without the surrounding card frame or card padding.
+pub fn svg_bare(src: &str, style: &MarkdownStyle) -> Option<String> {
+    rune_mermaid::render_svg_bare(src, &self::style(&style.diagram))
 }
 
 /// [`render`]'s title and drawing without the card, laid out for a card `max_width` points wide
@@ -116,4 +129,23 @@ fn style(paint: &DiagramPaint) -> DiagramStyle {
     s.font = paint.font;
     s.max_width = paint.max_width;
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kit_mermaid_svg_and_reexports_render_framed_and_bare() {
+        let md = MarkdownStyle::neutral(false);
+        let src = "flowchart LR\n  A[One] --> B[Two]\n";
+        let framed = svg(src, &md).expect("kit mermaid::svg");
+        let bare = svg_bare(src, &md).expect("kit mermaid::svg_bare");
+        let direct = render_svg(src, &DiagramStyle::neutral(false)).expect("re-exported render_svg");
+        assert!(framed.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg""#));
+        assert!(framed.contains("<rect "));
+        assert!(!bare.contains("<rect "));
+        assert!(direct.contains(">One</text>"));
+        assert!(svg("unsupported", &md).is_none());
+    }
 }

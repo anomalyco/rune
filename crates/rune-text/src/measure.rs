@@ -407,6 +407,32 @@ pub fn measure(text: &str, spans: &[Span], style: TextStyle, max_width: Option<f
     measure_with(text, spans, style, max_width, RichLayoutOptions::default())
 }
 
+/// Visual lines of `text` laid out in `style` at `max_width` points: each line's UTF-8 byte
+/// range (without trailing line-break characters) and its baseline offset from the top in points.
+#[doc(hidden)]
+pub fn measure_lines(
+    text: &str,
+    style: TextStyle,
+    max_width: Option<f32>,
+) -> Vec<(std::ops::Range<usize>, f32)> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    with_text(|t| {
+        let l = t.layout_rich_with(text, &[], style, 1.0, max_width, RichLayoutOptions::default());
+        l.lines()
+            .map(|line| {
+                let mut r = line.text_range();
+                let bytes = text.as_bytes();
+                while r.end > r.start && matches!(bytes.get(r.end - 1), Some(b'\n' | b'\r')) {
+                    r.end -= 1;
+                }
+                (r, line.metrics().baseline)
+            })
+            .collect()
+    })
+}
+
 /// [`measure`] laid out with [`RichLayoutOptions`], so text that an `El` draws with
 /// `wrap_anywhere` measures to the lines it will actually take:
 /// `measure_with(text, &[], style, Some(w), RichLayoutOptions::new().wrap_anywhere())`.

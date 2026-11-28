@@ -476,7 +476,7 @@ fn replaced_pill_hit_testing_splits_at_midpoint_and_carets_bracket_image() {
             gap: 0.0,
             radius: 0.0,
             image: None,
-            replace: Some(Replace { width: img_w, ascent: 16.0, descent: 4.0, bleed: 0.0 }),
+            replace: Some(Replace { width: img_w, ascent: 16.0, descent: 4.0, rise: 0.0, bleed: 0.0 }),
             label: None,
             help: None,
         })),
@@ -526,3 +526,124 @@ fn replaced_pill_hit_testing_splits_at_midpoint_and_carets_bracket_image() {
     assert_eq!(sel.len(), 1);
     assert!(((sel[0].0.x1 - sel[0].0.x0) as f32 - sz[0]).abs() <= 1.5, "selection width={}", sel[0].0.x1 - sel[0].0.x0);
 }
+#[test]
+fn inline_image_keeps_fractional_metrics_and_rise_and_covers_highlight_range_boxes() {
+    let mut ts = TextSystem::default();
+    let style = TextStyle::new(14.0, 400.0).lh(20.0);
+    let body = "before ￼ after";
+    let start = body.find('￼').unwrap() as u32;
+    let end = start + '￼'.len_utf8() as u32;
+
+    // 1. Fractional point metrics (width, ascent, descent, rise) survive without device-px rounding.
+    let scale = 1.5f32;
+    let pill_with_rise = |rise: f32| {
+        vec![PillChip {
+            start,
+            end,
+            icon: None,
+            image: None,
+            bg: None,
+            fg: None,
+            ring: None,
+            radius: None,
+            pad_x: None,
+            margin_x: None,
+            bare: Some(Box::new(BareIcon {
+                size: 0.0,
+                gap: 0.0,
+                radius: 0.0,
+                image: None,
+                replace: Some(Replace { width: 14.37, ascent: 9.25, descent: 2.75, rise, bleed: 0.0 }),
+                label: None,
+                help: None,
+            })),
+        }]
+    };
+    let p0 = pill_with_rise(0.0);
+    let p_up = pill_with_rise(3.25);
+    let p_dn = pill_with_rise(-2.5);
+    let p_neg_zero = pill_with_rise(-0.0);
+
+    // Cache key distinguishes rise and treats -0.0 == 0.0.
+    assert_eq!(
+        shape_key(body, &[], style, scale, false, &p0),
+        shape_key(body, &[], style, scale, false, &p_neg_zero),
+    );
+    assert_ne!(
+        shape_key(body, &[], style, scale, false, &p0),
+        shape_key(body, &[], style, scale, false, &p_up),
+    );
+    assert_ne!(
+        shape_key(body, &[], style, scale, false, &p0),
+        shape_key(body, &[], style, scale, false, &p_dn),
+    );
+
+    let l0 = ts.layout_blocks_inner(body, &[], &[], &p0, style, scale, None, Alignment::Start, false, false);
+    let l_up = ts.layout_blocks_inner(body, &[], &[], &p_up, style, scale, None, Alignment::Start, false, false);
+    let l_dn = ts.layout_blocks_inner(body, &[], &[], &p_dn, style, scale, None, Alignment::Start, false, false);
+
+    let mut b0 = Vec::new();
+    let mut b_up = Vec::new();
+    let mut b_dn = Vec::new();
+    bare_icons(&l0, &p0, scale, [0.3, 0.4], &mut b0);
+    bare_icons(&l_up, &p_up, scale, [0.3, 0.4], &mut b_up);
+    bare_icons(&l_dn, &p_dn, scale, [0.3, 0.4], &mut b_dn);
+
+    let [(_, at0, sz0)] = b0[..] else { panic!("expected 1 box: {b0:?}") };
+    let [(_, at_up, sz_up)] = b_up[..] else { panic!("expected 1 box: {b_up:?}") };
+    let [(_, at_dn, sz_dn)] = b_dn[..] else { panic!("expected 1 box: {b_dn:?}") };
+
+    // Width and height are exact fractional device px (14.37 * 1.5 = 21.555, 12.0 * 1.5 = 18.0).
+    assert!((sz0[0] - 14.37 * scale).abs() < 1e-3, "fractional width kept: {}", sz0[0]);
+    assert!((sz0[1] - 12.0 * scale).abs() < 1e-3, "exact height kept: {}", sz0[1]);
+    assert_eq!(sz_up, sz0, "rise preserves box size");
+    assert_eq!(sz_dn, sz0, "negative rise preserves box size");
+
+    // Draw origin is not snapped to whole pixels (carries fractional origin offset + layout x/y).
+    let base0 = l0.lines().next().unwrap().metrics().baseline;
+    let base_up = l_up.lines().next().unwrap().metrics().baseline;
+    let base_dn = l_dn.lines().next().unwrap().metrics().baseline;
+    assert!(((0.4 + base0 - at0[1]) - 9.25 * scale).abs() < 1e-3, "baseline - top == ascent*scale");
+    assert!(((0.4 + base_up - at_up[1]) - (9.25 + 3.25) * scale).abs() < 1e-3, "positive rise lifts box");
+    assert!(((0.4 + base_dn - at_dn[1]) - (9.25 - 2.5) * scale).abs() < 1e-3, "negative rise lowers box");
+
+    // 2. range_boxes(..., false) includes the replaced inline-image box with its own vertical extent,
+    //    and merges it smoothly into surrounding text without leaving a gap.
+    let img_only = range_boxes(&l_up, start as usize, end as usize, false);
+    assert_eq!(img_only.len(), 1, "image-only highlight box present");
+    let bb = img_only[0].0;
+    assert!(((bb.x1 - bb.x0) as f32 - sz_up[0]).abs() < 1e-2, "image highlight width: {bb:?}");
+    assert!(((bb.y1 - bb.y0) as f32 - sz_up[1]).abs() < 1e-2, "image highlight height: {bb:?}");
+    assert!((bb.y0 as f32 - (at_up[1] - 0.4)).abs() < 1e-2, "image highlight y0 matches image top");
+
+    let full = range_boxes(&l_up, 0, body.len(), false);
+    assert_eq!(full.len(), 1, "full-line highlight merges text + inline image with no gap: {full:?}");
+    assert!(full[0].0.x0 <= bb.x0 && full[0].0.x1 >= bb.x1, "merged box spans image horizontally");
+    assert!(full[0].0.y0 <= bb.y0 + 1e-3 && full[0].0.y1 >= bb.y1 - 1e-3, "merged box covers image vertically");
+
+    // 3. Regular chip pills stay excluded from range_boxes(..., false).
+    let chip_body = "ask @reviewer now";
+    let chip_pills = vec![PillChip {
+        start: 4,
+        end: 13,
+        icon: None,
+        image: None,
+        bg: None,
+        fg: None,
+        ring: None,
+        radius: None,
+        pad_x: None,
+        margin_x: None,
+        bare: None,
+    }];
+    let l_chip = ts.layout_blocks_inner(chip_body, &[], &[], &chip_pills, style, 1.0, None, Alignment::Start, false, false);
+    let hl_chip = range_boxes(&l_chip, 4, 13, false);
+    let sel_chip = range_boxes(&l_chip, 4, 13, true);
+    assert_eq!(hl_chip.len(), 1);
+    assert_eq!(sel_chip.len(), 1);
+    assert!(
+        (sel_chip[0].0.x1 - sel_chip[0].0.x0) > (hl_chip[0].0.x1 - hl_chip[0].0.x0) + 4.0,
+        "regular chip boxes stay excluded when pill_boxes == false",
+    );
+}
+

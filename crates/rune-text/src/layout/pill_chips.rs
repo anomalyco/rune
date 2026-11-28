@@ -19,7 +19,7 @@ pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: 
             let i = pill_index(b.id);
             let Some((pill, bare)) = pills.get(i).and_then(|p| Some((p, p.bare.as_deref()?))) else { continue };
             if bare.replace.is_some() {
-                out.push((i, [(origin[0] + b.x).round(), (origin[1] + b.y).round()], [b.width, b.height]));
+                out.push((i, [origin[0] + b.x, origin[1] + b.y], [b.width, b.height]));
                 continue;
             }
             let (mut asc, mut desc, mut gr_x1) = (0.0f32, 0.0f32, f32::NEG_INFINITY);

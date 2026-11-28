@@ -645,7 +645,7 @@ fn paragraphs_invalidate_when_pill_switches_to_or_resizes_replaced_image() {
             gap: 0.0,
             radius: 0.0,
             image: None,
-            replace: Some(Replace { width: w, ascent: asc, descent: desc, bleed: 0.0 }),
+            replace: Some(Replace { width: w, ascent: asc, descent: desc, rise: 0.0, bleed: 0.0 }),
             label: None,
             help: None,
         })),

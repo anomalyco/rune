@@ -179,6 +179,7 @@ impl El {
         let at = t.cold.pills.partition_point(|p| p.start < start);
         let bare = Some(Box::new(image.into_bare()));
         t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare });
+        t.shape = None;
         self
     }
 
@@ -281,14 +282,17 @@ impl El {
 
 /// An image set in text by [`El::inline_image`] or in a field pill by [`El::pill_inline_image`]:
 /// `width` points wide, `ascent` points above the baseline and `descent` below it, the image
-/// scaled to fit that box.
+/// scaled to fit that box. Fractional point metrics are kept without rounding to whole device
+/// pixels so formulas and inline pictures sit accurately on the text baseline.
 #[derive(Clone, Debug)]
 pub struct InlineImage {
     pixels: crate::Pixels,
     width: f32,
     ascent: f32,
     descent: f32,
+    rise: f32,
     bleed: f32,
+    label: Option<String>,
 }
 
 fn points(v: f32) -> f32 {
@@ -297,7 +301,14 @@ fn points(v: f32) -> f32 {
 
 impl InlineImage {
     pub fn new(pixels: crate::Pixels, width: f32, ascent: f32, descent: f32) -> Self {
-        Self { pixels, width: points(width), ascent: points(ascent), descent: points(descent), bleed: 0.0 }
+        Self { pixels, width: points(width), ascent: points(ascent), descent: points(descent), rise: 0.0, bleed: 0.0, label: None }
+    }
+    /// Shifts the image vertically relative to the text baseline in points: positive values raise
+    /// the box upward above the baseline and negative values lower it below. Non-finite values
+    /// become `0.0`.
+    pub fn rise(mut self, points: f32) -> Self {
+        self.rise = if points.is_finite() { points } else { 0.0 };
+        self
     }
     /// Draws the image `points` past each edge of its box, for an image with clear margins
     /// (rendered math's padding) that the line shouldn't make room for.
@@ -305,15 +316,25 @@ impl InlineImage {
         self.bleed = self::points(points);
         self
     }
+    /// Accessible text spoken by assistive technology in place of the replaced bytes (such as a
+    /// formula's TeX source or an inline image's alt text). Substituted directly into the text's
+    /// accessible value, name-from-content and `TextRun`s without emitting a duplicate sibling
+    /// `Role::Image` node. Selection, copy and find still see the replaced bytes. An empty label
+    /// is treated as none.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        self.label = (!label.is_empty()).then_some(label);
+        self
+    }
     pub(crate) fn into_bare(self) -> BareIcon {
-        let Self { pixels, width, ascent, descent, bleed } = self;
+        let Self { pixels, width, ascent, descent, rise, bleed, label } = self;
         BareIcon {
             size: 0.0,
             gap: 0.0,
             radius: 0.0,
             image: Some(pixels),
-            replace: Some(Replace { width, ascent, descent, bleed }),
-            label: None,
+            replace: Some(Replace { width, ascent, descent, rise, bleed }),
+            label,
             help: None,
         }
     }
@@ -391,5 +412,7 @@ pub(crate) fn with_pill_colors(spans: &[Span], pills: &[PillChip]) -> Vec<Span> 
     crate::text::flatten_spans(&all)
 }
 
+#[cfg(test)]
+mod inline_image_tests;
 #[cfg(test)]
 mod tests;

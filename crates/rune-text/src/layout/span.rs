@@ -151,15 +151,17 @@ pub struct BareIcon {
 }
 
 /// An image set on the baseline in place of a pill's label (see `InlineImage`): `width`
-/// points wide, `ascent` points above the baseline and `descent` below it. The label still
-/// holds its bytes, for selection and copy, but takes no room and draws nothing. The image
-/// draws `bleed` points past each edge of that box.
+/// points wide, `ascent` points above the baseline and `descent` below it, optionally shifted
+/// vertically by `rise` points (positive raises above the baseline). The label still holds its
+/// bytes, for selection and copy, but takes no room and draws nothing. The image draws `bleed`
+/// points past each edge of that box.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Replace {
     pub width: f32,
     pub ascent: f32,
     pub descent: f32,
+    pub rise: f32,
     pub bleed: f32,
 }
 
@@ -167,7 +169,8 @@ pub struct Replace {
 pub(crate) const HIDDEN_SIZE: f32 = 1e-3;
 
 /// Whether a glyph run shaped at `font_size` device px is a replaced label, which draws nothing.
-pub(crate) fn is_hidden_size(font_size: f32) -> bool {
+#[doc(hidden)]
+pub fn is_hidden_size(font_size: f32) -> bool {
     font_size <= HIDDEN_SIZE * 2.0
 }
 
@@ -217,6 +220,16 @@ pub(crate) const PILL_BARE: u64 = 1 << 59;
 /// Pill slice index stored in a [`PILL_BOX`] inline box id.
 pub(crate) const fn pill_index(id: u64) -> usize {
     ((id & !(PILL_BOX | PILL_BARE)) >> 1) as usize
+}
+
+/// Pill slice index of a leading pill inline box (`side == 0`, not a bare inline icon).
+#[doc(hidden)]
+pub const fn replaced_pill_index(id: u64) -> Option<usize> {
+    if id & PILL_BOX != 0 && id & PILL_BARE == 0 && id & 1 == 0 {
+        Some(pill_index(id))
+    } else {
+        None
+    }
 }
 
 /// Tags the inline boxes around padded [`SpanBox`] ranges: the rest of the id is the box's index

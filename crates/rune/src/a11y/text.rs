@@ -16,6 +16,54 @@ mod runs;
 
 pub(super) use runs::{Line, byte_at, lines};
 
+/// Whether `spec` carries any replaced inline image with an accessible label (`InlineImage::label`).
+pub(super) fn has_replaced_labels(spec: &TextSpec) -> bool {
+    spec.cold.pills.iter().any(|p| p.bare.as_deref().is_some_and(|b| b.replace.is_some() && b.label.is_some()))
+}
+
+/// Authored text of `spec` with any labelled replaced inline images (`InlineImage::label`)
+/// substituted in place of their placeholder bytes. Zero-allocation borrow on the common path.
+pub(super) fn spoken_text(spec: &TextSpec) -> Cow<'_, str> {
+    if !has_replaced_labels(spec) {
+        return Cow::Borrowed(spec.source_text());
+    }
+    spoken_slice(spec, 0, spec.content.len() as u32)
+}
+
+/// Authored text of `spec.content[start..end]` with any labelled replaced inline images
+/// substituted in place of their placeholder bytes.
+pub(super) fn spoken_slice(spec: &TextSpec, start: u32, end: u32) -> Cow<'_, str> {
+    let end = end.min(spec.content.len() as u32);
+    let start = start.min(end);
+    if !has_replaced_labels(spec) {
+        return Cow::Borrowed(spec.source_slice(start, end).unwrap_or(""));
+    }
+    let mut out = String::new();
+    let mut cur = start;
+    for p in &spec.cold.pills {
+        let Some(label) = p.bare.as_deref().filter(|b| b.replace.is_some()).and_then(|b| b.label.as_deref()) else {
+            continue;
+        };
+        if p.end <= cur || p.start >= end {
+            continue;
+        }
+        let stop = p.start.max(cur).min(end);
+        if cur < stop
+            && let Some(chunk) = spec.source_slice(cur, stop)
+        {
+            out.push_str(chunk);
+        }
+        out.push_str(label);
+        cur = p.end.min(end);
+    }
+    if cur < end
+        && let Some(tail) = spec.source_slice(cur, end)
+    {
+        out.push_str(tail);
+    }
+    Cow::Owned(out)
+}
+
 /// Text longer than this gets no per-character runs (a reader still gets its whole value). A field
 /// past it marks its selection on itself, publishes only its drawn visual lines under an
 /// intermediate container, and lets the vendored adapters answer its ranges and boxes on demand.
@@ -44,7 +92,7 @@ impl RuntimeCore {
             for (k, l) in lines.iter().enumerate() {
                 let id = line_id(n.id, k);
                 let mut run = AkNode::new(Role::TextRun);
-                run.set_value(content.get(l.range.clone()).unwrap_or_default());
+                run.set_value(l.text.as_deref().unwrap_or_else(|| content.get(l.range.clone()).unwrap_or_default()));
                 run.set_text_direction(if l.rtl { TextDirection::RightToLeft } else { TextDirection::LeftToRight });
                 if l.continues_line && k > 0 {
                     run.set_previous_on_line(line_id(n.id, k - 1));
@@ -89,8 +137,8 @@ impl RuntimeCore {
                 default_button: false, labelled: true, keyed: true, has_text: true, image: false,
             }).unwrap_or(Role::Link);
             let mut link = AkNode::new(role);
-            let words = spec.source_slice(l.start, l.end).unwrap_or("");
-            link.set_label(l.label.as_deref().unwrap_or(words));
+            let words = spoken_slice(spec, l.start, l.end);
+            link.set_label(l.label.as_deref().unwrap_or(words.as_ref()));
             link.set_author_id(l.id.as_str());
             if role == Role::Link {
                 if let Some(url) = crate::runtime::selection::link_menu::link_url(spec, l) {
@@ -124,6 +172,7 @@ impl RuntimeCore {
         // `<span role="img" aria-label>` is on a web page.
         for (k, r) in self.inline_icon_boxes(i, self.drawn_box(i)) {
             let Some(b) = spec.cold.pills.get(k).and_then(|p| p.bare.as_deref()) else { continue };
+            if b.replace.is_some() { continue; }
             let Some(label) = b.label.as_deref() else { continue };
             let mut icon = AkNode::new(Role::Image);
             icon.set_label(label);
@@ -251,7 +300,7 @@ impl RuntimeCore {
             return None;
         }
         let (origin, px) = self.a11y_text_origin(i, spec, layout);
-        let lines = lines(layout, &content, px, origin);
+        let lines = lines(layout, &content, &spec.cold.pills, px, origin);
         // `line_id` holds up to `LINK_BASE - 2` (`32,766`) runs per node; if a block exceeds that
         // or its runs don't cover `content`, publish its whole value/label without `TextRun`s.
         if lines.len() > (LINK_BASE as usize - 2)
@@ -296,7 +345,12 @@ impl RuntimeCore {
     /// The value and state a text field adds to its node.
     pub(super) fn a11y_input(&self, i: usize, input: &crate::el::InputSpec, node: &mut AkNode) {
         if !input.placeholder.is_empty() { node.set_placeholder(input.placeholder.as_str()); }
-        if !self.tree.nodes[i].is_secure() { node.set_value(input.edit.text.as_str()); }
+        if !self.tree.nodes[i].is_secure() {
+            let spoken = self.tree.nodes[i].text.as_deref()
+                .filter(|t| input.edit.preedit().is_none() && has_replaced_labels(t))
+                .map(spoken_text);
+            node.set_value(spoken.as_deref().unwrap_or(input.edit.text.as_str()));
+        }
         if input.access.is_none() || self.is_node_read_only(i) { node.set_read_only(); }
     }
 }
