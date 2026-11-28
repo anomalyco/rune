@@ -622,8 +622,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
             // macOS: only a process outside a bundle takes later launches (`single_instance`).
+            #[cfg(target_os = "macos")]
+            let takes_launches = !crate::relaunch::bundled();
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            let takes_launches = true;
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            if cfg!(not(target_os = "macos")) || !crate::relaunch::bundled() {
+            if takes_launches {
                 let proxy = this.proxy.clone();
                 crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
