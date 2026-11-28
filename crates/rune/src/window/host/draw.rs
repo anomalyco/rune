@@ -246,6 +246,8 @@ impl WindowFrame<'_> {
         l.damage.reset();
         #[cfg(target_os = "windows")]
         l.native.slot.reconfigured(ok);
+        #[cfg(target_os = "macos")]
+        if ok { l.note_surface_configured(); }
         ok
     }
 }
@@ -545,6 +547,8 @@ impl FrameHost for WindowFrame<'_> {
         let (Some(l), Some((gpu, _))) = (self.host.win.as_mut(), self.host.gpu.as_ref()) else {
             return Acquire::Missed(Missed::Unconfigured);
         };
+        #[cfg(target_os = "macos")]
+        l.restore_hidden_drawable();
         let Some(surface) = l.surface.as_ref() else { return Acquire::Missed(Missed::Unconfigured) };
         let frame = {
             let _acquire = StageGuard::enter(FrameStage::Acquire);
@@ -861,11 +865,17 @@ impl FrameHost for WindowFrame<'_> {
         #[cfg(target_os = "macos")]
         if !self.state.hidden && let Some(latency) = l.native.launch_drawables.settle(self.host.idle, now) {
             l.config.desired_maximum_frame_latency = latency;
-            if let (Some(surface), Some((gpu, _))) = (l.surface.as_ref(), self.host.gpu.as_ref())
-                && let Err(error) = configure(surface, gpu, &l.config)
-            {
-                eprintln!("rune: a window's surface refused its frame latency: {error}");
-                l.surface_ok = false;
+            let configured = match (l.surface.as_ref(), self.host.gpu.as_ref()) {
+                (Some(surface), Some((gpu, _))) => Some(configure(surface, gpu, &l.config)),
+                _ => None,
+            };
+            match configured {
+                Some(Ok(())) => l.note_surface_configured(),
+                Some(Err(error)) => {
+                    eprintln!("rune: a window's surface refused its frame latency: {error}");
+                    l.surface_ok = false;
+                }
+                None => {}
             }
         }
         if !self.state.hidden && (!self.host.idle || (self.host.trace.is_some() && self.host.args.frames.is_some())) {

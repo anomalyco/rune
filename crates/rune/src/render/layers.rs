@@ -327,8 +327,9 @@ impl Renderer {
     /// Iris Xe), cache textures no layer drew last frame, GPU textures of image atlas pages that
     /// `ImageAtlas::rest` already freed, and the backdrop copies and blur pyramid when the last
     /// frame read none. With `all`, also the scratch targets of this screen's layers, every image
-    /// atlas texture (recreated from `ImageAtlas` on the next `upload_images`), and its backdrop
-    /// copies, which its next frame makes again (a few ms on an integrated GPU). It keeps the
+    /// atlas texture (recreated from `ImageAtlas` on the next `upload_images`), the retained
+    /// partial-damage frame texture, and its backdrop copies, which its next frame makes again (a
+    /// few ms on an integrated GPU). It keeps the
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
@@ -343,6 +344,7 @@ impl Renderer {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
             }
             self.clear_images();
+            self.release_damage_retained();
         } else {
             self.prune_images(images);
         }

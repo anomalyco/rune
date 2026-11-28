@@ -463,3 +463,83 @@ fn detached_metal_layer_retires_presented_drawables_on_idle_poll_and_bounds_resi
         }
     });
 }
+
+/// Shrinking a detached `CAMetalLayer`'s `drawableSize` to `1×1` while hidden and restoring its
+/// configured dimensions before the next show works on both Rune's native Metal backend and
+/// wgpu's Metal backend, and the next acquired drawable matches the restored full size.
+#[test]
+fn metal_layer_shrinks_drawable_size_while_hidden_and_restores_before_draw() {
+    use objc2::rc::autoreleasepool;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_core_foundation::CGSize;
+
+    let check_instance = |instance: wgpu::Instance, label: &str| {
+        autoreleasepool(|_| {
+            // SAFETY: new detached off-screen layer, never added to any view or window.
+            let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
+            let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+            // SAFETY: `layer` outlives `surface`.
+            let surface = unsafe { instance.create_surface_unsafe(target) }.expect("Metal surface");
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            }))
+            .expect("Metal adapter");
+            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("Metal device");
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                width: 320,
+                height: 200,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![],
+                color_space: wgpu::SurfaceColorSpace::Auto,
+            };
+            surface.configure(&device, &config);
+            let drawable_size = || -> CGSize {
+                // SAFETY: `layer` is a live `CAMetalLayer`; `drawableSize` returns `CGSize`.
+                unsafe { msg_send![&*layer, drawableSize] }
+            };
+            let present_one = || -> wgpu::Extent3d {
+                autoreleasepool(|_| {
+                    let frame = match surface.get_current_texture() {
+                        wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                        other => panic!("{label}: drawable: {other:?}"),
+                    };
+                    let size = frame.texture.size();
+                    let enc = device.create_command_encoder(&Default::default());
+                    queue.submit([enc.finish()]);
+                    queue.present(frame);
+                    size
+                })
+            };
+
+            assert_eq!(drawable_size(), CGSize::new(320.0, 200.0), "{label}: initial configured size");
+            assert_eq!(present_one(), wgpu::Extent3d { width: 320, height: 200, depth_or_array_layers: 1 });
+            assert_eq!(present_one(), wgpu::Extent3d { width: 320, height: 200, depth_or_array_layers: 1 });
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("retire before hide");
+
+            // Hide: shrink to 1×1 (clamping 0 to 1 as well).
+            set_drawable_size(&surface, 0, 0);
+            assert_eq!(drawable_size(), CGSize::new(1.0, 1.0), "{label}: 0×0 clamps to 1×1");
+            set_drawable_size(&surface, 1, 1);
+            assert_eq!(drawable_size(), CGSize::new(1.0, 1.0), "{label}: shrunk while hidden");
+
+            // Show: restore full size before next acquire and verify full-size drawable.
+            set_drawable_size(&surface, config.width, config.height);
+            assert_eq!(drawable_size(), CGSize::new(320.0, 200.0), "{label}: restored before show");
+            assert_eq!(present_one(), wgpu::Extent3d { width: 320, height: 200, depth_or_array_layers: 1 });
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("retire after wake");
+            drop(surface);
+        });
+    };
+
+    #[cfg(feature = "metal-backend")]
+    check_instance(crate::gpu::metal::instance(), "native-metal");
+
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::METAL;
+    check_instance(wgpu::Instance::new(desc), "wgpu-metal");
+}

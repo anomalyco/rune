@@ -509,6 +509,7 @@ impl Host {
             media_keys,
             prime,
             launch_drawables,
+            hidden_drawable: crate::window::HiddenDrawable::Full,
             _spot: crate::platform::macos::traffic_lights::Spot::new(&window),
             _drop: drop_target,
         };
@@ -826,6 +827,7 @@ impl Host {
         {
             w.native.present = present;
             w.native.prime.stop();
+            w.note_surface_configured();
         }
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);

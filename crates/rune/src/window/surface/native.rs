@@ -31,6 +31,8 @@ pub(in crate::window) struct Native {
     /// The new window's first frames, which may draw before AppKit reports it on screen.
     pub(in crate::window) prime: Prime,
     pub(in crate::window) launch_drawables: super::LaunchDrawables,
+    /// Whether the layer's `drawableSize` was shrunk to `1×1` while hidden.
+    pub(in crate::window) hidden_drawable: super::HiddenDrawable,
     /// Forgets the window's traffic-light spot.
     pub(in crate::window) _spot: crate::platform::macos::traffic_lights::Spot,
     /// Forgets the window's drag-destination state.

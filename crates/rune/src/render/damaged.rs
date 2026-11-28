@@ -166,6 +166,23 @@ impl Renderer {
         d.drawn = None;
     }
 
+    /// Drops the retained full-window damage texture while the window is out of sight
+    /// (`Renderer::give_back(true, ...)`). Keeps any blit pipeline so the next armed frame
+    /// recreates only the texture and catches up whole (`KeptDraw::Whole`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn release_damage_retained(&mut self) {
+        let d = self.damage.get_mut().unwrap_or_else(|e| e.into_inner());
+        d.retained = None;
+        d.armed.clear();
+        d.runs.clear();
+        d.drawn = None;
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn has_retained_damage(&self) -> bool {
+        self.damage.lock().unwrap().retained.is_some()
+    }
+
     /// The next `draw` may redraw only `rects` (`[x, y, width, height]` each, target pixels, at
     /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`. `copy_dst` is
     /// whether the presentation target supports `COPY_DST`; when false, a fullscreen exact-texel

@@ -967,6 +967,10 @@ impl Host {
             w.presented = None;
             // Its hidden frame delivers the focus loss.
             if launcher { w.request_redraw(); }
+            #[cfg(target_os = "macos")]
+            if crate::window::HiddenDrawable::should_shrink_window(launcher, self.release_gpu) {
+                w.shrink_hidden_drawable();
+            }
             self.reset_frame_presented();
         }
     }

@@ -32,7 +32,7 @@ pub(crate) use pointer::PointerState;
 pub(crate) use presentation::Prewarm;
 #[cfg(test)]
 pub(crate) use surface::layer_occluded;
-pub(crate) use surface::{PresumeShown, flush_while_launching, launching, pin_contents_top_left, present_with_transaction, surface_occluded, sync_contents_scale, window_occluded};
+pub(crate) use surface::{PresumeShown, flush_while_launching, launching, pin_contents_top_left, present_with_transaction, set_drawable_size, surface_occluded, sync_contents_scale, window_occluded};
 use geometry::{overlay_rect_on, overlay_rect_on_sized, screen_id};
 use pointer::MouseMonitors;
 use presence::Presence;

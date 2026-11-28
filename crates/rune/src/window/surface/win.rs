@@ -217,6 +217,8 @@ impl Win {
         // semaphore and count; only a failed configure drops the swap chain.
         #[cfg(target_os = "windows")]
         self.native.slot.reconfigured(configured.is_ok());
+        #[cfg(target_os = "macos")]
+        if configured.is_ok() { self.note_surface_configured(); }
         if let Err(error) = configured {
             eprintln!("rune: a window's surface refused its new size: {error}");
             self.surface_ok = false;
@@ -319,9 +321,39 @@ fn launcher_hidden_resize_holds_reveal_until_the_resized_frame_draws() {
 }
 
 impl Win {
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn shrink_hidden_drawable(&mut self) {
+        for effect in self.native.hidden_drawable.step(super::HiddenDrawableEvent::Hide) {
+            if effect == super::HiddenDrawableEffect::Shrink
+                && let Some(surface) = &self.surface
+            {
+                crate::platform::macos::set_drawable_size(surface, 1, 1);
+                self.damage.reset();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn restore_hidden_drawable(&mut self) {
+        for effect in self.native.hidden_drawable.step(super::HiddenDrawableEvent::Wake) {
+            if effect == super::HiddenDrawableEffect::Restore
+                && let Some(surface) = &self.surface
+            {
+                crate::platform::macos::set_drawable_size(surface, self.config.width, self.config.height);
+                self.damage.reset();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn note_surface_configured(&mut self) {
+        let _ = self.native.hidden_drawable.step(super::HiddenDrawableEvent::Configured);
+    }
+
     pub(in crate::window) fn show(&mut self, focus: bool) {
         #[cfg(target_os = "macos")]
         {
+            self.restore_hidden_drawable();
             if let Some(shadow) = &self.native.shadow { shadow.shown(); }
             if let Some(panel) = &self.native.panel {
                 panel.show(std::time::Duration::ZERO);

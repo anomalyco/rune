@@ -365,3 +365,81 @@ fn format_switch_and_resize_invalidate_retained_damage_on_blit_path() {
     let (fresh_r, _) = render_target_with_usage(&gpu, &mut fresh_renderer, &mut fresh_resized, size2, OFFSCREEN_FORMAT_LINEAR, None, false);
     assert_eq!(after_resize, fresh_r, "resized catch-up must match fresh render");
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn give_back_unseen_drops_retained_damage_texture_and_wakes_cleanly() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    fn view(phase: &u8, _: &mut Cx<u8>) -> El {
+        let color = if *phase == 0 {
+            Color { r: 0.2, g: 0.6, b: 0.9, a: 1.0 }
+        } else {
+            Color { r: 0.9, g: 0.3, b: 0.2, a: 1.0 }
+        };
+        el().w_full()
+            .h_full()
+            .fill(Color { r: 0.12, g: 0.12, b: 0.14, a: 1.0 })
+            .child(el().absolute(12.0, 12.0).size(48.0, 32.0).fill(color))
+    }
+
+    let size = (120u32, 64u32);
+    let mut rt = Runtime::new(0u8, view, (size.0 as f32, size.1 as f32), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("baseline poll");
+
+    #[cfg(feature = "test-gpu-counters")]
+    let base_textures = gpu.device.get_internal_counters().hal.textures.read();
+
+    // Two armed frames populate and reuse the retained full-window damage texture.
+    let (_, d1) = render_target_with_usage(&gpu, &mut renderer, &mut rt, size, OFFSCREEN_FORMAT, Some(&[[10, 10, 52, 36]]), true);
+    assert_eq!(d1, Ok(KeptDraw::Whole));
+    let (before_hide, d2) = render_target_with_usage(&gpu, &mut renderer, &mut rt, size, OFFSCREEN_FORMAT, Some(&[[10, 10, 52, 36]]), true);
+    assert_eq!(d2, Ok(KeptDraw::Partial));
+    assert!(renderer.has_retained_damage());
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(gpu.device.get_internal_counters().hal.textures.read(), base_textures + 1);
+
+    // Visible idle rest (give_back(false)) keeps the retained damage texture warm.
+    {
+        let core = rt.core_mut();
+        renderer.give_back(false, &mut core.text.atlas.resident_caches, &core.images);
+    }
+    assert!(renderer.has_retained_damage(), "visible idle rest keeps retained damage texture");
+
+    // Out-of-sight rest (give_back(true)) drops the retained full-window damage texture.
+    {
+        let core = rt.core_mut();
+        renderer.give_back(true, &mut core.text.atlas.resident_caches, &core.images);
+    }
+    gpu.queue.submit(std::iter::empty());
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("unseen retire poll");
+    assert!(!renderer.has_retained_damage(), "give_back(true) drops retained damage texture");
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(
+        gpu.device.get_internal_counters().hal.textures.read(),
+        base_textures,
+        "give_back(true) frees the retained damage HAL texture"
+    );
+
+    // Wake without rebuilding rt: first armed frame catches up whole and matches before_hide,
+    // and the following armed frame resumes partial redraws cleanly.
+    let (after_wake, d3) = render_target_with_usage(&gpu, &mut renderer, &mut rt, size, OFFSCREEN_FORMAT, Some(&[[10, 10, 52, 36]]), true);
+    assert_eq!(d3, Ok(KeptDraw::Whole), "first armed frame after unseen give_back redraws whole");
+    assert_eq!(after_wake, before_hide, "wake catch-up matches pre-hide pixels");
+    assert!(renderer.has_retained_damage());
+
+    rt.update(|p, tx| {
+        *p = 1;
+        tx.instant();
+    });
+    rt.frame(0.0);
+    let (partial_after_wake, d4) = render_target_with_usage(&gpu, &mut renderer, &mut rt, size, OFFSCREEN_FORMAT, Some(&[[10, 10, 52, 36]]), true);
+    assert_eq!(d4, Ok(KeptDraw::Partial), "partial redraw resumes cleanly after wake catch-up");
+
+    let mut fresh_rt = Runtime::new(1u8, view, (size.0 as f32, size.1 as f32), Env::new(true, 1.0));
+    fresh_rt.frame(0.0);
+    let mut fresh_renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let (fresh, _) = render_target_with_usage(&gpu, &mut fresh_renderer, &mut fresh_rt, size, OFFSCREEN_FORMAT, None, true);
+    assert_eq!(partial_after_wake, fresh, "partial redraw after wake matches fresh render");
+}
