@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use rune::Color;
 
 pub(crate) use draw::draw;
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{MAX_DEPTH, clean, clean_quoted, parse_color_spec};
 
 #[derive(Debug)]
@@ -91,29 +92,40 @@ pub(crate) struct Sequence {
     pub autonumber: bool,
 }
 
-pub(crate) fn parse(_header: &str, body: &[&str], max_items: usize) -> Option<Sequence> {
+pub(crate) fn parse(_header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<Sequence, ParseFail> {
     let mut p = Parser {
         s: Sequence { title: None, participants: Vec::new(), boxes: Vec::new(), events: Vec::new(), autonumber: false },
         ids: HashMap::new(),
         depth: 0,
         active_box: None,
     };
+    let mut skipped = Skipped::default();
     // A line that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
     for line in body {
         let (people, events) = (p.s.participants.len(), p.s.events.len());
-        if p.line(line).is_none() {
+        if p.line(line.text).is_none() {
             // Whatever the line added before it failed goes too.
             p.s.participants.truncate(people);
             p.s.events.truncate(events);
             p.ids.retain(|_, &mut i| i < people);
+            skipped.record(line.line, line.text);
         }
-        if p.s.participants.len() > 40 || p.s.events.len() > max_items || p.depth > MAX_DEPTH {
-            return None;
+        if p.s.participants.len() > 40 {
+            return Err(ParseFail::ItemLimit { limit: 40, kind: "participants" });
+        }
+        if p.s.events.len() > max_items {
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
+        }
+        if p.depth > MAX_DEPTH {
+            return Err(ParseFail::DepthLimit(MAX_DEPTH));
         }
     }
     // Frames still open at the end close there.
     p.s.events.extend((0..p.depth).map(|_| Event::End));
-    (!p.s.participants.is_empty()).then_some(p.s)
+    if p.s.participants.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(p.s)
 }
 
 struct Parser {

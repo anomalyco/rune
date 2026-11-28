@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use rune::{Color, TextHighlight};
 use super::{Scene, scenes};
-use crate::{DiagramStyle, Drawing, Hover};
+use crate::{DiagramStyle, Drawing, Hover, MermaidError};
 
 /// One prepared layout. Its title and labels can be indexed once, then drawn again with
 /// different text highlights without parsing the source or laying the diagram out again.
@@ -15,8 +15,15 @@ pub struct DrawingModel {
 
 /// Prepare the same layout as [`crate::render_drawing`], retaining it for text lookup.
 pub fn prepare_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<DrawingModel> {
+    try_prepare_drawing(src, style, hover, color).ok()
+}
+
+/// Like [`prepare_drawing`], returning a [`MermaidError`] explaining why the source produced no
+/// drawable diagram.
+pub fn try_prepare_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Result<DrawingModel, MermaidError> {
     let hover = (hover != Hover::Off).then_some((hover, color));
-    Some(DrawingModel { scene: scenes::built(src, style, hover, None).0?, style: *style })
+    let scene = scenes::built(src, style, hover, None).0?;
+    Ok(DrawingModel { scene, style: *style })
 }
 
 impl DrawingModel {

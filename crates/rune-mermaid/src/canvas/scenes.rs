@@ -9,8 +9,9 @@ use std::rc::Rc;
 use rune::Color;
 
 use super::Scene;
+use crate::error::MermaidError;
 use crate::layout::steady;
-use crate::{DiagramStyle, Hover, scene};
+use crate::{DiagramStyle, Hover, try_scene};
 
 const CACHE_LEN: usize = 16;
 
@@ -24,8 +25,9 @@ thread_local! {
     pub(crate) static SCENES: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
-/// A scene and, for one built growing, what its layouts leave for the next build to hold to.
-pub(crate) type Built = (Option<Rc<Scene>>, Option<Rc<steady::Memory>>);
+/// A scene (or why it could not be built) and, for one built growing, what its layouts leave
+/// for the next build to hold to.
+pub(crate) type Built = (Result<Rc<Scene>, MermaidError>, Option<Rc<steady::Memory>>);
 
 /// `src`'s scene, from the cache or built and kept; held to `prev` when it is `Some`.
 pub(crate) fn built(src: &str, style: &DiagramStyle, hover: Option<(Hover, Color)>, prev: Option<Option<Rc<steady::Memory>>>) -> Built {
@@ -48,7 +50,10 @@ pub(crate) fn built(src: &str, style: &DiagramStyle, hover: Option<(Hover, Color
 
 fn build(src: &str, style: &DiagramStyle, hover: Option<(Hover, Color)>, prev: Option<Option<Rc<steady::Memory>>>) -> Built {
     // Defensive: a bug in layout must cost a diagram, not the app.
-    let safe = || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene(src, style, hover))).ok().flatten();
+    let safe = || match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_scene(src, style, hover))) {
+        Ok(res) => res,
+        Err(_) => Err(MermaidError::InternalError),
+    };
     match prev {
         None => (safe().map(Rc::new), None),
         Some(prev) => {
@@ -81,7 +86,7 @@ const MAX_HELD_LINES: usize = 64;
 
 /// `src` laid out held to the same source a line shorter, laid out held to the one a line
 /// shorter again, and so on, so it lays out the same however many lines each build added.
-pub(crate) fn growing(src: &str, style: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Rc<Scene>> {
+pub(crate) fn growing(src: &str, style: &DiagramStyle, hover: Option<(Hover, Color)>) -> Result<Rc<Scene>, MermaidError> {
     let mut chain = vec![src.trim_end()];
     let mut prev = None;
     if let Some(b) = SCENES.with_borrow(|c| c.map.get(&scene_key(chain[0], style, hover, true)).cloned()) {

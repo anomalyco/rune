@@ -108,6 +108,7 @@
 
 mod canvas;
 mod chart;
+mod error;
 mod graph;
 mod layout;
 mod sequence;
@@ -118,9 +119,12 @@ use std::hash::{Hash, Hasher};
 use rune::{Color, El, TextStyle, oklch, oklcha, tok};
 
 use canvas::{Scene, scenes};
+use error::SourceLine;
 pub use canvas::drawing::DrawingModel;
 pub use canvas::drawing::prepare_drawing;
+pub use canvas::drawing::try_prepare_drawing;
 pub use canvas::hover::Hover;
+pub use error::MermaidError;
 
 /// Colours and type a diagram draws with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,13 +216,24 @@ impl DiagramStyle {
 
 /// `src` drawn as a diagram card in `style`, or `None` when it is outside the supported subset.
 pub fn render(src: &str, style: &DiagramStyle) -> Option<El> {
-    render_with_hover(src, style, Hover::Edges, style.text.alpha(0.9))
+    try_render(src, style).ok()
+}
+
+/// Like [`render`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_render(src: &str, style: &DiagramStyle) -> Result<El, MermaidError> {
+    try_render_with_hover(src, style, Hover::Edges, style.text.alpha(0.9))
 }
 
 /// [`render`], with `hover` lighting up in `color` while the pointer is over a flowchart, state
 /// or class diagram node; an edge, or its label, lights itself and its label whatever `hover` is
 /// short of [`Hover::Off`].
 pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
+    try_render_with_hover(src, style, hover, color).ok()
+}
+
+/// Like [`render_with_hover`], returning a [`MermaidError`] explaining why `src` produced no
+/// diagram.
+pub fn try_render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Result<El, MermaidError> {
     render_inner(src, style, hover, color, Mode::Still)
 }
 
@@ -227,14 +242,14 @@ pub fn render_with_hover(src: &str, style: &DiagramStyle, hover: Hover, color: C
 /// The diagram only grows: what's drawn keeps its order and place, as far as what's new leaves
 /// room, and no gap closes.
 pub fn render_streaming(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
-    render_inner(src, style, hover, color, Mode::Growing)
+    render_inner(src, style, hover, color, Mode::Growing).ok()
 }
 
 /// [`render_streaming`] for the whole source once it has all arrived: laid out as
 /// [`render_with_hover`] lays it out, so the diagram settles there in one glide, while what's
 /// new since the last build still comes in on its own.
 pub fn render_streamed(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<El> {
-    render_inner(src, style, hover, color, Mode::Settled)
+    render_inner(src, style, hover, color, Mode::Settled).ok()
 }
 
 /// A diagram's title and drawing without its card, for a viewer that frames and scales it
@@ -271,10 +286,15 @@ impl Drawing {
 /// [`render_with_hover`]'s title and drawing alone, laid out and fitted for `style.max_width`
 /// as its card would be.
 pub fn render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Option<Drawing> {
+    try_render_drawing(src, style, hover, color).ok()
+}
+
+/// Like [`render_drawing`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Color) -> Result<Drawing, MermaidError> {
     let hover = (hover != Hover::Off).then_some((hover, color));
     let scene = scenes::built(src, style, hover, None).0?;
     let (el, size) = scene.drawing(style, None);
-    Some(Drawing::new(el, size, scene, *style))
+    Ok(Drawing::new(el, size, scene, *style))
 }
 
 /// Renders `src` in `style` as a static, self-contained framed-card SVG document (surface fill,
@@ -282,15 +302,26 @@ pub fn render_drawing(src: &str, style: &DiagramStyle, hover: Hover, color: Colo
 /// scripts, images, external fonts, or `url()` references), or `None` when `src` is outside the
 /// supported subset.
 pub fn render_svg(src: &str, style: &DiagramStyle) -> Option<String> {
+    try_render_svg(src, style).ok()
+}
+
+/// Like [`render_svg`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_render_svg(src: &str, style: &DiagramStyle) -> Result<String, MermaidError> {
     let scene = scenes::built(src, style, None, None).0?;
-    Some(canvas::svg::render(&scene, style, true))
+    Ok(canvas::svg::render(&scene, style, true))
 }
 
 /// Like [`render_svg`], emitting only the title and fitted diagram without the card frame or
 /// card padding.
 pub fn render_svg_bare(src: &str, style: &DiagramStyle) -> Option<String> {
+    try_render_svg_bare(src, style).ok()
+}
+
+/// Like [`render_svg_bare`], returning a [`MermaidError`] explaining why `src` produced no
+/// diagram.
+pub fn try_render_svg_bare(src: &str, style: &DiagramStyle) -> Result<String, MermaidError> {
     let scene = scenes::built(src, style, None, None).0?;
-    Some(canvas::svg::render(&scene, style, false))
+    Ok(canvas::svg::render(&scene, style, false))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -303,7 +334,7 @@ enum Mode {
     Growing,
 }
 
-fn render_inner(src: &str, style: &DiagramStyle, hover: Hover, color: Color, mode: Mode) -> Option<El> {
+fn render_inner(src: &str, style: &DiagramStyle, hover: Hover, color: Color, mode: Mode) -> Result<El, MermaidError> {
     let hover = (hover != Hover::Off).then_some((hover, color));
     let scene = if mode == Mode::Growing { scenes::growing(src, style, hover) } else { scenes::built(src, style, hover, None).0 };
     scene.map(|s| s.el(style, mode != Mode::Still))
@@ -347,6 +378,7 @@ pub(crate) enum Diagram {
 }
 
 pub(crate) struct Parsed {
+    pub kind: String,
     pub title: Option<String>,
     pub diagram: Diagram,
 }
@@ -368,7 +400,7 @@ pub(crate) const MAX_DEPTH: usize = 8;
 /// this crate draws.
 pub fn may_draw(src: &str) -> bool {
     let (_, mut lines) = cleaned(src);
-    lines.next().is_none_or(|(_, header)| KINDS.contains(&header.split_once(|c: char| c.is_whitespace() || c == ';').map_or(header, |h| h.0)))
+    lines.next().is_none_or(|header| KINDS.contains(&header.text.split_once(|c: char| c.is_whitespace() || c == ';').map_or(header.text, |h| h.0)))
 }
 
 /// Every diagram type [`parse`] reads, by its header's first word.
@@ -379,11 +411,11 @@ const KINDS: &[&str] = &[
     "C4Deployment",
 ];
 
-/// `src`'s front-matter title, and its lines with their indents, without comments, directives
-/// and front matter.
-fn cleaned(src: &str) -> (Option<String>, impl Iterator<Item = (usize, &str)>) {
+/// `src`'s front-matter title, and its lines with their line numbers and indents, without
+/// comments, directives and front matter.
+fn cleaned(src: &str) -> (Option<String>, impl Iterator<Item = SourceLine<'_>>) {
     let mut in_directive = false;
-    let mut lines = src.lines().filter_map(move |raw| {
+    let mut lines = src.lines().enumerate().filter_map(move |(idx, raw)| {
         let line = raw.trim();
         let (indent, text) = if in_directive || line.starts_with("%%{") {
             let Some((_, rest)) = line.split_once("}%%") else {
@@ -396,17 +428,17 @@ fn cleaned(src: &str) -> (Option<String>, impl Iterator<Item = (usize, &str)>) {
             // Mindmaps nest by indentation.
             (raw.len() - raw.trim_start().len(), line)
         };
-        (!text.is_empty() && !text.starts_with("%%")).then_some((indent, text))
+        (!text.is_empty() && !text.starts_with("%%")).then_some(SourceLine { line: idx + 1, indent, text })
     }).peekable();
     let mut fm_title = None;
     // A front-matter block (`---` … `---`) may carry `title: …` and config.
-    if lines.peek().map(|l| l.1) == Some("---") {
+    if lines.peek().map(|l| l.text) == Some("---") {
         lines.next();
-        for (_, l) in lines.by_ref() {
-            if l == "---" {
+        for l in lines.by_ref() {
+            if l.text == "---" {
                 break;
             }
-            if let Some(rest) = l.strip_prefix("title:") {
+            if let Some(rest) = l.text.strip_prefix("title:") {
                 let t = clean_quoted(rest);
                 if !t.is_empty() {
                     fm_title = Some(t);
@@ -422,37 +454,61 @@ pub(crate) fn parse(src: &str) -> Option<Parsed> {
 }
 
 pub(crate) fn parse_with(src: &str, max_items: usize) -> Option<Parsed> {
-    let max_items = max_items.clamp(1, MAX_ITEMS_CEILING);
-    let (fm_title, mut lines) = cleaned(src);
-    let (_, header) = lines.next()?;
-    let (kind, rest) = header.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header, ""));
-    let (indents, body): (Vec<usize>, Vec<&str>) = lines.unzip();
-    let (body_title, diagram) = match kind {
-        "graph" | "flowchart" => graph::flowchart::parse(rest, &body, max_items).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
-        "sequenceDiagram" => sequence::parse(rest, &body, max_items).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
-        "stateDiagram" | "stateDiagram-v2" => graph::state::parse(rest, &body, max_items).map(|s| (s.title.clone(), Diagram::State(s)))?,
-        "classDiagram" => graph::class::parse(rest, &body, max_items).map(|c| (c.title.clone(), Diagram::Class(c)))?,
-        "erDiagram" => graph::er::parse(rest, &body, max_items).map(|e| (e.title.clone(), Diagram::Er(e)))?,
-        "gantt" => chart::gantt::parse(rest, &body, max_items).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
-        "pie" => chart::pie::parse(rest, &body, max_items).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
-        "mindmap" => chart::mindmap::parse(&body, &indents, max_items).map(|m| (None, Diagram::Mindmap(m)))?,
-        "timeline" => chart::timeline::parse(rest, &body, max_items).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
-        "journey" => chart::journey::parse(&body, max_items).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
-        "gitGraph" | "gitGraph:" => chart::git::parse(rest, &body, max_items).map(|g| (None, Diagram::Git(g)))?,
-        "quadrantChart" => chart::quadrant::parse(&body, max_items).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
-        "xychart-beta" | "xychart" => chart::xychart::parse(rest, &body, max_items).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
-        "sankey-beta" | "sankey" => chart::sankey::parse(&body, max_items).map(|s| (None, Diagram::Sankey(s)))?,
-        "block-beta" | "block" => graph::block::parse(&body, max_items).map(|b| (None, Diagram::Block(b)))?,
-        "requirementDiagram" => graph::requirement::parse(&body, max_items).map(|r| (None, Diagram::Requirement(r)))?,
-        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => graph::c4::parse(kind, &body, max_items).map(|c| (c.title.clone(), Diagram::C4(c)))?,
-        _ => return None,
-    };
-    Some(Parsed { title: body_title.or(fm_title), diagram })
+    try_parse_with(src, max_items).ok()
 }
 
+pub(crate) fn try_parse_with(src: &str, max_items: usize) -> Result<Parsed, MermaidError> {
+    let max_items = max_items.clamp(1, MAX_ITEMS_CEILING);
+    let (fm_title, mut lines) = cleaned(src);
+    let Some(header_line) = lines.next() else {
+        return Err(MermaidError::Empty);
+    };
+    let (kind, rest) = header_line.text.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header_line.text, ""));
+    let header = SourceLine { line: header_line.line, indent: 0, text: rest };
+    let body: Vec<SourceLine<'_>> = lines.collect();
+    let res = match kind {
+        "graph" | "flowchart" => graph::flowchart::parse(header, &body, max_items).map(|f| (f.title.clone(), Diagram::Flowchart(f))),
+        "sequenceDiagram" => sequence::parse(header, &body, max_items).map(|s| (s.title.clone(), Diagram::Sequence(s))),
+        "stateDiagram" | "stateDiagram-v2" => graph::state::parse(header, &body, max_items).map(|s| (s.title.clone(), Diagram::State(s))),
+        "classDiagram" => graph::class::parse(header, &body, max_items).map(|c| (c.title.clone(), Diagram::Class(c))),
+        "erDiagram" => graph::er::parse(header, &body, max_items).map(|e| (e.title.clone(), Diagram::Er(e))),
+        "gantt" => chart::gantt::parse(header, &body, max_items).map(|g| (g.title.clone(), Diagram::Gantt(g))),
+        "pie" => chart::pie::parse(header, &body, max_items).map(|p| (p.title.clone(), Diagram::Pie(p))),
+        "mindmap" => chart::mindmap::parse(&body, max_items).map(|m| (None, Diagram::Mindmap(m))),
+        "timeline" => chart::timeline::parse(rest, &body, max_items).map(|t| (t.title.clone(), Diagram::Timeline(t))),
+        "journey" => chart::journey::parse(&body, max_items).map(|j| (j.title.clone(), Diagram::Journey(j))),
+        "gitGraph" | "gitGraph:" => chart::git::parse(rest, &body, max_items).map(|g| (None, Diagram::Git(g))),
+        "quadrantChart" => chart::quadrant::parse(&body, max_items).map(|q| (q.title.clone(), Diagram::Quadrant(q))),
+        "xychart-beta" | "xychart" => chart::xychart::parse(rest, &body, max_items).map(|x| (x.title.clone(), Diagram::XyChart(x))),
+        "sankey-beta" | "sankey" => chart::sankey::parse(&body, max_items).map(|s| (None, Diagram::Sankey(s))),
+        "block-beta" | "block" => graph::block::parse(&body, max_items).map(|b| (None, Diagram::Block(b))),
+        "requirementDiagram" => graph::requirement::parse(&body, max_items).map(|r| (None, Diagram::Requirement(r))),
+        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => {
+            graph::c4::parse(kind, &body, max_items).map(|c| (c.title.clone(), Diagram::C4(c)))
+        }
+        _ => return Err(MermaidError::UnsupportedDiagram { header: kind.to_owned() }),
+    };
+    let (body_title, diagram) = res.map_err(|fail| fail.into_error(kind))?;
+    Ok(Parsed { kind: kind.to_owned(), title: body_title.or(fm_title), diagram })
+}
+
+#[cfg(test)]
 pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
-    let parsed = parse_with(src, paint.max_items)?;
-    let s = match &parsed.diagram {
+    try_scene(src, paint, hover).ok()
+}
+
+pub(crate) fn try_scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Result<Scene, MermaidError> {
+    let parsed = try_parse_with(src, paint.max_items)?;
+    let layered = matches!(
+        parsed.diagram,
+        Diagram::Flowchart(_)
+            | Diagram::State(_)
+            | Diagram::Class(_)
+            | Diagram::Er(_)
+            | Diagram::Requirement(_)
+            | Diagram::C4(_)
+    );
+    let drawn = match &parsed.diagram {
         Diagram::Flowchart(f) => graph::flowchart::draw(f, paint, hover),
         Diagram::Sequence(s) => sequence::draw(s, paint),
         Diagram::State(s) => graph::state::draw(s, paint, hover),
@@ -470,8 +526,15 @@ pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color
         Diagram::Block(b) => graph::block::draw(b, paint),
         Diagram::Requirement(r) => graph::requirement::draw(r, paint, hover),
         Diagram::C4(c) => graph::c4::draw(c, paint, hover),
-    }?;
-    Some(s.with_title(parsed.title))
+    };
+    let Some(s) = drawn else {
+        return Err(if layered {
+            MermaidError::LayoutLimitExceeded { diagram: parsed.kind }
+        } else {
+            MermaidError::NoItems { diagram: parsed.kind, line: None, statement: None }
+        });
+    };
+    Ok(s.with_title(parsed.title))
 }
 
 /// Strips one pair of surrounding `"…"` quotes (unescaping `\"`), then runs [`clean`].

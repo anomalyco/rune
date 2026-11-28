@@ -5,6 +5,7 @@ use rune::{Align, TextStyle};
 
 use super::{hue, ink, solid};
 use crate::canvas::{Canvas, Measured, Scene, arc, measure, room, rounded_rect};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean_quoted, statements};
 
 #[derive(Debug)]
@@ -14,10 +15,11 @@ pub(crate) struct Pie {
     pub slices: Vec<(String, f64)>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Pie> {
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<Pie, ParseFail> {
     let mut p = Pie { title: None, show_data: false, slices: Vec::new() };
+    let mut skipped = Skipped::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        for stmt in statements(line) {
+        for stmt in statements(line.text) {
             let mut s = stmt;
             if let Some(rest) = s.strip_prefix("showData") {
                 p.show_data = true;
@@ -30,18 +32,28 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Pie
             if s.is_empty() || s.starts_with("accTitle") || s.starts_with("accDescr") {
                 continue;
             }
-            let Some((label, value)) = s.rsplit_once(':') else { continue };
-            let Ok(v) = value.trim().parse::<f64>() else { continue };
+            let Some((label, value)) = s.rsplit_once(':') else {
+                skipped.record(line.line, stmt);
+                continue;
+            };
+            let Ok(v) = value.trim().parse::<f64>() else {
+                skipped.record(line.line, stmt);
+                continue;
+            };
             if !(v.is_finite() && v > 0.0) {
+                skipped.record(line.line, stmt);
                 continue;
             }
             if p.slices.len() >= max_items {
-                return None;
+                return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
             }
             p.slices.push((clean_quoted(label), v));
         }
     }
-    (!p.slices.is_empty()).then_some(p)
+    if p.slices.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(p)
 }
 
 /// `386`, `12.5`, `0.33`.

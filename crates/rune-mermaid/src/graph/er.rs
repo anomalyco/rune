@@ -8,6 +8,7 @@ use rune::{Color, TextStyle};
 use super::lenient::{Lenient, Reader};
 use crate::canvas::{Measured, Scene, measure_wrap};
 use crate::layout::draw::{Dir, DrawNode, ENTITY_PAD, Edge, Head, Line, draw_layered, entity_row_h};
+use crate::error::{ParseFail, SourceLine};
 use crate::layout::layered::Spacing;
 use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
@@ -37,7 +38,7 @@ pub(crate) struct ErDiagram {
     pub edges: Vec<Edge>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<ErDiagram> {
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<ErDiagram, ParseFail> {
     let mut p = Parser {
         d: ErDiagram { title: None, dir: Dir::Down, entities: Vec::new(), edges: Vec::new() },
         ids: HashMap::new(),
@@ -45,18 +46,21 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<ErD
         styles: StyleSheet::default(),
         attrs: 0,
         max_items,
-        over: false,
+        limit: None,
     };
     let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        for stmt in statements(line) {
-            reader.read(&mut p, stmt)?;
+        for stmt in statements(line.text) {
+            reader.read(&mut p, line.line, stmt)?;
         }
     }
     for (id, &idx) in &p.ids {
         p.d.entities[idx].style = p.styles.get(id);
     }
-    (!p.d.entities.is_empty()).then_some(p.d)
+    if p.d.entities.is_empty() {
+        return Err(reader.into_no_items());
+    }
+    Ok(p.d)
 }
 
 struct Parser {
@@ -67,7 +71,7 @@ struct Parser {
     styles: StyleSheet,
     attrs: usize,
     max_items: usize,
-    over: bool,
+    limit: Option<ParseFail>,
 }
 
 impl Lenient for Parser {
@@ -83,15 +87,22 @@ impl Lenient for Parser {
     fn read_statement(&mut self, s: &str) -> Option<()> {
         self.statement(s)
     }
-    fn over(&self) -> bool {
-        self.over
+    fn limit(&self) -> Option<ParseFail> {
+        self.limit.clone()
     }
 }
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.entities.len() + self.d.edges.len() >= self.max_items || self.attrs > self.max_items.saturating_mul(4);
-        (!self.over).then_some(())
+        if self.limit.is_none() {
+            let max_attrs = self.max_items.saturating_mul(4);
+            if self.d.entities.len() + self.d.edges.len() >= self.max_items {
+                self.limit = Some(ParseFail::ItemLimit { limit: self.max_items, kind: "items" });
+            } else if self.attrs > max_attrs {
+                self.limit = Some(ParseFail::ItemLimit { limit: max_attrs, kind: "attributes" });
+            }
+        }
+        self.limit.is_none().then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {

@@ -7,6 +7,7 @@ use rune::Color;
 use super::lenient::{Lenient, Reader};
 use crate::canvas::Scene;
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
+use crate::error::{ParseFail, SourceLine};
 use crate::layout::layered::Spacing;
 use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
@@ -56,7 +57,7 @@ const RELS: &[(&str, Head, Head, Line)] = &[
     ("..", Head::None, Head::None, Line::Dotted),
 ];
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<ClassDiagram> {
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<ClassDiagram, ParseFail> {
     let mut p = Parser {
         d: ClassDiagram { title: None, dir: Dir::Down, classes: Vec::new(), edges: Vec::new(), namespaces: Vec::new() },
         ids: HashMap::new(),
@@ -65,18 +66,21 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Cla
         styles: StyleSheet::default(),
         members: 0,
         max_items,
-        over: false,
+        limit: None,
     };
     let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        for stmt in statements(line) {
-            reader.read(&mut p, stmt)?;
+        for stmt in statements(line.text) {
+            reader.read(&mut p, line.line, stmt)?;
         }
     }
     for (id, &idx) in &p.ids {
         p.d.classes[idx].style = p.styles.get(id);
     }
-    (!p.d.classes.is_empty()).then_some(p.d)
+    if p.d.classes.is_empty() {
+        return Err(reader.into_no_items());
+    }
+    Ok(p.d)
 }
 
 struct Parser {
@@ -88,7 +92,7 @@ struct Parser {
     members: usize,
     max_items: usize,
     /// Set once the source goes past `max_items` (or four times that in members).
-    over: bool,
+    limit: Option<ParseFail>,
 }
 
 impl Lenient for Parser {
@@ -104,15 +108,17 @@ impl Lenient for Parser {
     fn read_statement(&mut self, s: &str) -> Option<()> {
         self.statement(s)
     }
-    fn over(&self) -> bool {
-        self.over
+    fn limit(&self) -> Option<ParseFail> {
+        self.limit.clone()
     }
 }
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() >= self.max_items;
-        (!self.over).then_some(())
+        if self.limit.is_none() && self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() >= self.max_items {
+            self.limit = Some(ParseFail::ItemLimit { limit: self.max_items, kind: "items" });
+        }
+        self.limit.is_none().then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -122,7 +128,7 @@ impl Parser {
                 return Some(());
             }
             self.add_member(idx, s);
-            return (!self.over).then_some(());
+            return self.limit.is_none().then_some(());
         }
         if s == "}" {
             self.active_ns.take()?;
@@ -183,7 +189,7 @@ impl Parser {
                     let id = self.styles.strip_inline(lhs)?;
                     let idx = self.ensure_class(&id)?;
                     self.add_member(idx, member.trim());
-                    return (!self.over).then_some(());
+                    return self.limit.is_none().then_some(());
                 }
                 return None;
             }
@@ -244,7 +250,10 @@ impl Parser {
             return;
         }
         self.members += 1;
-        self.over |= self.members > self.max_items.saturating_mul(4);
+        let max_members = self.max_items.saturating_mul(4);
+        if self.limit.is_none() && self.members > max_members {
+            self.limit = Some(ParseFail::ItemLimit { limit: max_members, kind: "members" });
+        }
         let cleaned = clean(&tilde_generics(t));
         if cleaned.contains('(') && cleaned.contains(')') {
             self.d.classes[idx].methods.push(cleaned);

@@ -29,7 +29,7 @@ fn centres(s: &Scene) -> HashMap<String, [f32; 2]> {
 fn stream(src: &str) -> Vec<Rc<Scene>> {
     let lines: Vec<&str> = src.lines().collect();
     (2..=lines.len())
-        .filter_map(|k| growing_scene(&(lines[..k].join("\n") + "\n"), &DiagramStyle::neutral(true), None))
+        .filter_map(|k| growing_scene(&(lines[..k].join("\n") + "\n"), &DiagramStyle::neutral(true), None).ok())
         .collect()
 }
 

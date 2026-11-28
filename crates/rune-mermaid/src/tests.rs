@@ -28,7 +28,7 @@ fn directive_end_keeps_a_diagram_on_the_same_line() {
     for directive in ["%%{init: {}}%%", "%%{\ninit: {}\n}%%"] {
         let src = format!("{directive} mindmap\n  root\n    child");
         let (_, lines) = cleaned(&src);
-        assert_eq!(lines.collect::<Vec<_>>(), [(0, "mindmap"), (2, "root"), (4, "child")]);
+        assert_eq!(lines.map(|l| (l.indent, l.text)).collect::<Vec<_>>(), [(0, "mindmap"), (2, "root"), (4, "child")]);
         assert!(may_draw(&src));
     }
 }
@@ -310,9 +310,9 @@ maxEdges: 5000
 
     // Scene cache differentiates styles with different max_items on the same source.
     let src = chain_src(210);
-    assert!(scenes::built(&src, &def, None, None).0.is_none());
-    assert!(scenes::built(&src, &def.max_items(1_000), None, None).0.is_some());
-    assert!(scenes::built(&src, &def, None, None).0.is_none());
+    assert!(scenes::built(&src, &def, None, None).0.is_err());
+    assert!(scenes::built(&src, &def.max_items(1_000), None, None).0.is_ok());
+    assert!(scenes::built(&src, &def, None, None).0.is_err());
 }
 
 #[test]

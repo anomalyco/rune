@@ -7,6 +7,7 @@ use rune::Color;
 use crate::canvas::parts::Names;
 use crate::canvas::{Canvas, Scene, measure_balanced};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::layout::layered::{MAX_MINLEN, Spacing};
 use crate::{
     Cur, DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, NodeStyle, StyleSheet, clean, clean_quoted,
@@ -40,8 +41,8 @@ pub(crate) struct Flowchart {
 }
 
 /// `header` is what follows `graph`/`flowchart` on its line; `body` the remaining lines.
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Flowchart> {
-    let (dir, rest) = header.trim_start().split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header.trim(), ""));
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<Flowchart, ParseFail> {
+    let (dir, rest) = header.text.trim_start().split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header.text.trim(), ""));
     // A direction it doesn't know reads top-down.
     let dir = Dir::parse(dir).unwrap_or(Dir::Down);
     let mut p = Parser {
@@ -53,13 +54,18 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Flo
         edge_styles: HashMap::new(),
         edge_ids: HashSet::new(),
         max_items,
-        over: false,
+        limit: None,
     };
+    let mut skipped = Skipped::default();
+    let head = SourceLine { line: header.line, indent: 0, text: rest };
     // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
-    for line in std::iter::once(rest).chain(body.iter().copied()) {
-        for stmt in statements(line) {
-            if p.statement(stmt).is_none() && p.over {
-                return None;
+    for line in std::iter::once(head).chain(body.iter().copied()) {
+        for stmt in statements(line.text) {
+            if p.statement(stmt).is_none() {
+                if let Some(fail) = p.limit {
+                    return Err(fail);
+                }
+                skipped.record(line.line, stmt);
             }
         }
     }
@@ -74,7 +80,10 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Flo
         e.style = st;
     }
     resolve_subgraph_endpoints(&mut p.f);
-    (!p.f.nodes.is_empty()).then_some(p.f)
+    if p.f.nodes.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(p.f)
 }
 
 /// Redirects edges targeting a `subgraph id` placeholder onto that subgraph's first/last member,
@@ -152,7 +161,7 @@ struct Parser {
     edge_ids: HashSet<String>,
     max_items: usize,
     /// Set once the source goes past `max_items` or [`MAX_DEPTH`].
-    over: bool,
+    limit: Option<ParseFail>,
 }
 
 pub(crate) struct Link {
@@ -166,8 +175,10 @@ pub(crate) struct Link {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= self.max_items;
-        (!self.over).then_some(())
+        if self.limit.is_none() && self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= self.max_items {
+            self.limit = Some(ParseFail::ItemLimit { limit: self.max_items, kind: "items" });
+        }
+        self.limit.is_none().then_some(())
     }
 
     fn statement(&mut self, s: &str) -> Option<()> {
@@ -188,7 +199,7 @@ impl Parser {
                 };
                 self.budget()?;
                 if self.stack.len() >= MAX_DEPTH {
-                    self.over = true;
+                    self.limit = Some(ParseFail::DepthLimit(MAX_DEPTH));
                     return None;
                 }
                 self.f.subgraphs.push(Subgraph { id: sg_id, title, parent: self.stack.last().copied() });

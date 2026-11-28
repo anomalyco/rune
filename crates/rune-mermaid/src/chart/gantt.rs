@@ -8,6 +8,7 @@ use rune::{Align, TextStyle};
 use super::date::{self, DAY, Span, Step};
 use super::{axis_x, ink, soft, strong};
 use crate::canvas::{Canvas, Measured, Scene, measure, measure_wrap, over_color, room, rounded_rect};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean, clean_quoted, oklab_mix, statements};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -78,14 +79,14 @@ struct Raw {
     to: To,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Gantt> {
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<Gantt, ParseFail> {
     let mut g = Gantt { title: None, sections: Vec::new(), tasks: Vec::new(), axis: "%Y-%m-%d".into(), tick: None, excludes: Excludes::default() };
     let mut format = "YYYY-MM-DD".to_owned();
     let (mut raws, mut inclusive, mut weekend_friday, mut weekends) = (Vec::new(), false, false, false);
     // `dateFormat` applies to every task, wherever it is set, so tasks are read after it.
-    let mut lines: Vec<&str> = Vec::new();
+    let mut lines: Vec<(usize, &str)> = Vec::new();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        for stmt in statements(line) {
+        for stmt in statements(line.text) {
             let (word, rest) = stmt.split_once(char::is_whitespace).map_or((stmt, ""), |(w, r)| (w, r.trim()));
             match word {
                 "dateFormat" if !rest.is_empty() => format = rest.to_owned(),
@@ -107,11 +108,11 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Gan
                     }
                     // Dates read once `dateFormat` is known.
                     if dates {
-                        lines.push(stmt);
+                        lines.push((line.line, stmt));
                     }
                 }
                 "includes" | "todayMarker" | "topAxis" | "weekday" | "displayMode" | "click" | "accTitle" | "accDescr" => {}
-                _ => lines.push(stmt),
+                _ => lines.push((line.line, stmt)),
             }
         }
     }
@@ -120,7 +121,8 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Gan
         g.excludes.weekdays[a] = true;
         g.excludes.weekdays[b] = true;
     }
-    for stmt in lines {
+    let mut skipped = Skipped::default();
+    for (line_no, stmt) in lines {
         if let Some(rest) = stmt.strip_prefix("excludes") {
             for part in rest.split([',', ' ']).map(str::trim).filter(|p| !p.is_empty()) {
                 if let Some(t) = date::parse(part, &format) {
@@ -131,22 +133,30 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Gan
         }
         if let Some(rest) = stmt.strip_prefix("section") {
             if g.sections.len() + raws.len() >= max_items {
-                return None;
+                return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
             }
             g.sections.push(clean(rest));
             continue;
         }
-        let Some((name, meta)) = stmt.split_once(':') else { continue };
+        let Some((name, meta)) = stmt.split_once(':') else {
+            skipped.record(line_no, stmt);
+            continue;
+        };
         let section = g.sections.len().checked_sub(1);
         if let Some(r) = task(clean(name), section, meta, &format, inclusive) {
             if g.sections.len() + raws.len() >= max_items {
-                return None;
+                return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
             }
             raws.push(r);
+        } else {
+            skipped.record(line_no, stmt);
         }
     }
     g.tasks = resolve(&raws, &g.excludes);
-    (!g.tasks.is_empty()).then_some(g)
+    if g.tasks.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(g)
 }
 
 const WEEKDAYS: [&str; 7] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];

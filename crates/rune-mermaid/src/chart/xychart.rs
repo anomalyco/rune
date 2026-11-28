@@ -6,6 +6,7 @@ use rune::Align;
 use super::pie::number;
 use super::{axis_x, hue, small, solid};
 use crate::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, room};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean_quoted, word};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +35,12 @@ pub(crate) struct XyChart {
     pub series: Vec<Series>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<XyChart> {
+pub(crate) fn parse(header: &str, body: &[SourceLine<'_>], max_items: usize) -> Result<XyChart, ParseFail> {
     let mut x = XyChart { horizontal: header.trim() == "horizontal", ..XyChart::default() };
     let mut items = 0;
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         if let Some(rest) = word(l, "title") {
             x.title = Some(clean_quoted(rest)).filter(|t| !t.is_empty());
         } else if let Some(rest) = word(l, "x-axis") {
@@ -48,17 +51,28 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<XyC
             let (title, _, range) = axis(rest);
             (x.y_title, x.y_range) = (title, range);
         } else if let Some((kind, rest)) = word(l, "bar").map(|r| (Kind::Bar, r)).or_else(|| word(l, "line").map(|r| (Kind::Line, r))) {
-            let Some(open) = rest.find('[') else { continue };
+            let Some(open) = rest.find('[') else {
+                skipped.record(line.line, l);
+                continue;
+            };
             let values: Option<Vec<f32>> = list(&rest[open..]).iter().map(|v| v.parse::<f32>().ok().filter(|f| f.is_finite())).collect();
-            let Some(values) = values.filter(|v| !v.is_empty()) else { continue };
+            let Some(values) = values.filter(|v| !v.is_empty()) else {
+                skipped.record(line.line, l);
+                continue;
+            };
             items += values.len();
             x.series.push(Series { kind, name: clean_quoted(&rest[..open]), values });
+        } else {
+            skipped.record(line.line, l);
         }
         if items > max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
     }
-    (!x.series.is_empty()).then_some(x)
+    if x.series.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(x)
 }
 
 /// `"Title" [a, b]`, `Title 0 --> 10`, or a title alone.

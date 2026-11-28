@@ -8,6 +8,7 @@ use super::lenient::{Lenient, Reader};
 use crate::canvas::parts::Names;
 use crate::canvas::{Measured, Scene, measure_balanced};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
+use crate::error::{ParseFail, SourceLine};
 use crate::layout::layered::Spacing;
 use crate::{
     DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, NodeStyle, StyleSheet, clean_quoted, statements,
@@ -50,7 +51,7 @@ pub(crate) struct StateDiagram {
     pub composites: Vec<Composite>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<StateDiagram> {
+pub(crate) fn parse(header: SourceLine<'_>, body: &[SourceLine<'_>], max_items: usize) -> Result<StateDiagram, ParseFail> {
     let mut p = Parser {
         d: StateDiagram { title: None, dir: Dir::Down, states: Vec::new(), edges: Vec::new(), composites: Vec::new() },
         ids: HashMap::new(),
@@ -60,23 +61,22 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Sta
         pseudo_seq: 0,
         styles: StyleSheet::default(),
         max_items,
-        over: false,
+        limit: None,
     };
     let mut reader = Reader::default();
     for line in std::iter::once(header).chain(body.iter().copied()) {
-        if p.step(Event::Line(line), &mut reader).is_none() && p.over {
-            return None;
-        }
+        p.step(Event::Line(line), &mut reader)?;
     }
     // A note left open closes at the end.
-    if p.step(Event::End, &mut reader).is_none() && p.over {
-        return None;
-    }
+    p.step(Event::End, &mut reader)?;
     for (id, &idx) in &p.ids {
         p.d.states[idx].style = p.styles.get(id);
     }
     p.resolve_composites();
-    (!p.d.states.is_empty()).then_some(p.d)
+    if p.d.states.is_empty() {
+        return Err(reader.into_no_items());
+    }
+    Ok(p.d)
 }
 
 struct Parser {
@@ -90,7 +90,7 @@ struct Parser {
     styles: StyleSheet,
     max_items: usize,
     /// Set once the source goes past `max_items` or [`MAX_DEPTH`].
-    over: bool,
+    limit: Option<ParseFail>,
 }
 
 /// Reading statements, or inside a note the source has not closed yet.
@@ -104,7 +104,7 @@ enum Mode {
 /// One thing the parser steps through: a source line, or the end of the input.
 #[derive(Clone, Copy, Debug)]
 enum Event<'a> {
-    Line(&'a str),
+    Line(SourceLine<'a>),
     End,
 }
 
@@ -121,40 +121,52 @@ impl Lenient for Parser {
     fn read_statement(&mut self, s: &str) -> Option<()> {
         self.statement(s)
     }
-    fn over(&self) -> bool {
-        self.over
+    fn limit(&self) -> Option<ParseFail> {
+        self.limit.clone()
     }
 }
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.states.len() + self.d.edges.len() + self.d.composites.len() >= self.max_items;
-        (!self.over).then_some(())
+        if self.limit.is_none() && self.d.states.len() + self.d.edges.len() + self.d.composites.len() >= self.max_items {
+            self.limit = Some(ParseFail::ItemLimit { limit: self.max_items, kind: "items" });
+        }
+        self.limit.is_none().then_some(())
     }
 
     /// Steps one source line in whatever mode the parser is in, or closes a note left open at the
-    /// end of the input. `None` once the diagram is past its bounds.
-    fn step(&mut self, event: Event<'_>, reader: &mut Reader) -> Option<()> {
+    /// end of the input. `Err` once the diagram is past its bounds.
+    fn step(&mut self, event: Event<'_>, reader: &mut Reader) -> Result<(), ParseFail> {
         let mode = std::mem::replace(&mut self.mode, Mode::Reading);
         match (mode, event) {
-            (Mode::Reading, Event::End) => Some(()),
+            (Mode::Reading, Event::End) => Ok(()),
             (Mode::Reading, Event::Line(line)) => {
-                for stmt in statements(line) {
-                    reader.read(self, stmt)?;
+                for stmt in statements(line.text) {
+                    reader.read(self, line.line, stmt)?;
                 }
-                Some(())
+                Ok(())
             }
             (Mode::InNote { target, side, mut lines }, Event::Line(line)) => {
-                let line = line.trim();
-                if !line.eq_ignore_ascii_case("end note") {
-                    lines.push(line.to_owned());
+                let text = line.text.trim();
+                if !text.eq_ignore_ascii_case("end note") {
+                    lines.push(text.to_owned());
                     self.mode = Mode::InNote { target, side, lines };
-                    return Some(());
+                    return Ok(());
                 }
-                self.add_note(&target, side, &lines.join("\n"))
+                if self.add_note(&target, side, &lines.join("\n")).is_none()
+                    && let Some(fail) = self.limit.clone()
+                {
+                    return Err(fail);
+                }
+                Ok(())
             }
             (Mode::InNote { target, side, lines }, Event::End) => {
-                self.add_note(&target, side, &lines.join("\n"))
+                if self.add_note(&target, side, &lines.join("\n")).is_none()
+                    && let Some(fail) = self.limit.clone()
+                {
+                    return Err(fail);
+                }
+                Ok(())
             }
         }
     }
@@ -231,7 +243,7 @@ impl Parser {
         if opens {
             self.budget()?;
             if self.stack.len() >= MAX_DEPTH {
-                self.over = true;
+                self.limit = Some(ParseFail::DepthLimit(MAX_DEPTH));
                 return None;
             }
             // A composite whose name doesn't read still opens, so its `}` closes it and not its parent.
@@ -436,7 +448,7 @@ impl Parser {
     fn region(&mut self, parent: usize) -> Option<usize> {
         self.budget()?;
         if self.stack.len() >= MAX_DEPTH {
-            self.over = true;
+            self.limit = Some(ParseFail::DepthLimit(MAX_DEPTH));
             return None;
         }
         self.d.composites.push(Composite { title: String::new(), parent: Some(parent), region: true });
