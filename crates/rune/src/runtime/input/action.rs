@@ -81,6 +81,8 @@ pub(in crate::runtime) enum Action {
     /// A text field's menu: the field, the window point it opens at, and the window point where a
     /// press asked for it (none from the keyboard).
     FieldMenu(String, (f32, f32), Option<(f32, f32)>),
+    /// A native touch selection handle drag step queued by edge scroll for a focused text field.
+    HandleDrag(f32, f32),
     Blur,
     /// What assistive technology asked of an element (`a11y/actions.rs`).
     A11y(String, crate::a11y::actions::A11yAct),
@@ -697,6 +699,7 @@ impl RuntimeCore {
             }
             Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
             Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
+            Action::HandleDrag(x, y) => self.drag_field_handle_view(app, x, y),
             Action::Blur => {
                 if self.kbd.focus.path().is_none() { return false; }
                 self.set_focus(app, None, self.kbd.focus.keyboard());

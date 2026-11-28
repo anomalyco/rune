@@ -614,7 +614,7 @@ impl RuntimeCore {
     /// takes the text nearest it across. Between bands a drag down stops at the end of the band
     /// above, and a drag up at the start of the band below, so it reaches no further than the
     /// pointer has.
-    fn group_point(&self, g: usize, anchor: virtual_selection::EndRef, x: f32, y: f32) -> Option<(usize, usize)> {
+    pub(in crate::runtime) fn group_point(&self, g: usize, anchor: virtual_selection::EndRef, x: f32, y: f32) -> Option<(usize, usize)> {
         use virtual_selection::EndRef;
         let mut boxes: Vec<_> = self.group_texts(g).into_iter().filter_map(|j| Some((j, self.shown_box(j)?))).collect();
         boxes.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
@@ -740,7 +740,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn selection_menu(&mut self, app: &dyn ViewDriver, path: &str, x: f32, y: f32) -> bool {
         let Some(i) = self.live(path) else { return false };
         if !self.is_selectable(i) || self.tree.nodes[i].handlers.on_secondary_press.is_some() { return false; }
-        if SECONDARY_SELECTS_WORD
+        if (SECONDARY_SELECTS_WORD || self.host.text_menus)
             && let Some(at) = self.text_index_at(i, x, y)
             && range_in(&self.selection_ranges(), i).is_none_or(|(a, b)| at < a || at >= b)
         {
@@ -771,6 +771,7 @@ impl RuntimeCore {
                 }
             }),
             field: None,
+            text_menu: true,
         });
         true
     }

@@ -436,6 +436,7 @@ impl<S: 'static> LayerHost<S> {
         let mut rt = runtime_for_configured(spec, state, size, Env::new(dark, scale), wake, config);
         rt.set_touch_controls(true);
         rt.core_mut().host.open_urls_natively = true;
+        rt.core_mut().host.text_menus = true;
         core.configure_runtime(rt.core_mut(), now);
         Ok(Self { core, compositor: None, rt })
     }

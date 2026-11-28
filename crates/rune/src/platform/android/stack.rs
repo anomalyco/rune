@@ -623,6 +623,45 @@ impl PageStack {
         Some((frame, haptics, pick_step, editor))
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn selection_snapshot(&self) -> Option<crate::runtime::selection::touch_ui::TouchSelectionSnapshot> {
+        self.top_page()?.selection_snapshot()
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn take_text_menu(&mut self, can_select_all: bool) -> Option<super::selection::ToolbarActions> {
+        self.top_page_mut()?.take_text_menu(can_select_all)
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn resolve_text_menu(&mut self, picked: Option<&str>) {
+        if let Some(page) = self.top_page_mut() {
+            page.resolve_text_menu(picked);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn open_selection_text_menu(&mut self) -> bool {
+        self.top_page_mut().is_some_and(|p| p.open_selection_text_menu())
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn handle_grab(&mut self, handle: crate::runtime::selection::touch_ui::Handle, x: f32, y: f32) -> bool {
+        self.top_page_mut().is_some_and(|p| p.handle_grab(handle, x, y))
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn handle_drag(&mut self, x: f32, y: f32) -> bool {
+        self.top_page_mut().is_some_and(|p| p.handle_drag(x, y))
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn handle_release(&mut self) {
+        if let Some(page) = self.top_page_mut() {
+            page.handle_release();
+        }
+    }
+
     /// Runs `on_close` on all visible pages (top-to-bottom) and drops every page.
     pub(crate) fn shutdown(&mut self) {
         let visible = std::mem::take(&mut self.visible_stack);

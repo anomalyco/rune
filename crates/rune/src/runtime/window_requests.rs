@@ -109,6 +109,11 @@ pub(crate) struct HostState {
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
     pub(crate) force_field_menu_fallback: bool,
+    /// True when the embedding host presents text-selection menus natively (e.g. Android's
+    /// floating `ActionMode`): text menus (a field's, selected text's Copy) stay in `popups` for
+    /// `take_text_menu`, `App::on_field_menu` yields to the native toolbar, and long presses
+    /// select the word under the finger.
+    pub(crate) text_menus: bool,
     /// True when the embedding host presents file dialogs itself rather than refusing them.
     #[cfg_attr(not(any(test, target_vendor = "apple", target_os = "android")), allow(dead_code))]
     pub(crate) file_dialogs: bool,
@@ -210,6 +215,7 @@ impl HostState {
             deferred_field_menu_pick: None,
             #[cfg(test)]
             force_field_menu_fallback: false,
+            text_menus: false,
             file_dialogs: false,
             file_dialog: Default::default(),
             file_dialog_answers: Vec::new(),

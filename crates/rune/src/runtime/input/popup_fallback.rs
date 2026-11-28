@@ -207,6 +207,10 @@ impl RuntimeCore {
                     self.resolve_popup_into(app, picked.as_deref(), tx).ok();
                 }
             }
+        } else if self.front_is_text_menu() {
+            // An app `Tx::popup_menu` supersedes any open or queued native text menu so it is
+            // never blocked behind a floating selection toolbar.
+            self.resolve_popup_into(app, None, tx).ok();
         }
         self.host.popups.extend(incoming);
     }
@@ -348,6 +352,9 @@ impl RuntimeCore {
 
     fn deliver_one_popup_fallback_no_commit(&mut self, app: &mut dyn AppDriver, post_tx: &mut Tx) -> bool {
         let Some(front) = self.host.popups.front() else { return false };
+        if self.host.text_menus && front.text_menu {
+            return false;
+        }
         let anchor = front.anchor.clone();
         let anchor_key = match &anchor {
             PopupAnchor::Key(k) => Some(k.clone()),

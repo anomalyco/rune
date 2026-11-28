@@ -369,6 +369,9 @@ pub(crate) struct Request {
     pub on_pick: PickFn,
     /// A text field's own menu, whose picks the runtime acts on.
     pub field: Option<Box<crate::runtime::field_menu::FieldMenu>>,
+    /// True for text-selection menus (a field's menu or selectable text's Copy menu) that a host
+    /// with `host.text_menus` takes through `take_text_menu`.
+    pub text_menu: bool,
 }
 
 impl Request {
@@ -418,7 +421,7 @@ impl Tx {
             // None once the playground has dropped the stage that asked.
             if let Some(s) = s.cast::<S>() { on_pick(s, picked, tx); }
         });
-        let request = Request { menu, anchor: anchor.into(), on_pick, field: None };
+        let request = Request { menu, anchor: anchor.into(), on_pick, field: None, text_menu: false };
         self.popups.push(Call(Rc::new(RefCell::new(Some(request)))));
     }
 

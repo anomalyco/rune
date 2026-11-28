@@ -20,7 +20,7 @@ enum Step {
 pub(in crate::runtime) struct Hit {
     pub(in crate::runtime) caret: usize,
     /// The side of `caret` the press was on, where two runs of different direction meet.
-    side: parley::Affinity,
+    pub(in crate::runtime) side: parley::Affinity,
     cluster: usize,
 }
 
@@ -107,7 +107,7 @@ pub(in crate::runtime) fn hit(e: &crate::edit::TextEdit, l: TextFlow<'_>, x: f32
     Hit { caret, side: at.side, cluster }
 }
 
-fn unit_at(e: &crate::edit::TextEdit, h: Hit, unit: Unit) -> (usize, usize) {
+pub(in crate::runtime) fn unit_at(e: &crate::edit::TextEdit, h: Hit, unit: Unit) -> (usize, usize) {
     if unit == Unit::Char {
         let to = e
             .pills()
@@ -209,6 +209,7 @@ impl RuntimeCore {
 
     /// Touch tap-up on text field `ji`: focuses it and places its caret or word/line selection.
     pub(in crate::runtime) fn input_tap_up(&mut self, ji: usize, (x, y): (f32, f32), direct: bool) {
+        self.edit.bump_touch_selection_rev();
         let shift = self.kbd.held_mods.shift;
         let clicks = self.queue_input_focus_step(ji, (x, y), direct, true);
         if shift || clicks > 1 {
