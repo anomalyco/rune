@@ -18,8 +18,6 @@ use crate::tooling::{AppSpec, runtime_for_configured};
 use crate::window::WindowHandle;
 use crate::windows::WindowSpec;
 #[cfg(target_os = "android")]
-use crate::input::host_events::{ImeStep, ImeSync, ime_sync_step};
-#[cfg(target_os = "android")]
 use crate::Haptic;
 use crate::{ColorScheme, KeyEvent, TouchPhase};
 
@@ -27,6 +25,8 @@ use crate::{ColorScheme, KeyEvent, TouchPhase};
 use std::sync::Mutex;
 #[cfg(target_os = "android")]
 use super::document::Document;
+#[cfg(target_os = "android")]
+use super::editor::{self, EditorSnapshot};
 #[cfg(target_os = "android")]
 use super::host::ViewBridge;
 #[cfg(target_os = "android")]
@@ -122,8 +122,7 @@ impl PageEntry {
             rt: None,
             #[cfg(target_os = "android")]
             clipboard: crate::clipboard::Client::default(),
-            #[cfg(target_os = "android")]
-            ime: ImeSync::default(),
+
             #[cfg(target_os = "android")]
             clock: None,
             #[cfg(target_os = "android")]
@@ -178,9 +177,7 @@ pub(super) trait AndroidPage {
     #[cfg(target_os = "android")]
     fn finish_composition(&mut self);
     #[cfg(target_os = "android")]
-    fn ime_sync_step(&mut self, focused: bool) -> ImeStep;
-    #[cfg(target_os = "android")]
-    fn clear_ime_sync(&mut self);
+    fn sample_editor(&mut self) -> EditorSnapshot;
     #[cfg(all(target_os = "android", feature = "accessibility"))]
     fn a11y_receive(&mut self, a11y: &mut crate::a11y::android::Adapter) -> bool;
     #[cfg(all(target_os = "android", feature = "accessibility"))]
@@ -232,8 +229,7 @@ struct TypedPage<S: 'static> {
     rt: Option<Runtime<S>>,
     #[cfg(target_os = "android")]
     clipboard: crate::clipboard::Client,
-    #[cfg(target_os = "android")]
-    ime: ImeSync,
+
     #[cfg(target_os = "android")]
     clock: Option<FrameClock>,
     #[cfg(target_os = "android")]
@@ -370,6 +366,10 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
             if let Some(rt) = &mut self.rt {
                 rt.set_live_visible(true);
                 rt.window_focus(true);
+                #[cfg(target_os = "android")]
+                {
+                    rt.core_mut().edit.ime_reset = true;
+                }
                 rt.invalidate();
             }
         } else {
@@ -380,8 +380,6 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
                 rt.window_focus(false);
                 rt.set_live_visible(false);
             }
-            #[cfg(target_os = "android")]
-            self.ime.clear();
         }
     }
 
@@ -554,16 +552,11 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
     }
 
     #[cfg(target_os = "android")]
-    fn ime_sync_step(&mut self, focused: bool) -> ImeStep {
+    fn sample_editor(&mut self) -> EditorSnapshot {
         let Some(rt) = &mut self.rt else {
-            return ImeStep { cancel: false, set_allowed: None, cursor_area: None };
+            return EditorSnapshot::default();
         };
-        ime_sync_step(rt.core_mut(), &mut self.ime, focused)
-    }
-
-    #[cfg(target_os = "android")]
-    fn clear_ime_sync(&mut self) {
-        self.ime.clear();
+        editor::sample_editor(rt.core_mut())
     }
 
     #[cfg(all(target_os = "android", feature = "accessibility"))]

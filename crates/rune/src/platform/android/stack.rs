@@ -16,7 +16,7 @@ use crate::runtime::RuntimeCore;
 use crate::window::WakeEvent;
 use crate::windows::AnyWindowSpec;
 #[cfg(target_os = "android")]
-use crate::input::host_events::ImeStep;
+use super::editor::EditorSnapshot;
 #[cfg(target_os = "android")]
 use crate::Haptic;
 use crate::{ColorScheme, KeyEvent, TouchPhase};
@@ -186,13 +186,6 @@ impl PageStack {
     pub(crate) fn finish_composition(&mut self) {
         if let Some(top) = self.top_page_mut() {
             top.finish_composition();
-        }
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn clear_ime_sync(&mut self) {
-        for page in self.slots.iter_mut().flatten() {
-            page.clear_ime_sync();
         }
     }
 
@@ -602,7 +595,7 @@ impl PageStack {
     }
 
     #[cfg(target_os = "android")]
-    pub(crate) fn draw_top(&mut self, surface: &mut AndroidSurface, resumed: bool) -> Option<(EmbedFrame, Vec<Haptic>, PickStep, ImeStep)> {
+    pub(crate) fn draw_top(&mut self, surface: &mut AndroidSurface) -> Option<(EmbedFrame, Vec<Haptic>, PickStep, EditorSnapshot)> {
         let _ = self.pump();
         let top_slot = *self.visible_stack.last()?;
         let env = self.env;
@@ -624,10 +617,10 @@ impl PageStack {
         if self.pump() {
             frame.animating = true;
         }
-        let ime = self
+        let editor = self
             .top_page_mut()
-            .map_or(ImeStep { cancel: false, set_allowed: None, cursor_area: None }, |p| p.ime_sync_step(resumed));
-        Some((frame, haptics, pick_step, ime))
+            .map_or(EditorSnapshot::default(), |p| p.sample_editor());
+        Some((frame, haptics, pick_step, editor))
     }
 
     /// Runs `on_close` on all visible pages (top-to-bottom) and drops every page.

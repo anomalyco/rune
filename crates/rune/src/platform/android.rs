@@ -14,6 +14,9 @@ mod a11y;
 pub(crate) mod bridge;
 #[cfg(target_os = "android")]
 mod document;
+pub(crate) mod editor;
+#[cfg(test)]
+mod editor_tests;
 pub(crate) mod haptics;
 #[cfg(target_os = "android")]
 mod host;

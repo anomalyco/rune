@@ -648,6 +648,51 @@ impl RuntimeCore {
         self.focused_input().is_some_and(|i| i.edit.is_secure())
     }
 
+    /// Editing metadata of the currently focused editable text field (plain or secure), for
+    /// mobile hosts that configure a soft keyboard (`InputMode`, `single_line`, `secure`).
+    /// Returns `None` when no editable field is focused, or when the focused field is read-only,
+    /// disabled, authored-hidden, or exiting.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn focused_editable_input(&self) -> Option<(crate::InputMode, bool, bool)> {
+        let input = self.focused_input()?;
+        if input.access.is_none() || self.focused_input_read_only() || self.focused_input_disabled() {
+            return None;
+        }
+        if let Some(i) = self.focused_index()
+            && !self.can_focus(i)
+        {
+            return None;
+        }
+        Some((input.input_mode, input.single_line, input.edit.is_secure()))
+    }
+
+    /// Routes committed soft-keyboard text into the focused secure field as `Key::Text`,
+    /// keeping `TextEdit::ime` closed to composition on passwords (matching `web_secure`).
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn commit_secure_text(&mut self, text: String) -> bool {
+        if text.is_empty()
+            || !self.has_secure_focus()
+            || self.focused_input_read_only()
+            || self.focused_input_disabled()
+        {
+            return false;
+        }
+        self.key(crate::KeyEvent {
+            key: crate::Key::Text(text),
+            mods: crate::Mods::default(),
+        });
+        true
+    }
+
+    /// Returns and clears whether a finger tap focused or re-tapped an editable text field since
+    /// the last check, so mobile hosts can re-show a soft keyboard hidden by Back while the field
+    /// kept focus.
+    #[inline]
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn take_field_tap(&mut self) -> bool {
+        std::mem::take(&mut self.edit.field_tap)
+    }
+
     #[inline]
     pub fn has_focus(&self) -> bool {
         self.kbd.has_focus()

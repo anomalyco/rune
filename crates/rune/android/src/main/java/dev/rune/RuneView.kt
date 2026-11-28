@@ -47,6 +47,8 @@ open class RuneView(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var frameScheduled = false
     private var imeEnabled = false
+    private var imeInputType: Int = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    private var imeOptions: Int = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
     private val wakeRunnable = Runnable { nativeWake() }
     private val timerWakeRunnable = Runnable { nativeWake() }
     private var a11yWakeRunnable: Runnable? = null
@@ -196,18 +198,23 @@ open class RuneView(
         if (!imeEnabled) {
             return null
         }
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        outAttrs.inputType = imeInputType
+        outAttrs.imeOptions = imeOptions
         return RuneInputConnection(this)
     }
 
     /**
-     * Called by Rust (UI thread) after frames or lifecycle changes when `ImeSync` enables,
-     * disables, or resets text input.
+     * Called by Rust (UI thread) after frames or lifecycle changes when text input enables,
+     * disables, switches editor kind, resets composition, or re-shows after a tap on a focused
+     * field.
      */
-    fun setImeEnabled(enabled: Boolean, restart: Boolean) {
+    fun setImeState(enabled: Boolean, restart: Boolean, inputType: Int, imeOptions: Int) {
         val wasEnabled = imeEnabled
         imeEnabled = enabled
+        if (enabled) {
+            imeInputType = inputType
+            this.imeOptions = imeOptions
+        }
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             ?: return
         if (enabled) {
