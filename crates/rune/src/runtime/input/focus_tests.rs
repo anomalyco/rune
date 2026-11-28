@@ -81,6 +81,23 @@ fn window_blur_keeps_the_composition_as_text_and_focus() {
 }
 
 #[test]
+fn inactive_window_hides_the_focused_fields_caret_and_keeps_its_focus() {
+    fn view(s: &crate::TextEdit, _: &mut Cx<crate::TextEdit>) -> El {
+        crate::text_input(s, crate::TextStyle::new(14.0, 400.0)).key("field").size(200.0, 40.0)
+            .on_edit(|s: &mut crate::TextEdit| s)
+    }
+    let mut edit = crate::TextEdit::new("draft"); edit.focused = true;
+    let mut rt = Runtime::new(edit, view, (200.0, 40.0), Env::new(true, 1.0));
+    rt.window_focus(true); rt.frame(0.0);
+    let active = rt.instances.len();
+    rt.window_focus(false); rt.frame(0.0);
+    assert_eq!(rt.instances.len(), active - 1, "the caret's quad goes while another window has the keys");
+    assert!(rt.state.focused && rt.ime_area.is_some(), "the field keeps its focus and its IME area");
+    rt.window_focus(true); rt.frame(0.0);
+    assert_eq!(rt.instances.len(), active, "the caret comes back with the window");
+}
+
+#[test]
 fn unrealized_virtual_input_keeps_focus_and_does_not_steal_it_back() {
     fn view(s: &Vec<crate::TextEdit>, _: &mut Cx<Vec<crate::TextEdit>>) -> El {
         col().key("root").size(200.0, 240.0).child(button("other"))

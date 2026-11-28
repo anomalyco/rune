@@ -654,7 +654,9 @@ impl RuntimeCore {
                     loop_vis,
                     gliding,
                     turn_index,
-                    input_caret.map(|(caret, _)| caret),
+                    // An inactive window's field keeps its focus and its IME area but draws no
+                    // caret, as a native field and a browser's: keys go to another window.
+                    input_caret.map(|(caret, _)| caret).filter(|_| self.host.window_focused != Some(false)),
                     video_clock,
                     &sel_ranges,
                     &mark_ranges,
