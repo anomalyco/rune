@@ -424,15 +424,17 @@ impl Menu {
         if !self.open {
             return trigger;
         }
+        // The rectangle and point are the window's own coordinates: unmirrored, so a window laid
+        // out right to left doesn't move them to its other side.
         let (placement, gutter, key) = match (self.anchor_rect, self.at) {
             (Some([x, y, w, h]), _) => {
                 let rect_key = format!("{}-anchor", self.key);
-                layer.push(el().key(rect_key.clone()).absolute(x, y).size(w, h).a11y_hidden());
+                layer.push(el().key(rect_key.clone()).absolute(x, y).size(w, h).unmirrored().a11y_hidden());
                 (self.placement, self.gutter, rect_key)
             }
             (None, Some((x, y))) => {
                 let point = format!("{}-point", self.key);
-                layer.push(el().key(point.clone()).absolute(x, y).size(0.0, 0.0).a11y_hidden());
+                layer.push(el().key(point.clone()).absolute(x, y).size(0.0, 0.0).unmirrored().a11y_hidden());
                 (Placement::BottomStart, 0.0, point)
             }
             (None, None) => (self.placement, self.gutter, anchor_key.clone()),

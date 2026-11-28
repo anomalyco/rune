@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use rune::{El, Icon, Key, KeyEvent, TextStyle, Tx, col, el, icon, row, text};
+use rune::{El, Icon, Key, KeyEvent, TextStyle, Tx, col, el, icon, row, spacer, text};
 
 use super::super::overlay::Placement;
 use super::super::popover::anchored;
@@ -237,7 +237,10 @@ impl MenuItem {
         let danger = self.danger && !disabled;
         let ink = if danger { c.danger.fg } else { ink };
         // The item's label, shortcut, badge and check say what this row shows.
-        let mut content = row().key("content").grow(1.0).shrink().gap(8.0).center_y().a11y_hidden();
+        // Sized by its content, not grown (`grow` is `flex-basis: 0`, and a menu that sizes to its
+        // rows would stay at its minimum width with each label cut short); a spacer after it takes
+        // the rest of the row.
+        let mut content = row().key("content").shrink().min_w(0.0).gap(8.0).center_y().a11y_hidden();
         if let Some(l) = self.lead {
             content = content.child(l);
         }
@@ -255,7 +258,7 @@ impl MenuItem {
             Some(d) => {
                 let (font, ink) = if standard { (k.ty.text_xsmall, c.text_weak) } else { (k.ty.small, c.text_faint) };
                 content.child(
-                    col().key("text").grow(1.0).shrink().gap(2.0).child(label).child(
+                    col().key("text").shrink().min_w(0.0).gap(2.0).child(label).child(
                         text(d.clone()).key("description").font(font).color(ink).truncate(),
                     ),
                 )
@@ -294,7 +297,8 @@ impl MenuItem {
             // One highlight for pointer and keys, landing at once like NSMenu's.
             e = e.focus_highlight(hover);
         }
-        e = e.child(content);
+        // Its start margin cancels the row's gap, so the spacer adds no width of its own.
+        e = e.child(content).child(spacer().ml(-8.0));
         if let Some(s) = self.shortcut {
             let st = TextStyle { line_height: 11.0, ..k.ty.small_medium };
             e = e.child(text(s).key("shortcut").font(st).color(c.text_faint).a11y_hidden());
@@ -404,4 +408,4 @@ impl MenuItem {
         e
     }
 }
-
+

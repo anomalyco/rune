@@ -14,6 +14,8 @@ struct Demo {
     theme: String,
     long_list: bool,
     views: Cell<usize>,
+    /// Lays the window out right to left.
+    rtl: bool,
 }
 
 fn context_menu_with_sub() -> PopupMenu {
@@ -62,7 +64,8 @@ fn view(s: &Demo, cx: &mut Cx<Demo>) -> El {
         })
         .build(&k, &mut layer);
     }
-    root(body, layer)
+    let page = root(body, layer);
+    if s.rtl { page.dir(rune::Direction::Rtl) } else { page }
 }
 
 fn make_rt(size: (f32, f32)) -> rune::Runtime<Demo> {
@@ -225,4 +228,76 @@ fn from_popup_menu_clamps_under_roomy_menu_metrics() {
     assert!(rt.state.popup.is_some());
     let rect = rt.presented("pm-menu").expect("roomy clamped menu").0;
     assert!(rect[0] >= 0.0 && rect[1] >= 0.0 && rect[0] + rect[2] <= 260.5 && rect[1] + rect[3] <= 200.5, "clamped: {rect:?}");
+}
+
+/// Right to left, a menu still opens at what it's anchored to: a request's rectangle and point
+/// are the window's own coordinates, which the overlay mustn't mirror.
+#[test]
+fn right_to_left_menus_open_at_their_anchor() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    let mut rt = make_rt((480.0, 300.0));
+    rt.update(|s, _| s.rtl = true);
+    rt.frame(0.0);
+    let btn = rt.presented("picker-btn").expect("button").0;
+    assert!(btn[0] > 240.0, "right to left the button starts at the right: {btn:?}");
+    let (bx, by) = rt.find("picker-btn").unwrap();
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.0);
+    let menu = rt.presented("pm-menu").expect("menu").0;
+    assert!(menu[0] < btn[0] + btn[2] && menu[0] + menu[2] > btn[0], "the menu {menu:?} at its button {btn:?}");
+    rt.key(KeyEvent::from(Key::Escape));
+    rt.frame(0.0);
+    let (cx, cy) = rt.find("ctx-area").unwrap();
+    rt.secondary_down(cx, cy);
+    rt.secondary_up(cx, cy);
+    rt.frame(0.0);
+    let menu = rt.presented("pm-menu").expect("context menu").0;
+    let near = |x: f32| (x - cx).abs() < 2.0;
+    assert!(near(menu[0]) || near(menu[0] + menu[2]), "the context menu {menu:?} at the pointer's x {cx}");
+}
+
+/// A menu is as wide as its longest item, label and shortcut, as native menus are, rather than
+/// cutting it at its minimum width; so is a submenu.
+#[test]
+fn menus_are_as_wide_as_their_longest_item() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    let long = "Generate the outline from the contents pages";
+    let mut rt = make_rt((900.0, 500.0));
+    rt.update(move |_, tx| {
+        let m = PopupMenu::new()
+            .item(PopupItem::new("long", long).key_equivalent("ctrl+alt+0".parse().unwrap()))
+            .submenu("More", PopupMenu::new().item(PopupItem::new("deep", long)));
+        tx.popup_menu(m, (20.0, 20.0), |_: &mut Demo, _, _| {});
+    });
+    rt.frame(0.0);
+    let menu = rt.presented("pm-menu").expect("menu").0;
+    assert!(menu[2] > 260.0, "the menu is as wide as its long item: {menu:?}");
+    let (sx, sy) = rt.find("pm-sub-1").expect("submenu row");
+    rt.pointer_down(sx, sy);
+    rt.pointer_up(sx, sy);
+    rt.frame(0.0);
+    let sub = rt.presented("pm-sub-1-sub-menu").expect("submenu").0;
+    assert!(sub[2] > 240.0, "the submenu is as wide as its long item: {sub:?}");
+}
+
+/// A drawn menu writes an item's shortcut as the platform does (`Ctrl+Alt+0`), in the app's
+/// words for keys, not as the accelerator string it was given.
+#[test]
+fn menu_shortcuts_are_written_as_the_platform_writes_them() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    let mut rt = make_rt((600.0, 400.0));
+    rt.update(|_, tx| {
+        let m = PopupMenu::new().item(PopupItem::new("reset", "Reset Zoom").key_equivalent("ctrl+alt+0".parse().unwrap()));
+        tx.popup_menu(m, (20.0, 20.0), |_: &mut Demo, _, _| {});
+    });
+    rt.frame(0.0);
+    let shortcut = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("shortcut")).and_then(|e| e.text);
+    assert_eq!(shortcut.as_deref(), Some("Ctrl+Alt+0"));
 }

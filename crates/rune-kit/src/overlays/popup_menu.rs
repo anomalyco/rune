@@ -43,7 +43,8 @@ fn map_entries<S: 'static>(
                     row = row.checked(true);
                 }
                 if let Some(shortcut) = item.key_equivalent_shortcut() {
-                    row = row.shortcut(shortcut.to_string());
+                    // As the platform writes it, in the app's words for keys (`Label::Key`).
+                    row = row.shortcut(crate::controls::actions::format_shortcut(&shortcut.to_string()));
                 }
                 let resolve = Rc::clone(on_resolve);
                 let clear_open = Rc::clone(open_path);
@@ -129,7 +130,7 @@ impl Menu {
         let close_resolve = Rc::clone(&on_resolve);
         let close_open = Rc::clone(&open_path);
         let mut menu = Menu::new(key)
-            .label("Context menu")
+            .label(rune::labels::label(rune::Label::ContextMenu))
             .min_width(req.min_width().max(160.0))
             .open(true)
             .on_close_tx(move |s: &mut S, tx: &mut Tx| {
@@ -138,7 +139,9 @@ impl Menu {
             });
         if let Some([x, y, w, h]) = req.anchor_rect() {
             if req.positioned().is_some() {
-                menu = menu.at(x, y);
+                // Over the element, from its top edge and its start: its left edge, or right to
+                // left its right edge (a point would open leftward from the left one).
+                menu = menu.with_anchor_rect([x, y, w, 0.0]).placement(Placement::BottomStart).gutter(0.0);
             } else {
                 menu = menu.with_anchor_rect([x, y, w, h]).placement(Placement::BottomStart).gutter(4.0);
             }
