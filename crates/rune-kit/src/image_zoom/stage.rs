@@ -238,7 +238,7 @@ struct StageCore {
     image: El,
     grows: bool,
     icons: Option<[&'static Icon; 3]>,
-    labels: [String; 4],
+    labels: Option<[String; 4]>,
 }
 
 impl StageCore {
@@ -248,7 +248,7 @@ impl StageCore {
             image,
             grows: false,
             icons: None,
-            labels: ["Zoom in".into(), "Zoom out".into(), "Fit".into(), "Preview controls".into()],
+            labels: None,
         }
     }
 
@@ -273,7 +273,12 @@ impl StageCore {
 
     /// `PreviewControls`: zoom in, zoom out and fit, in a raised box at the bottom right.
     fn controls(&self, zoom: &StageZoom, k: &Kit, bind: &dyn StageBind) -> El {
-        let [zin, zout, fit, group] = self.labels.clone();
+        let [zin, zout, fit, group] = self.labels.clone().unwrap_or_else(|| [
+            rune::labels::label(rune::Label::ZoomIn),
+            rune::labels::label(rune::Label::ZoomOut),
+            "Fit".into(),
+            "Preview controls".into(),
+        ]);
         let glyphs = self.icons.unwrap_or([k.glyph.dash; 3]);
         let divider = || el().size(0.5, 20.0).mx(4.0).fill(k.c.border_base).a11y_hidden();
         let button = |glyph: &'static Icon, label: String, disabled: bool, f: fn(&mut StageZoom, &mut Tx)| {
@@ -325,7 +330,7 @@ impl<S: 'static> Stage<S> {
 
     /// The controls' tooltips and names, and the group's name.
     pub fn labels(mut self, zoom_in: impl Into<String>, zoom_out: impl Into<String>, fit: impl Into<String>, group: impl Into<String>) -> Self {
-        self.core.labels = [zoom_in.into(), zoom_out.into(), fit.into(), group.into()];
+        self.core.labels = Some([zoom_in.into(), zoom_out.into(), fit.into(), group.into()]);
         self
     }
 

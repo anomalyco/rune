@@ -95,6 +95,9 @@ name = "a11y"
 name = "integration"
 
 [[test]]
+name = "labels"
+
+[[test]]
 name = "markdown"
 required-features = ["markdown"]
 

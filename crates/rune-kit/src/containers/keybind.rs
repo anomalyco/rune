@@ -66,7 +66,7 @@ impl Keybind {
         let font = m.label;
         let label = self.keys.join(" ");
         let keep_case = self.keep_case;
-        row().role("group").label(label).gap(2.0).center_y().children(self.keys.into_iter().enumerate().map(
+        row().role("group").label(label).dir(rune::Direction::Ltr).gap(2.0).center_y().children(self.keys.into_iter().enumerate().map(
             |(i, key)| {
                 let cap = if keep_case { key } else { keycap(key) };
                 let mut cap_el = row()

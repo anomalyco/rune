@@ -375,7 +375,7 @@ impl Button {
                 let mut e = e.child(text(self.label).key("label").font(font).color(ink).a11y_hidden());
                 if self.show_shortcut {
                     if let Some(sc) = self.shortcut.as_deref().map(format_shortcut).filter(|s| !s.is_empty()) {
-                        e = e.child(text(sc).key("shortcut").font(font).color(ink.alpha(ink.a * 0.6)).a11y_hidden());
+                        e = e.child(text(sc).key("shortcut").font(font).color(ink.alpha(ink.a * 0.6)).dir(rune::Direction::Ltr).a11y_hidden());
                     }
                 }
                 e

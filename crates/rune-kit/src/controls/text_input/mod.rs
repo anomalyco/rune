@@ -671,7 +671,7 @@ impl TextInput {
             let mut b = row()
                 .key("action")
                 .role("button")
-                .label(if self.clear { "Clear" } else { "Copy" })
+                .label(rune::labels::label(if self.clear { rune::Label::Clear } else { rune::Label::Copy }))
                 .size(side, side)
                 .self_center()
                 .center()

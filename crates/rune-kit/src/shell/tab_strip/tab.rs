@@ -147,8 +147,12 @@ pub(super) fn build(item: TabItemCore<'_>, at: Place, prev: Option<&str>, st: &S
     let reordering = st.drag.gap_open() || matches!(st.drag.phase(), super::TabDragPhase::Pressed { .. } | super::TabDragPhase::Dragging(super::TabDragMode::Reorder { .. }));
     let mut slot = el()
         .key(format!("t-{id}"))
-        .label(item.title.into_owned())
-        .description_static(status_words(st.words, status))
+        .label(item.title.into_owned());
+    slot = match status {
+        Some(s) => slot.description(status_words(st.words, s)),
+        None => slot.description_static(""),
+    };
+    slot = slot
         // `:is(:hover, :has(:focus-visible))`: Tab reaching it shows its close button and wash.
         .hover_group_focus()
         // The separator after it hides with it.
@@ -266,8 +270,11 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
     if let Some(field) = editor {
         return row().key("title").grow(1.0).shrink().min_w(0.0).mr(SLOT_END).child(field);
     }
-    // A title runs in its own direction (`tab-nav.tsx`'s `dir="auto"`).
-    let label = text(title.to_owned()).key("label").font(font).color(ink).grow(1.0).shrink().a11y_hidden().dir(rune::Direction::Auto);
+    // A title runs in its own direction (`tab-nav.tsx`'s `dir="auto"`). When placed inside a
+    // fading row (`wrap` or `hovered`) the row itself carries `Direction::Auto` so `label`
+    // inherits it and the row's logical end fade (`clip_fade_linear(0, 0, FADE, 0)`) always
+    // lands at the end of the title's own text, whether the strip runs LTR or RTL.
+    let label = text(title.to_owned()).key("label").font(font).color(ink).grow(1.0).shrink().a11y_hidden();
     // A compact tab hides its title while the status or close slot would cover it.
     let compact = at.density == TabDensity::Compact;
     if compact && emphasized {
@@ -276,26 +283,17 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
         return row().key("title").grow(1.0).shrink().min_w(0.0).child(hidden(label.truncate_fade_width(0.0).opacity(0.0)).instant_changes());
     }
     let wrap = row().key("title").grow(1.0).shrink().min_w(0.0);
-    // The fade ends 24 points before the link's end, clear of the slot, at the end of the title's
-    // own words: a Latin title in a right-to-left tab starts at its left and fades at its right,
-    // never hiding its first word under the slot (as Desktop's `flex-1` title does).
-    // `tab-nav.css` applies the 16 pt linear mask unconditionally on active/hovered/focused/status
-    // tabs, so a title that enters the final 16 pt before the slot fades even if it does not
-    // overflow `wrap` (`Wide tables and long code`, 187 pt inside 188 pt).
-    let (fade_l, fade_r) = if rune::Direction::of(title) == Some(rune::Direction::Rtl) {
-        (FADE, 0.0)
-    } else {
-        (0.0, FADE)
-    };
     let clipped = |label: El| label.truncate_fade_width(0.0);
     if emphasized {
-        return wrap.mr(room).clip_fade_linear(fade_l, 0.0, fade_r, 0.0).child(clipped(label));
+        // `mr(room)` is mirrored by the tab's flow (staying clear of the slot), while `wrap`'s
+        // own `Direction::Auto` makes `clip_fade_linear` fade at the title's logical end.
+        return wrap.mr(room).dir(rune::Direction::Auto).clip_fade_linear(0.0, 0.0, FADE, 0.0).child(clipped(label));
     }
     // At rest it fades only an overflowing title, 4 points from a horizontal tab's end. A compact
     // tab's hover hides it; a wider tab's hover shows it faded clear of the slot instead, in the
     // same place.
     let end = if vertical { 0.0 } else { 4.0 };
-    let rest = label.clone().truncate_fade_width(FADE / font.size);
+    let rest = label.clone().dir(rune::Direction::Auto).truncate_fade_width(FADE / font.size);
     if compact {
         return wrap.mr(end).child(hidden(rest.group_opacity(1.0, 0.0)));
     }
@@ -304,7 +302,8 @@ fn title(title: &str, editor: Option<El>, at: &Place, vertical: bool, emphasized
         row()
             .key("hovered")
             .pin(Some(0.0), Some(0.0), Some(24.0), Some(0.0))
-            .clip_fade_linear(fade_l, 0.0, fade_r, 0.0)
+            .dir(rune::Direction::Auto)
+            .clip_fade_linear(0.0, 0.0, FADE, 0.0)
             .group_opacity(0.0, 1.0)
             .child(clipped(label)),
     );
@@ -385,7 +384,7 @@ fn status_slot(look: SlotLook, st: &Strip, bind: &dyn TabBind, id: &str, k: &Kit
                 IconButton::new(st.close_icon.unwrap_or(k.glyph.close))
                     .control_size(ControlSize::Small)
                     .variant(IconButtonVariant::GhostMuted)
-                    .label(st.words.close),
+                    .label(tab_word(st.words.close, super::TabWords::default().close, rune::Label::CloseTab)),
                 id.to_owned(),
                 lock,
             )
@@ -495,12 +494,20 @@ fn dot_color(status: Option<TabItemStatus>, k: &Kit) -> Color {
     }
 }
 
-fn status_words(w: super::TabWords, status: Option<TabItemStatus>) -> &'static str {
+fn tab_word(word: &'static str, default: &'static str, label: rune::Label<'_>) -> String {
+    if word == default {
+        rune::labels::label(label)
+    } else {
+        word.to_owned()
+    }
+}
+
+fn status_words(w: super::TabWords, status: TabItemStatus) -> String {
+    let defaults = super::TabWords::default();
     match status {
-        Some(TabItemStatus::Busy) => w.busy,
-        Some(TabItemStatus::Attention) => w.attention,
-        Some(TabItemStatus::Unread) => w.unread,
-        Some(TabItemStatus::Failed) => w.failed,
-        None => "",
+        TabItemStatus::Busy => tab_word(w.busy, defaults.busy, rune::Label::Working),
+        TabItemStatus::Attention => tab_word(w.attention, defaults.attention, rune::Label::NeedsAttention),
+        TabItemStatus::Unread => tab_word(w.unread, defaults.unread, rune::Label::Unread),
+        TabItemStatus::Failed => tab_word(w.failed, defaults.failed, rune::Label::Failed),
     }
 }

@@ -370,7 +370,7 @@ impl Popover {
             let close = IconButton::new(k.glyph.close)
                 .variant(IconButtonVariant::Ghost)
                 .control_size(ControlSize::Regular)
-                .label("Close");
+                .label(rune::labels::label(rune::Label::Close));
             let close = self.close.apply(close.build(k).key("close"), true);
             content = content.label(t.clone()).child(
                 row()
