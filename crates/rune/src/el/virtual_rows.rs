@@ -157,6 +157,10 @@ impl El {
     /// (viewport rows only); otherwise `edge` is clamped to `0.0..=(overscan - 0.05).min(overscan * 0.95).max(0.0)`
     /// so consecutive frames never oscillate. Non-finite inputs (`NaN`, `±∞`) are ignored.
     ///
+    /// Setting `virtual_overscan` also disables the default 32-row minimum mounted floor when the
+    /// list is pinned to its end inside a `stick_bottom` viewport, so small viewports mount only
+    /// what the viewport and `overscan` ask for.
+    ///
     /// ```
     /// # use rune::{GrowthSpec, ScrollSpec, col, text};
     /// # struct App { rows: Vec<String> }

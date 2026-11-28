@@ -1,0 +1,1 @@
+- Virtual lists (`El::virtual_rows`, `El::virtualize`, and `rune_kit::Table`) with an explicit `virtual_overscan(overscan, edge)` no longer keep a 32-row minimum floor while pinned to the end of a `stick_bottom` viewport, mounting only what the viewport and overscan ask for (lists without `virtual_overscan` keep the existing 32-row default).

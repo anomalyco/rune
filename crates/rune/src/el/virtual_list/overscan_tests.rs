@@ -181,3 +181,65 @@ fn viewport_uncovered_handles_pinned_gaps_padding_and_empty_ranges() {
         }
     }
 }
+
+#[test]
+fn pinned_virtual_overscan_drops_the_32_row_floor_while_default_keeps_it() {
+    let make = |override_vp: Option<(f32, f32)>| {
+        let mut v = VirtualList { viewport: 192.0, indexed: true, ..Default::default() };
+        v.set_estimate(24.0);
+        v.set_keys((0..500).map(|i| format!("r{i}")).collect(), 0, None);
+        for i in 0..500 {
+            let h = [20.0, 24.0, 28.0][i % 3];
+            v.set_height(&format!("r{i}"), h);
+        }
+        v.set_overscan(override_vp);
+        v
+    };
+
+    // Unset overscan preserves the legacy 32-row floor at the pinned end.
+    let mut def = make(None);
+    def.select(0.0, true, None);
+    assert_eq!(def.range.len(), PINNED_ROWS);
+    assert_eq!(def.unfilled(0.0, true), 0);
+    def.range = 0..10;
+    assert_eq!(def.unfilled(0.0, true), PINNED_ROWS);
+
+    // Explicit (2.0, 1.75): viewport (192 pt) + 2.0 vp overscan (384 pt) = 576 pt = 24 rows.
+    let mut wide = make(clamp_virtual_overscan(2.0, 1.75));
+    wide.select(0.0, true, None);
+    assert_eq!(wide.range.len(), 24, "explicit (2.0, 1.75) pinned range: {:?}", wide.range);
+    assert_eq!(wide.unfilled(0.0, true), 0);
+    wide.range = 0..10;
+    assert_eq!(wide.unfilled(0.0, true), 24);
+
+    // Explicit (0.5, 0.25): viewport (192 pt) + 0.5 vp overscan (96 pt) = 288 pt = 12 rows.
+    let mut tight = make(clamp_virtual_overscan(0.5, 0.25));
+    tight.select(0.0, true, None);
+    assert_eq!(tight.range.len(), 12, "explicit (0.5, 0.25) pinned range: {:?}", tight.range);
+    assert_eq!(tight.unfilled(0.0, true), 0);
+    tight.range = 0..10;
+    assert_eq!(tight.unfilled(0.0, true), 12);
+
+    // Explicit (0.0, 0.0): viewport only (192 pt -> 8..=9 rows), never uncovered or oscillating.
+    let mut zero = make(clamp_virtual_overscan(0.0, 0.0));
+    zero.select(0.0, true, None);
+    assert!((8..=9).contains(&zero.range.len()), "explicit (0.0, 0.0) pinned range: {:?}", zero.range);
+    assert_eq!(zero.unfilled(0.0, true), 0);
+    assert!(!zero.viewport_uncovered(0.0, true));
+    assert!(!zero.needs_window(0.0, true));
+
+    // Small pinned list (< 32 visible rows) with gap and zero overscan where max_offset lands in a gap:
+    // 60 rows * 20 + 59 * 10 = 1790; viewport 205 -> max_offset 1585 in gap 52 [1580, 1590).
+    let mut vg = VirtualList { viewport: 205.0, indexed: true, ..Default::default() };
+    vg.set_estimate(20.0);
+    vg.set_gap(10.0);
+    vg.set_keys((0..60).map(|i| format!("r{i}")).collect(), 0, None);
+    vg.set_overscan(clamp_virtual_overscan(0.0, 0.0));
+    vg.select(0.0, true, None);
+    assert_eq!(vg.range, 53..60, "small pinned list with gap mounts 7 visible rows, not 32");
+    assert_eq!(vg.unfilled(0.0, true), 0);
+    assert!(!vg.viewport_uncovered(0.0, true));
+    assert!(!vg.needs_window(0.0, true));
+    vg.set_height("r55", 10.0);
+    assert!(vg.viewport_uncovered(0.0, true), "shrinking a row past the gap still reports uncovered");
+}

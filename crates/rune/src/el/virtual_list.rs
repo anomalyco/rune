@@ -213,7 +213,7 @@ const EAGER_EDGE: f32 = 0.5;
 /// Rows past it mount over the next frames, so a jump or a prepended page doesn't shape it all
 /// in one frame.
 const INDEXED_BUDGET: f32 = 0.5;
-/// The fewest rows a list pinned to its end keeps mounted above the end, whatever its overscan.
+/// The fewest rows a list pinned to its end keeps mounted above the end when `El::virtual_overscan` is unset.
 const PINNED_ROWS: usize = 32;
 
 /// Clamps `(overscan, edge)` for `El::virtual_overscan`: returns `None` when either argument is
@@ -591,6 +591,11 @@ impl VirtualList {
         self.overscan_override.map_or(if self.indexed { INDEXED_EDGE } else { EAGER_EDGE }, |(_, e)| e)
     }
 
+    #[inline]
+    pub(crate) fn pinned_rows(&self) -> usize {
+        if self.overscan_override.is_some() { 0 } else { PINNED_ROWS }
+    }
+
     pub fn set_height(&mut self, key: &str, height: f32) {
         let Some(i) = self.index_of(key) else { return };
         self.measured[i] = Some(height);
@@ -767,7 +772,10 @@ impl VirtualList {
         let disable = pinned || self.passed || self.no_anchor;
         self.anchor_offset = (!disable).then_some(offset);
         self.anchor = if disable { None } else { self.anchor_at(offset) };
-        if pinned { start = start.min(end.saturating_sub(PINNED_ROWS)); }
+        if pinned {
+            let floor = self.pinned_rows();
+            if floor > 0 { start = start.min(end.saturating_sub(floor)); }
+        }
         end = end.max(start);
         self.place(start..end);
     }
@@ -852,12 +860,13 @@ impl VirtualList {
     /// progress from one whose heights keep changing under it. Only the overscan's own rows
     /// count: after a jump the mounted window may lie wholly above or below it, and the rows
     /// between the two are wanted by neither. A pinned list wants the overscan at its end, and
-    /// at least [`PINNED_ROWS`] rows, as [`select`](Self::select) mounts them.
+    /// at least [`Self::pinned_rows`] rows, as [`select`](Self::select) mounts them.
     pub(crate) fn unfilled(&self, offset: f32, pinned: bool) -> usize {
         if self.keys.is_empty() { return 0; }
         let (start, end) = if pinned {
             let (start, end) = self.overscan(self.max_offset());
-            (start.min(end.saturating_sub(PINNED_ROWS)), end)
+            let floor = self.pinned_rows();
+            (if floor > 0 { start.min(end.saturating_sub(floor)) } else { start }, end)
         } else {
             self.overscan(offset.min(self.max_offset()))
         };
