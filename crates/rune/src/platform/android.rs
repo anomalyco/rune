@@ -5,6 +5,8 @@
 //! overlap, dark mode, back navigation, and API-level haptic dispatch are verified off-device too.
 
 #[cfg(target_os = "android")]
+mod a11y;
+#[cfg(target_os = "android")]
 pub(crate) mod bridge;
 #[cfg(target_os = "android")]
 mod document;
@@ -22,6 +24,8 @@ mod machine_tests;
 pub(crate) mod picker;
 #[cfg(test)]
 mod picker_tests;
+#[cfg(target_os = "android")]
+mod runner;
 pub(crate) mod touch;
 #[cfg(test)]
 mod touch_tests;

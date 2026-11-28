@@ -114,10 +114,10 @@ dbus = ["dep:async-channel", "dep:async-executor", "dep:async-io", "dep:futures-
 # are Apple-only dependencies.
 metal-backend = ["rune-gpu/metal-backend", "rune-media/metal-backend"]
 # Every window and overlay exposes its elements to the OS accessibility API through AccessKit:
-# UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux (README, "Accessibility").
-# Nothing is built until an assistive client asks. Off, the platform adapters aren't compiled;
-# `Runtime::accessibility_tree` and `--tree` still report the tree.
-accessibility = ["dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
+# UI Automation on Windows, NSAccessibility on macOS, AT-SPI on Linux, AccessibilityNodeProvider
+# on Android (README, "Accessibility"). Nothing is built until an assistive client asks. Off, the
+# platform adapters aren't compiled; `Runtime::accessibility_tree` and `--tree` still report the tree.
+accessibility = ["dep:accesskit_android", "dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
 # Use upstream `taffy::TaffyTree` instead of `rune_taffy::LayoutStore` for A/B benchmarks and parity checks.
 baseline-taffy = ["rune-taffy/baseline-taffy"]
 # Live GPU resource counters (`Device::get_internal_counters`) for upload tests and `upload_bench`.
@@ -232,6 +232,8 @@ windows-registry = "0.6"
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Credentials", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_DataExchange", "Win32_System_Memory"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# TalkBack / Android AccessibilityNodeProvider adapter over JNI.
+accesskit_android = { version = "0.9.1", optional = true }
 # Raw JNI and Android NDK bindings for `platform::android` (already in the dependency graph via `winit`).
 jni-sys = "0.3"
 ndk-sys = "0.6"
