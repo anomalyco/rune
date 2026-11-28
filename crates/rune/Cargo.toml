@@ -319,6 +319,9 @@ name = "extra_args"
 name = "add_font"
 
 [[test]]
+name = "android_main_forbid_unsafe"
+
+[[test]]
 name = "emoji_family"
 
 [[test]]

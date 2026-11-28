@@ -548,19 +548,22 @@ pub use winit::raw_window_handle;
 /// native methods with `RegisterNatives`, and registers `entry` to run when `RuneView` initializes.
 ///
 /// Expands to nothing on non-Android targets so the same source compiles on desktop, web and iOS.
+/// Safe to invoke from crates with `#![forbid(unsafe_code)]`.
 #[macro_export]
 macro_rules! android_main {
     ($entry:path) => {
         #[cfg(target_os = "android")]
-        #[allow(unsafe_code)]
-        #[unsafe(no_mangle)]
-        pub extern "system" fn JNI_OnLoad(
-            vm: *mut ::std::ffi::c_void,
-            _reserved: *mut ::std::ffi::c_void,
-        ) -> i32 {
-            // SAFETY: ART passes a valid `JavaVM*` to `JNI_OnLoad` when loading this library.
-            unsafe { $crate::__android::jni_on_load(vm, $entry) }
-        }
+        const _: () = {
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn JNI_OnLoad(
+                vm: *mut ::std::ffi::c_void,
+                _reserved: *mut ::std::ffi::c_void,
+            ) -> i32 {
+                let entry: fn() = $entry;
+                // SAFETY: ART passes a valid `JavaVM*` to `JNI_OnLoad` when loading this library.
+                unsafe { $crate::__android::jni_on_load(vm, entry) }
+            }
+        };
     };
 }
 

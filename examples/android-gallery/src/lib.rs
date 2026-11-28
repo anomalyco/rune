@@ -3,7 +3,7 @@
 //!
 //! Build an APK with `scripts/android-run.sh --build-only examples/android-gallery`.
 
-#![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 pub fn start() {
     kit_gallery::build_app().run();

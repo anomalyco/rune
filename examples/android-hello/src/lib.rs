@@ -3,7 +3,7 @@
 //!
 //! Build an APK with `scripts/android-run.sh --build-only`.
 
-#![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 use rune::tok::{self, motion, type_};
 use rune::{App, AppSpec, Cx, El, TextEdit, col, el, text, text_input};
