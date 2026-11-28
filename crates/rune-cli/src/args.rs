@@ -53,6 +53,7 @@ pub struct DevArgs {
     pub patch: Vec<String>,
     pub port: Option<u16>,
     pub mode: Option<DevMode>,
+    pub interactive: Option<bool>,
     pub jobs: Option<usize>,
     pub target_dir: Option<PathBuf>,
     pub app_args: Vec<String>,
@@ -206,6 +207,16 @@ fn parse_new(args: &[String]) -> Result<Command, CliError> {
     }))
 }
 
+fn parse_bool_flag(flag: &str, value: &str) -> Result<bool, CliError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(CliError::usage(format!(
+            "invalid {flag} '{other}'; expected true or false"
+        ))),
+    }
+}
+
 fn parse_dev(args: &[String]) -> Result<Command, CliError> {
     let mut opts = DevArgs {
         manifest_path: None,
@@ -215,6 +226,7 @@ fn parse_dev(args: &[String]) -> Result<Command, CliError> {
         patch: Vec::new(),
         port: None,
         mode: None,
+        interactive: None,
         jobs: None,
         target_dir: None,
         app_args: Vec::new(),
@@ -265,6 +277,24 @@ fn parse_dev(args: &[String]) -> Result<Command, CliError> {
             "--mode" => {
                 let v = value_or_next(args, &mut i, "--mode", inline)?;
                 opts.mode = Some(DevMode::parse(v)?);
+            }
+            "--interactive" => {
+                if let Some(v) = inline {
+                    opts.interactive = Some(parse_bool_flag("--interactive", v)?);
+                } else if let Some(next) = args.get(i + 1).map(String::as_str)
+                    && matches!(next, "true" | "false")
+                {
+                    i += 1;
+                    opts.interactive = Some(next == "true");
+                } else {
+                    opts.interactive = Some(true);
+                }
+            }
+            "--no-interactive" => {
+                if inline.is_some() {
+                    return Err(CliError::usage("--no-interactive does not take a value"));
+                }
+                opts.interactive = Some(false);
             }
             "-j" | "--jobs" => {
                 let v = value_or_next(args, &mut i, "--jobs", inline)?;
@@ -403,6 +433,8 @@ Options:
   --patch <glob>                Relative source globs eligible for live fn-body patching (repeatable)
   --port <port>                 Devserver port for dx hot patching (default: 18745)
   --mode <auto|hot|restart>     Dev loop mode (default: auto)
+  --interactive[=<bool>]        Enable or disable dx interactive TUI (default: auto on TTY)
+  --no-interactive              Disable dx interactive TUI (alias for --interactive=false)
   -j, --jobs <n>                Cargo build jobs (default: RUNE_DEV_JOBS / CARGO_BUILD_JOBS / 2)
   --target-dir <dir>            Override Cargo target directory (default: <workspace>/target)
   -h, --help                    Show this help message
@@ -414,7 +446,7 @@ Environment:
 
 Configuration:
   Defaults can be stored in `rune.toml` under `[dev]` or in `Cargo.toml` under
-  `[package.metadata.rune.dev]` (keys: patch, features, bin, package, port, mode).
+  `[package.metadata.rune.dev]` (keys: patch, features, bin, package, port, mode, interactive).
 ",
         Some("check") => "Verify Rune git/patch pins and run `cargo check`.
 

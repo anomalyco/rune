@@ -1,6 +1,7 @@
 //! Guarded live hot-patching loop powered by Dioxus CLI (`dx`) and the embedded AST guard.
 
 use std::ffi::{OsStr, OsString};
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 use std::thread;
@@ -143,8 +144,60 @@ pub fn classify_change(
     })
 }
 
-/// Constructs the exact `dx serve` command-line arguments for a guarded Rune hot-patch session.
+/// Returns `true` when both standard input and standard output are attached to a TTY.
+pub fn stdio_is_interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Resolves whether `dx serve` should run with `--interactive true` or `--interactive false`.
+///
+/// Explicit configuration (`--interactive`, `--no-interactive`, or `[dev] interactive`) always
+/// wins; otherwise interactive mode is enabled automatically when both stdin and stdout are TTYs.
+pub fn resolve_interactive(
+    explicit: Option<bool>,
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+) -> bool {
+    explicit.unwrap_or(stdin_is_tty && stdout_is_tty)
+}
+
+/// Formats the startup banner line for guarded hot reload, accurately reflecting whether `dx`'s
+/// interactive TUI (build progress list and keyboard shortcuts) is enabled.
+pub fn format_hot_banner(cfg: &ResolvedDevConfig, interactive: bool, is_tty: bool) -> String {
+    let interactive_status = if interactive {
+        "on"
+    } else if !is_tty && cfg.interactive.is_none() {
+        "off [non-TTY; dx TUI and shortcuts disabled]"
+    } else {
+        "off [dx TUI and shortcuts disabled]"
+    };
+    format!(
+        "rune dev: guarded hot reload for `{}` (port {}, interactive: {}, patch: {})",
+        cfg.package,
+        cfg.port,
+        interactive_status,
+        cfg.patch.join(", ")
+    )
+}
+
+/// Constructs the exact `dx serve` command-line arguments for a guarded Rune hot-patch session,
+/// enabling `dx`'s interactive TUI automatically when stdin and stdout are TTYs unless overridden
+/// via `cfg.interactive`.
 pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
+    build_dx_args_with_tty(
+        cfg,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    )
+}
+
+/// Testable variant of [`build_dx_args`] with explicit TTY flags for stdin and stdout.
+pub fn build_dx_args_with_tty(
+    cfg: &ResolvedDevConfig,
+    stdin_is_tty: bool,
+    stdout_is_tty: bool,
+) -> Vec<String> {
+    let interactive = resolve_interactive(cfg.interactive, stdin_is_tty, stdout_is_tty);
     let mut features = vec!["hot".to_string()];
     for f in &cfg.features {
         if f != "hot" && !features.contains(f) {
@@ -160,7 +213,7 @@ pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
         "--open".to_string(),
         "false".to_string(),
         "--interactive".to_string(),
-        "false".to_string(),
+        if interactive { "true" } else { "false" }.to_string(),
         "--addr".to_string(),
         "127.0.0.1".to_string(),
         "--port".to_string(),
@@ -258,11 +311,17 @@ pub fn run_hot_with_reloader<F>(
 where
     F: FnMut() -> Result<ResolvedDevConfig, CliError>,
 {
+    let initial_stdin_tty = std::io::stdin().is_terminal();
+    let initial_stdout_tty = std::io::stdout().is_terminal();
+    let initial_interactive =
+        resolve_interactive(cfg.interactive, initial_stdin_tty, initial_stdout_tty);
     println!(
-        "rune dev: guarded hot reload for `{}` (port {}, patch: {})",
-        cfg.package,
-        cfg.port,
-        cfg.patch.join(", ")
+        "{}",
+        format_hot_banner(
+            &cfg,
+            initial_interactive,
+            initial_stdin_tty && initial_stdout_tty,
+        )
     );
 
     let mut cache = FileCache::default();
@@ -310,7 +369,10 @@ where
         )?;
 
         let dx_cwd = join_posix(&mirror_dir, &layout.crate_key);
-        let dx_args = build_dx_args(&cfg);
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let stdout_is_tty = std::io::stdout().is_terminal();
+        let interactive = resolve_interactive(cfg.interactive, stdin_is_tty, stdout_is_tty);
+        let dx_args = build_dx_args_with_tty(&cfg, stdin_is_tty, stdout_is_tty);
 
         let mut cmd = Command::new(dx_path);
         cmd.args(&dx_args)
@@ -322,7 +384,12 @@ where
             .env("RUNE_DEV_GUARDED", "1")
             .env("RUNE_HOT", "1");
 
-        let mut child = ChildGuard::spawn(&mut cmd).map_err(|err| {
+        let spawn_result = if interactive {
+            ChildGuard::spawn_interactive(&mut cmd)
+        } else {
+            ChildGuard::spawn(&mut cmd)
+        };
+        let mut child = spawn_result.map_err(|err| {
             CliError::new(format!(
                 "failed to start {}: {err}",
                 dx_path.display()
@@ -377,7 +444,11 @@ where
                         }
                     }
                     baseline = current;
-                    println!("rune dev: patched {}", files.join(", "));
+                    // When dx's interactive TUI owns the alternate screen, dx displays the live
+                    // hot-patch result itself; writing directly to stdout would corrupt the TUI.
+                    if !interactive {
+                        println!("rune dev: patched {}", files.join(", "));
+                    }
                 }
                 ChangeDecision::WaitForSyntax { file, error } => {
                     let msg = format!("{file}: {error}");
@@ -389,9 +460,11 @@ where
                 ChangeDecision::Restart { reason } => {
                     let changed_keys = diff_snapshots(&baseline, &current).all_changed();
                     clear_fingerprints_next = is_manifest_change(&changed_keys);
+                    // Stop dx first so its TUI exits the alternate screen and restores terminal
+                    // state before we print the restart reason on the main screen.
+                    child.stop();
                     println!("rune dev: restart needed: {reason}");
                     println!("rune dev: rebuilding and relaunching...");
-                    child.stop();
                     if let Err(err) = sync_generated_lockfile(
                         &mirror_dir,
                         &layout,

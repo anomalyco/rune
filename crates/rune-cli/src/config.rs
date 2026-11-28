@@ -27,6 +27,7 @@ pub struct FileDevConfig {
     pub package: Option<String>,
     pub port: Option<u16>,
     pub mode: Option<DevMode>,
+    pub interactive: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,7 @@ pub struct ResolvedDevConfig {
     pub patch: Vec<String>,
     pub port: u16,
     pub mode: DevMode,
+    pub interactive: Option<bool>,
     pub jobs: usize,
     pub target_dir: Option<PathBuf>,
     pub app_args: Vec<String>,
@@ -273,6 +275,9 @@ pub fn resolve_dev_config(args: &DevArgs, cwd: &Path) -> Result<ResolvedDevConfi
         if file_cfg.mode.is_some() {
             merged.mode = file_cfg.mode;
         }
+        if file_cfg.interactive.is_some() {
+            merged.interactive = file_cfg.interactive;
+        }
         Some(path)
     } else {
         None
@@ -300,6 +305,7 @@ pub fn resolve_dev_config(args: &DevArgs, cwd: &Path) -> Result<ResolvedDevConfi
 
     let port = args.port.or(merged.port).unwrap_or(DEFAULT_PORT);
     let mode = args.mode.or(merged.mode).unwrap_or(DevMode::Auto);
+    let interactive = args.interactive.or(merged.interactive);
     let jobs = args.jobs.unwrap_or_else(default_jobs);
     let target_dir = args
         .target_dir
@@ -319,6 +325,7 @@ pub fn resolve_dev_config(args: &DevArgs, cwd: &Path) -> Result<ResolvedDevConfi
         patch,
         port,
         mode,
+        interactive,
         jobs,
         target_dir,
         app_args: args.app_args.clone(),
@@ -401,6 +408,15 @@ fn parse_dev_table(table: &dyn TableLike, path: &Path) -> Result<FileDevConfig, 
             CliError::new(format!("{}: `mode` must be a string", path.display()))
         })?;
         cfg.mode = Some(DevMode::parse(s)?);
+    }
+    if let Some(item) = table.get("interactive") {
+        let b = item.as_bool().ok_or_else(|| {
+            CliError::new(format!(
+                "{}: `interactive` must be a boolean",
+                path.display()
+            ))
+        })?;
+        cfg.interactive = Some(b);
     }
 
     Ok(cfg)

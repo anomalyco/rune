@@ -14,15 +14,38 @@ const ANSI_TERMINAL_RESTORE: &str = "\x1b[?1049l\x1b[?25h\x1b[0m";
 
 /// Owns a spawned child process in its own process group and guarantees it (and its process tree)
 /// is stopped gracefully before escalating to a forced kill on drop or explicit teardown.
+///
+/// When spawned via [`Self::spawn_interactive`], also snapshots the host terminal mode (Windows
+/// console input/output modes or Unix `termios` + controlling-terminal foreground process group)
+/// before launch and unconditionally restores it when the child exits or is stopped.
 pub struct ChildGuard {
     child: Option<Child>,
+    terminal: Option<TerminalState>,
 }
 
 impl ChildGuard {
     pub fn spawn(cmd: &mut Command) -> io::Result<Self> {
         isolate_process_group(cmd);
         let child = cmd.spawn()?;
-        Ok(Self { child: Some(child) })
+        Ok(Self {
+            child: Some(child),
+            terminal: None,
+        })
+    }
+
+    /// Spawns a child that may own the interactive terminal (raw mode, alternate screen, key
+    /// input). Snapshots terminal state beforehand, hands off the Unix foreground process group
+    /// when this process owns the controlling TTY so the child does not stall on `SIGTTIN` /
+    /// `SIGTTOU`, and restores everything on exit or teardown.
+    pub fn spawn_interactive(cmd: &mut Command) -> io::Result<Self> {
+        let terminal = TerminalState::capture();
+        isolate_process_group(cmd);
+        let child = cmd.spawn()?;
+        terminal.hand_off_foreground(child.id());
+        Ok(Self {
+            child: Some(child),
+            terminal: Some(terminal),
+        })
     }
 
     pub fn id(&self) -> Option<u32> {
@@ -33,8 +56,14 @@ impl ChildGuard {
         match self.child.as_mut() {
             Some(c) => {
                 let status = c.try_wait()?;
-                if status.is_some() {
+                if let Some(exit) = status {
                     self.child = None;
+                    if let Some(mut term) = self.terminal.take() {
+                        term.restore();
+                        if !exit.success() {
+                            restore_terminal_if_tty();
+                        }
+                    }
                 }
                 Ok(status)
             }
@@ -47,15 +76,23 @@ impl ChildGuard {
     }
 
     pub fn stop_with_timeout(&mut self, grace: Duration) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+        let mut stopped_live_child = false;
+        if let Some(mut child) = self.child.take()
+            && child.try_wait().ok().flatten().is_none()
+        {
+            terminate_tree(&mut child, grace);
+            child.wait().ok();
+            stopped_live_child = true;
         }
-        terminate_tree(&mut child, grace);
-        child.wait().ok();
-        restore_terminal_if_tty();
+        let had_terminal = if let Some(mut term) = self.terminal.take() {
+            term.restore();
+            true
+        } else {
+            false
+        };
+        if stopped_live_child || had_terminal {
+            restore_terminal_if_tty();
+        }
     }
 }
 
@@ -197,4 +234,179 @@ fn send_unix_group_signal(pid: u32, signal: libc::c_int) {
 #[cfg(not(any(windows, unix)))]
 fn terminate_tree(child: &mut Child, _grace: Duration) {
     child.kill().ok();
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct TerminalState {
+    stdin_mode: Option<u32>,
+    stdout_mode: Option<u32>,
+}
+
+#[cfg(windows)]
+impl TerminalState {
+    fn capture() -> Self {
+        Self {
+            stdin_mode: win_console::get_mode(win_console::STD_INPUT_HANDLE),
+            stdout_mode: win_console::get_mode(win_console::STD_OUTPUT_HANDLE),
+        }
+    }
+
+    fn hand_off_foreground(&self, _child_pid: u32) {}
+
+    fn restore(&mut self) {
+        if let Some(mode) = self.stdin_mode.take() {
+            win_console::set_mode(win_console::STD_INPUT_HANDLE, mode);
+        }
+        if let Some(mode) = self.stdout_mode.take() {
+            win_console::set_mode(win_console::STD_OUTPUT_HANDLE, mode);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod win_console {
+    use core::ffi::c_void;
+
+    type Handle = *mut c_void;
+
+    pub const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
+    pub const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
+    const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
+
+    unsafe extern "system" {
+        fn GetStdHandle(n_std_handle: u32) -> Handle;
+        fn GetConsoleMode(h_console_handle: Handle, lp_mode: *mut u32) -> i32;
+        fn SetConsoleMode(h_console_handle: Handle, dw_mode: u32) -> i32;
+    }
+
+    pub fn get_mode(std_handle: u32) -> Option<u32> {
+        // SAFETY: `GetStdHandle` takes a standard handle constant; we validate the returned
+        // handle against null and `INVALID_HANDLE_VALUE` before passing it and a stack
+        // pointer to `GetConsoleMode`.
+        unsafe {
+            let handle = GetStdHandle(std_handle);
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut mode = 0u32;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                Some(mode)
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn set_mode(std_handle: u32, mode: u32) {
+        // SAFETY: `GetStdHandle` takes a standard handle constant; we validate the handle
+        // before calling `SetConsoleMode` with a mode previously obtained from
+        // `GetConsoleMode`.
+        unsafe {
+            let handle = GetStdHandle(std_handle);
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                return;
+            }
+            let _ = SetConsoleMode(handle, mode);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct TerminalState {
+    termios: Option<libc::termios>,
+    parent_pgid: Option<libc::pid_t>,
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+impl TerminalState {
+    fn capture() -> Self {
+        // SAFETY: `isatty`, `tcgetattr`, `getpgrp`, and `tcgetpgrp` operate on `STDIN_FILENO`
+        // and a stack-allocated `MaybeUninit<libc::termios>` initialized only when
+        // `tcgetattr` returns 0.
+        unsafe {
+            if libc::isatty(libc::STDIN_FILENO) != 1 {
+                return Self::default();
+            }
+            let mut slot = core::mem::MaybeUninit::<libc::termios>::uninit();
+            let termios = if libc::tcgetattr(libc::STDIN_FILENO, slot.as_mut_ptr()) == 0 {
+                Some(slot.assume_init())
+            } else {
+                None
+            };
+            let our_pgid = libc::getpgrp();
+            let fg_pgid = libc::tcgetpgrp(libc::STDIN_FILENO);
+            let parent_pgid = (our_pgid > 0 && fg_pgid == our_pgid).then_some(our_pgid);
+            Self {
+                termios,
+                parent_pgid,
+            }
+        }
+    }
+
+    fn hand_off_foreground(&self, child_pid: u32) {
+        if self.parent_pgid.is_none() {
+            return;
+        }
+        let Ok(child_pgid) = libc::pid_t::try_from(child_pid) else {
+            return;
+        };
+        if child_pgid <= 0 {
+            return;
+        }
+        set_foreground_pgrp(libc::STDIN_FILENO, child_pgid);
+        // Resume the child group in case it touched the controlling terminal before we
+        // finished handing over the foreground process group and stopped on SIGTTIN/SIGTTOU.
+        send_unix_group_signal(child_pid, libc::SIGCONT);
+    }
+
+    fn restore(&mut self) {
+        if let Some(parent_pgid) = self.parent_pgid.take() {
+            set_foreground_pgrp(libc::STDIN_FILENO, parent_pgid);
+        }
+        if let Some(termios) = self.termios.take() {
+            // SAFETY: `termios` was populated by `tcgetattr` on `STDIN_FILENO`; temporarily
+            // ignoring `SIGTTOU` prevents stopping if the foreground group changed.
+            unsafe {
+                let prev = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+                let _ = libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &termios);
+                if prev != libc::SIG_ERR {
+                    let _ = libc::signal(libc::SIGTTOU, prev);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn set_foreground_pgrp(fd: libc::c_int, pgid: libc::pid_t) {
+    // SAFETY: Temporarily setting `SIGTTOU` to `SIG_IGN` prevents the kernel from stopping
+    // this process when calling `tcsetpgrp` from a background process group, and the
+    // previous signal disposition is restored immediately afterward.
+    unsafe {
+        let prev = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+        let _ = libc::tcsetpgrp(fd, pgid);
+        if prev != libc::SIG_ERR {
+            let _ = libc::signal(libc::SIGTTOU, prev);
+        }
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+#[derive(Default)]
+struct TerminalState;
+
+#[cfg(not(any(windows, unix)))]
+impl TerminalState {
+    fn capture() -> Self {
+        Self
+    }
+
+    fn hand_off_foreground(&self, _child_pid: u32) {}
+
+    fn restore(&mut self) {}
 }
