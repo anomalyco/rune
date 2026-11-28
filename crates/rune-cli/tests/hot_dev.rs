@@ -4,12 +4,15 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use rune_cli::args::DevArgs;
+use rune_cli::args::{Command as CliCommand, DevArgs, DevMode, parse};
 use rune_cli::config::resolve_dev_config;
 use rune_cli::dev::fingerprint::{
     clear_manifest_fingerprints, is_manifest_change, should_bust_crate,
 };
-use rune_cli::dev::hot::{build_dx_args, shell_join, shell_quote_arg};
+use rune_cli::dev::hot::{
+    build_dx_args, build_dx_args_with_tty, format_hot_banner, resolve_interactive, shell_join,
+    shell_quote_arg,
+};
 use rune_cli::dev::mirror::{
     default_target_dir_for, discover_layout, sync_generated_lockfile, sync_mirror,
 };
@@ -128,6 +131,7 @@ hot = []
             patch: Vec::new(),
             port: None,
             mode: None,
+            interactive: None,
             jobs: Some(2),
             target_dir: None,
             app_args: Vec::new(),
@@ -487,6 +491,188 @@ fn doctor_honors_explicit_rune_dx_and_rune_dx_unpinned_end_to_end() {
         stdout_deno.contains("expected dioxus-cli 0.7.10"),
         "expected Deno dx to be rejected even via RUNE_DX; stdout:\n{stdout_deno}"
     );
+}
+
+fn interactive_flag_value(dx_args: &[String]) -> Option<&str> {
+    dx_args
+        .windows(2)
+        .find(|w| w[0] == "--interactive")
+        .map(|w| w[1].as_str())
+}
+
+#[test]
+fn dev_interactive_auto_detects_tty_honors_overrides_and_formats_accurate_banner() {
+    let svec = |items: &[&str]| items.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+
+    // CLI flag parsing covers bare --interactive, explicit true/false (inline & space),
+    // --no-interactive, and invalid values.
+    match parse(&svec(&["rune", "dev", "--interactive", "--mode", "hot"])).unwrap() {
+        CliCommand::Dev(d) => {
+            assert_eq!(d.interactive, Some(true));
+            assert_eq!(d.mode, Some(DevMode::Hot));
+        }
+        other => panic!("expected Dev, got {other:?}"),
+    }
+    match parse(&svec(&["rune", "dev", "--interactive=false"])).unwrap() {
+        CliCommand::Dev(d) => assert_eq!(d.interactive, Some(false)),
+        other => panic!("expected Dev, got {other:?}"),
+    }
+    match parse(&svec(&["rune", "dev", "--interactive", "false"])).unwrap() {
+        CliCommand::Dev(d) => assert_eq!(d.interactive, Some(false)),
+        other => panic!("expected Dev, got {other:?}"),
+    }
+    match parse(&svec(&["rune", "dev", "--interactive", "true"])).unwrap() {
+        CliCommand::Dev(d) => assert_eq!(d.interactive, Some(true)),
+        other => panic!("expected Dev, got {other:?}"),
+    }
+    match parse(&svec(&["rune", "dev", "--no-interactive"])).unwrap() {
+        CliCommand::Dev(d) => assert_eq!(d.interactive, Some(false)),
+        other => panic!("expected Dev, got {other:?}"),
+    }
+    assert!(parse(&svec(&["rune", "dev", "--interactive=maybe"])).is_err());
+    assert!(parse(&svec(&["rune", "dev", "--no-interactive=true"])).is_err());
+
+    // Pure resolution logic: both stdin and stdout must be TTYs for auto-on.
+    assert!(resolve_interactive(None, true, true));
+    assert!(!resolve_interactive(None, false, true));
+    assert!(!resolve_interactive(None, true, false));
+    assert!(!resolve_interactive(None, false, false));
+    assert!(resolve_interactive(Some(true), false, false));
+    assert!(!resolve_interactive(Some(false), true, true));
+
+    // Config precedence: auto default < Cargo.toml metadata < rune.toml < CLI flag.
+    let tmp = TempDir::new("interactive-cfg");
+    let app = tmp.path();
+    fs::create_dir_all(app.join("src")).unwrap();
+    fs::write(app.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        app.join("Cargo.toml"),
+        "[package]\nname = \"tty-probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nhot = []\n",
+    )
+    .unwrap();
+
+    let base_args = DevArgs {
+        manifest_path: None,
+        package: None,
+        bin: None,
+        features: Vec::new(),
+        patch: Vec::new(),
+        port: None,
+        mode: None,
+        interactive: None,
+        jobs: Some(2),
+        target_dir: None,
+        app_args: Vec::new(),
+    };
+
+    // Default (None): TTY -> --interactive true, non-TTY -> --interactive false.
+    let cfg_default = resolve_dev_config(&base_args, app).unwrap();
+    assert_eq!(cfg_default.interactive, None);
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_default, true, true)), Some("true"));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_default, false, true)), Some("false"));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_default, true, false)), Some("false"));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_default, false, false)), Some("false"));
+
+    // Banner accurately describes active vs disabled interactive TUI/shortcuts.
+    let banner_tty = format_hot_banner(&cfg_default, true, true);
+    assert!(banner_tty.contains("interactive: on"), "unexpected banner: {banner_tty}");
+    let banner_non_tty = format_hot_banner(&cfg_default, false, false);
+    assert!(
+        banner_non_tty.contains("interactive: off [non-TTY; dx TUI and shortcuts disabled]"),
+        "unexpected non-TTY banner: {banner_non_tty}"
+    );
+
+    // Cargo.toml metadata sets interactive = false.
+    fs::write(
+        app.join("Cargo.toml"),
+        "[package]\nname = \"tty-probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nhot = []\n\n[package.metadata.rune.dev]\ninteractive = false\n",
+    )
+    .unwrap();
+    let cfg_meta = resolve_dev_config(&base_args, app).unwrap();
+    assert_eq!(cfg_meta.interactive, Some(false));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_meta, true, true)), Some("false"));
+    let banner_explicit_off = format_hot_banner(&cfg_meta, false, true);
+    assert!(
+        banner_explicit_off.contains("interactive: off [dx TUI and shortcuts disabled]"),
+        "unexpected explicit-off banner: {banner_explicit_off}"
+    );
+
+    // rune.toml overrides Cargo.toml metadata.
+    fs::write(app.join("rune.toml"), "[dev]\ninteractive = true\n").unwrap();
+    let cfg_toml = resolve_dev_config(&base_args, app).unwrap();
+    assert_eq!(cfg_toml.interactive, Some(true));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_toml, false, false)), Some("true"));
+
+    // CLI --no-interactive overrides rune.toml.
+    let cli_off = DevArgs {
+        interactive: Some(false),
+        ..base_args.clone()
+    };
+    let cfg_cli = resolve_dev_config(&cli_off, app).unwrap();
+    assert_eq!(cfg_cli.interactive, Some(false));
+    assert_eq!(interactive_flag_value(&build_dx_args_with_tty(&cfg_cli, true, true)), Some("false"));
+
+    // Non-boolean interactive value in rune.toml is rejected cleanly.
+    fs::write(app.join("rune.toml"), "[dev]\ninteractive = \"yes\"\n").unwrap();
+    let err = resolve_dev_config(&base_args, app).unwrap_err();
+    assert!(
+        err.message.contains("`interactive` must be a boolean"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn child_guard_spawn_interactive_stops_and_reaps_cleanly() {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("ping");
+        c.args(["-n", "30", "127.0.0.1"]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = Command::new("sleep");
+        c.arg("30");
+        c
+    };
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut guard = ChildGuard::spawn_interactive(&mut cmd).expect("spawn interactive child");
+    assert!(guard.id().is_some());
+    assert!(guard.try_wait().unwrap().is_none());
+
+    guard.stop_with_timeout(Duration::from_millis(600));
+    assert!(guard.id().is_none());
+    assert!(guard.try_wait().unwrap().is_none());
+
+    // Also verify natural exit via try_wait() restores and clears child state cleanly.
+    #[cfg(windows)]
+    let mut quick = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "exit", "0"]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut quick = Command::new("true");
+    quick
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut quick_guard = ChildGuard::spawn_interactive(&mut quick).expect("spawn quick child");
+    let mut exited = None;
+    for _ in 0..100 {
+        if let Some(status) = quick_guard.try_wait().unwrap() {
+            exited = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(exited.expect("quick child should exit").success());
+    assert!(quick_guard.id().is_none());
 }
 
 fn strip_verbatim(path: PathBuf) -> PathBuf {

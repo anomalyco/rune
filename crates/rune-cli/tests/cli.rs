@@ -335,6 +335,7 @@ port = 18001
         patch: Vec::new(),
         port: None,
         mode: None,
+        interactive: None,
         jobs: Some(2),
         target_dir: None,
         app_args: Vec::new(),
