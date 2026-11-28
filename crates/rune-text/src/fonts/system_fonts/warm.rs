@@ -41,8 +41,24 @@ impl<T: Send + 'static> WarmSlot<T> {
     /// Returns immediately without blocking the calling thread. Calling again after warm-up has
     /// started (or once the value is already initialized) does nothing.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn prewarm(&'static self, thread_name: &str, enabled: fn() -> bool, init: fn() -> T) {
-        if !enabled() || self.value.get().is_some() {
+        self.prewarm_and_then(thread_name, enabled, init, || {});
+    }
+
+    /// Like [`Self::prewarm`], running `after` on the same background worker immediately after the
+    /// shared value is initialized (so common follow-up queries warm without spawning a second
+    /// thread). Still runs when the value was already initialized lazily on another thread if
+    /// `prewarm_and_then` has not yet run.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn prewarm_and_then(
+        &'static self,
+        thread_name: &str,
+        enabled: fn() -> bool,
+        init: fn() -> T,
+        after: fn(),
+    ) {
+        if !enabled() {
             return;
         }
         if self.started.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
@@ -66,6 +82,9 @@ impl<T: Send + 'static> WarmSlot<T> {
                     return;
                 }
                 let _ = self.value.get_or_init(|| Mutex::new(init()));
+                if enabled() {
+                    after();
+                }
                 reset.1 = false;
             });
         if spawned.is_err() {

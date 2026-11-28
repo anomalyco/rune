@@ -35,6 +35,16 @@ fn make() -> Option<DirectWrite> {
 /// DirectWrite reads from Windows' system font cache service and needs no eager build.
 pub(super) fn prewarm() {}
 
+/// Non-blocking cache-only lookup (DirectWrite resolves on demand).
+pub(super) fn try_cached_family_files(names: &[&str]) -> Option<Vec<PathBuf>> {
+    names.is_empty().then(Vec::new)
+}
+
+/// Non-blocking cache-only lookup (DirectWrite resolves on demand).
+pub(super) fn try_cached_fallback_family_files(chars: &[char], _: Option<&str>) -> Option<Vec<PathBuf>> {
+    chars.is_empty().then(Vec::new)
+}
+
 /// The files of the installed families `names` (any of their names, case aside), in order, each
 /// file once. Nothing is opened: the paths come from the font cache.
 pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
@@ -234,9 +244,12 @@ unsafe fn path_of(face: &IDWriteFontFaceReference) -> Option<PathBuf> {
     }
 }
 
-/// `locale` NUL-terminated, or the user's locale.
+/// `locale` NUL-terminated, or the user's locale. Bare `"zh"` maps to `"zh-CN"` so
+/// DirectWrite's built-in fallback table picks Simplified Chinese (Microsoft YaHei) rather than
+/// falling through to the default CJK face (Yu Gothic).
 fn locale_name(locale: Option<&str>) -> Vec<u16> {
     if let Some(tag) = locale {
+        let tag = if tag.eq_ignore_ascii_case("zh") { "zh-CN" } else { tag };
         return tag.encode_utf16().chain([0]).collect();
     }
     let mut buf = [0u16; 85];

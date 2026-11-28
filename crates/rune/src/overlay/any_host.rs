@@ -106,6 +106,7 @@ impl OverlayCore {
         {
             let rt = app.rt_mut();
             rt.set_live_waker(wake.clone());
+            rt.enable_async_system_fallbacks();
             rt.host.open_urls_natively = true;
             rt.frame.set_record_events(false);
         }

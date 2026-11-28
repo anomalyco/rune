@@ -64,10 +64,20 @@ impl RuntimeCore {
     /// not reused, while the presented tree keeps its `text_layout`s intact until the commit
     /// replaces them so pre-commit reads (`Tx::read_elements`, input, a11y, flights) stay
     /// consistent. True when the next frame must build.
+    /// Enables non-blocking background system fallback font loading for this live runtime,
+    /// waking it through its live wake lane when uncached fallback faces arrive. Headless
+    /// runtimes, snapshot captures, and tests never call this so layout stays synchronous and
+    /// deterministic.
+    pub(crate) fn enable_async_system_fallbacks(&mut self) {
+        let wake = self.frame.live.waker().clone();
+        self.text.set_async_fallback_waker(Some(std::sync::Arc::new(move || wake.notify())));
+    }
+
     pub(crate) fn follow_font_families(&mut self) -> bool {
         let faces = self.text.follow_full_faces();
         let chosen = self.text.follow_chosen();
-        if !(faces || chosen) {
+        let fallbacks = self.text.follow_async_fallbacks();
+        if !(faces || chosen || fallbacks) {
             return false;
         }
         self.commit.clear_memo();
@@ -77,3 +87,7 @@ impl RuntimeCore {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "font_families_tests.rs"]
+mod tests;

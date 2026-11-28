@@ -478,6 +478,9 @@ impl RuntimeCore {
         for sub in self.frame.live_subscriptions.values() { sub.active.store(false, Ordering::Release); }
         self.frame.live_subscriptions.clear();
         self.frame.live.replace_waker(waker);
+        if self.text.async_fallbacks_enabled() {
+            self.enable_async_system_fallbacks();
+        }
         self.subscribe_live();
     }
 

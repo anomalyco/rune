@@ -600,7 +600,7 @@ impl RuntimeCore {
         // any publication after the take still wakes the next frame. With `has_pixel_aspect`,
         // retain the wake so a picture whose size changed after `pixel_aspect_changed` still gets
         // next frame's layout.
-        if !self.tree.has_pixel_aspect { live_woke |= self.take_live_wake(); }
+        if !self.tree.has_pixel_aspect && !self.text.async_fallbacks_ready() { live_woke |= self.take_live_wake(); }
         let live_pending = live_woke || self.live_pending();
         let live_animating = self.latch_live(live_pending);
         if let Some(trace) = tx.trace.take() {

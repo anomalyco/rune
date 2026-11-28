@@ -531,11 +531,15 @@ impl Host {
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
             rt.frame.enable_trace_channels(args.trace.is_some());
             rt.set_live_waker(Arc::new(move || { live_proxy.send_event(WakeEvent::Live(slot)).ok(); }));
+            let interactive = args.script.is_none() && args.window_script.is_none() && args.trace.is_none() && args.frames.is_none();
+            if interactive {
+                rt.enable_async_system_fallbacks();
+            }
             rt.set_os_drag(crate::drag_out::supported(wayland));
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
             rt.wall_start = Some(crate::time::now());
-            rt.host.open_urls_natively = args.script.is_none() && args.window_script.is_none() && args.trace.is_none() && args.frames.is_none();
+            rt.host.open_urls_natively = interactive;
             rt.frame.set_record_events(false);
             rt.host.surface_stats = Some(meter.shared());
             rt.host.represented_file.seed(macos_window.represented_file.clone());

@@ -276,7 +276,9 @@ impl Host {
                 }
             }
             WakeEvent::Live(_) => {
-                if self.app.rt().live_pending() && let Some(w) = self.win.as_ref().filter(|_| self.life.uncovered()) {
+                if (self.app.rt().live_pending() || self.app.rt().text.async_fallbacks_ready())
+                    && let Some(w) = self.win.as_ref().filter(|_| self.life.uncovered())
+                {
                     w.request_redraw();
                 }
             }
