@@ -2,11 +2,50 @@
 //! pay zero cost before their first frame.
 
 use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static CACHED: OnceLock<Vec<String>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+static LANG_SETTING_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// Lazily queried, process-cached platform preferred languages (most preferred first).
 pub(crate) fn cached() -> &'static [String] {
-    static CACHED: OnceLock<Vec<String>> = OnceLock::new();
     CACHED.get_or_init(platform).as_slice()
+}
+
+/// Whether the process-wide lazy language cache has already been populated.
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn is_cached() -> bool {
+    CACHED.get().is_some()
+}
+
+/// Queries the platform preferred languages directly (used when Windows broadcasts a
+/// `WM_SETTINGCHANGE` `"Intl"` update).
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn current() -> Vec<String> {
+    platform()
+}
+
+/// Whether a `WM_SETTINGCHANGE` area string (`lParam`) announces a Windows locale/language change.
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn is_locale_setting_change_area(area: Option<&str>) -> bool {
+    matches!(area, Some(s) if s.eq_ignore_ascii_case("intl"))
+}
+
+/// Bumps the Windows locale-change generation when `WM_SETTINGCHANGE` (`"Intl"`) arrives.
+#[cfg(target_os = "windows")]
+#[inline]
+pub(crate) fn notify_setting_change() {
+    LANG_SETTING_GEN.fetch_add(1, Ordering::Release);
+}
+
+/// Current Windows `WM_SETTINGCHANGE` (`"Intl"`) generation.
+#[cfg(target_os = "windows")]
+#[inline]
+pub(crate) fn setting_generation() -> u64 {
+    LANG_SETTING_GEN.load(Ordering::Acquire)
 }
 
 /// Trims whitespace, drops empty entries, and removes duplicates while keeping preference order.
@@ -30,6 +69,19 @@ fn push_tag(out: &mut Vec<String>, raw: &str) {
     out.push(tag.to_owned());
 }
 
+/// Parses a Windows double-NUL-terminated (`ZZ` / `MULTI_SZ`) UTF-16 language list, stopping at
+/// the first empty segment (the double-NUL sentinel), trimming whitespace, and deduplicating while
+/// preserving preference order.
+#[cfg(any(test, target_os = "windows"))]
+pub(crate) fn parse_wide_multi_sz(units: &[u16]) -> Vec<String> {
+    normalize(
+        units
+            .split(|&unit| unit == 0)
+            .take_while(|segment| !segment.is_empty())
+            .map(String::from_utf16_lossy),
+    )
+}
+
 /// The languages POSIX locale variables name, read through `var`: `LANGUAGE`'s colon list, then
 /// `LC_ALL`, `LC_MESSAGES` and `LANG`, each turned from `de_AT.UTF-8@euro` into `de-AT`, without
 /// `C`, `POSIX` and repeats.
@@ -49,8 +101,17 @@ pub(crate) fn posix_languages(var: impl Fn(&str) -> Option<String>) -> Vec<Strin
 }
 
 #[cfg(target_os = "windows")]
+fn windows_globalization_languages() -> Option<Vec<String>> {
+    use windows::System::UserProfile::GlobalizationPreferences;
+
+    let list = GlobalizationPreferences::Languages().ok()?;
+    let langs = normalize(list.into_iter().map(|tag| tag.to_string_lossy()));
+    (!langs.is_empty()).then_some(langs)
+}
+
+#[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-fn platform() -> Vec<String> {
+fn windows_ui_languages() -> Vec<String> {
     const MUI_LANGUAGE_NAME: u32 = 0x8;
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -75,7 +136,13 @@ fn platform() -> Vec<String> {
     if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, buffer.as_mut_ptr(), &mut len) } == 0 {
         return Vec::new();
     }
-    normalize(buffer.split(|&unit| unit == 0).filter(|name| !name.is_empty()).map(String::from_utf16_lossy))
+    let written = usize::min(len as usize, buffer.len());
+    parse_wide_multi_sz(&buffer[..written])
+}
+
+#[cfg(target_os = "windows")]
+fn platform() -> Vec<String> {
+    windows_globalization_languages().unwrap_or_else(windows_ui_languages)
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -155,8 +155,29 @@ impl window_requests::HostState {
     }
 
     pub(super) fn set_languages(&mut self, languages: Vec<String>) -> bool {
+        self.system_languages_override = true;
         let normalized = crate::platform::languages::normalize(languages);
         if self.system_languages.as_deref() == Some(normalized.as_slice()) {
+            return false;
+        }
+        self.system_languages = Some(Rc::from(normalized));
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
+    /// Updates OS-derived languages without marking an explicit override, comparing against the
+    /// effective list (including the lazy platform cache) so unchanged lists keep the runtime idle.
+    #[cfg(any(test, target_os = "windows"))]
+    pub(super) fn set_os_languages(&mut self, languages: Vec<String>) -> bool {
+        if self.system_languages_override {
+            return false;
+        }
+        let normalized = crate::platform::languages::normalize(languages);
+        let same = match &self.system_languages {
+            Some(prev) => prev.as_ref() == normalized.as_slice(),
+            None => crate::platform::languages::cached() == normalized.as_slice(),
+        };
+        if same {
             return false;
         }
         self.system_languages = Some(Rc::from(normalized));
@@ -454,6 +475,35 @@ impl RuntimeCore {
     /// the view and its memos. Returns whether the normalized language list changed.
     pub fn set_languages(&mut self, languages: Vec<String>) -> bool {
         let changed = self.host.set_languages(languages);
+        if changed { self.commit.dirty = true; }
+        changed
+    }
+
+    /// Re-samples Windows preferred languages only when `WM_SETTINGCHANGE` (`"Intl"`) bumped the
+    /// generation and the app has already read (or previously synced) OS languages without an
+    /// explicit [`Self::set_languages`] override.
+    #[cfg(target_os = "windows")]
+    #[inline]
+    pub(crate) fn sync_windows_languages_if_changed(&mut self) -> bool {
+        let current_gen = crate::platform::languages::setting_generation();
+        if current_gen == self.host.languages_setting_gen {
+            return false;
+        }
+        self.host.languages_setting_gen = current_gen;
+        if self.host.system_languages_override
+            || (self.host.system_languages.is_none() && !crate::platform::languages::is_cached())
+        {
+            return false;
+        }
+        self.sync_os_languages_with(crate::platform::languages::current)
+    }
+
+    #[cfg(any(test, target_os = "windows"))]
+    pub(crate) fn sync_os_languages_with(&mut self, read: impl FnOnce() -> Vec<String>) -> bool {
+        if self.host.system_languages_override {
+            return false;
+        }
+        let changed = self.host.set_os_languages(read());
         if changed { self.commit.dirty = true; }
         changed
     }

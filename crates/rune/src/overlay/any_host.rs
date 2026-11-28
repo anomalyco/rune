@@ -423,7 +423,11 @@ impl AnyHost for OverlayHost {
                 core.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
                 app.rt_mut().set_system_text_scale(crate::platform::text_scale::cached());
                 #[cfg(target_os = "windows")]
-                app.rt_mut().sync_windows_tablet_mode_if_changed();
+                {
+                    let rt = app.rt_mut();
+                    rt.sync_windows_tablet_mode_if_changed();
+                    rt.sync_windows_languages_if_changed();
+                }
                 #[cfg(target_os = "linux")]
                 {
                     let rt = app.rt_mut();

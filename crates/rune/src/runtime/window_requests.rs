@@ -33,10 +33,15 @@ pub(crate) struct HostState {
     /// What [`Cx::system_reduced_transparency`] reports.
     pub(in crate::runtime) system_reduced_transparency: bool,
     pub(in crate::runtime) scroll_bars: system_settings::ScrollBarHost,
-    /// Preferred languages set via `Runtime::set_languages` or browser `languagechange` (`None`: lazy OS query).
+    /// Preferred languages set via `Runtime::set_languages`, browser `languagechange`, or Windows `WM_SETTINGCHANGE` (`None`: lazy OS query).
     pub(in crate::runtime) system_languages: Option<Rc<[String]>>,
+    /// True when `Runtime::set_languages` explicitly overrode OS language detection.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(in crate::runtime) system_languages_override: bool,
     /// Incremented whenever `system_languages` changes, so memos rebuild without querying the OS.
     pub(in crate::runtime) languages_gen: u64,
+    #[cfg(target_os = "windows")]
+    pub(in crate::runtime) languages_setting_gen: u64,
     pub(crate) native_overlay: bool,
     /// The window or overlay surface's frame counts, published by its host.
     pub(crate) surface_stats: Option<std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>>,
@@ -179,7 +184,10 @@ impl HostState {
             system_reduced_transparency: false,
             scroll_bars: Default::default(),
             system_languages: None,
+            system_languages_override: false,
             languages_gen: 0,
+            #[cfg(target_os = "windows")]
+            languages_setting_gen: 0,
             native_overlay: false,
             surface_stats: None,
             app_stats: None,

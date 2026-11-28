@@ -173,9 +173,9 @@ pub(crate) fn is_tablet_setting_change_area(area: Option<&str>) -> bool {
     )
 }
 
-fn is_tablet_setting_change(lparam: LPARAM) -> bool {
+fn wm_setting_change_area(lparam: LPARAM) -> Option<String> {
     if lparam == 0 {
-        return false;
+        return None;
     }
     let ptr = lparam as *const u16;
     // SAFETY: on `WM_SETTINGCHANGE`, a non-zero `lParam` points to a NUL-terminated UTF-16
@@ -183,8 +183,7 @@ fn is_tablet_setting_change(lparam: LPARAM) -> bool {
     let len = unsafe { (0..128usize).take_while(|&i| *ptr.add(i) != 0).count() };
     // SAFETY: `ptr` is valid for `len` `u16` elements (all non-NUL, bounded above).
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let area = String::from_utf16_lossy(slice);
-    is_tablet_setting_change_area(Some(&area))
+    Some(String::from_utf16_lossy(slice))
 }
 
 fn query_pointer_type(pointer_id: u32) -> Option<POINTER_INPUT_TYPE> {
@@ -256,11 +255,19 @@ unsafe extern "system" fn subclass(
         CURRENT_POINTER.set(outer);
         return result;
     }
-    if message == WM_SETTINGCHANGE && is_tablet_setting_change(lparam) {
-        TABLET_SETTING_GEN.fetch_add(1, Ordering::Release);
-        // SAFETY: `hwnd` is a live window on this thread; passing null invalidates the client area
-        // so winit delivers a redraw to reconcile the updated tablet posture.
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); }
+    if message == WM_SETTINGCHANGE {
+        let area = wm_setting_change_area(lparam);
+        if is_tablet_setting_change_area(area.as_deref()) {
+            TABLET_SETTING_GEN.fetch_add(1, Ordering::Release);
+            // SAFETY: `hwnd` is a live window on this thread; passing null invalidates the client
+            // area so winit delivers a redraw to reconcile the updated tablet posture.
+            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); }
+        } else if crate::platform::languages::is_locale_setting_change_area(area.as_deref()) {
+            crate::platform::languages::notify_setting_change();
+            // SAFETY: `hwnd` is a live window on this thread; passing null invalidates the client
+            // area so winit delivers a redraw to reconcile the updated preferred languages.
+            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0); }
+        }
     } else if message == WM_NCDESTROY {
         // SAFETY: removes this subclass from the window being destroyed.
         unsafe { RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS); }

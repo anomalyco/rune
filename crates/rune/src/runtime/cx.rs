@@ -705,9 +705,11 @@ impl<S> Cx<S> {
     pub fn pointer_locked(&self) -> bool { self.core.pointer_locked() }
     /// The user's preferred languages as BCP 47 tags (RFC 5646), most preferred first (for
     /// example `["ar-EG", "en-US"]`). Queries the platform lazily on first read
-    /// (`GetUserPreferredUILanguages` on Windows, `NSLocale.preferredLanguages` on macOS/iOS,
-    /// `navigator.languages` on web, and POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`
-    /// elsewhere), performing no work before the first frame. Tests and hosts can override
+    /// (`Windows.System.UserProfile.GlobalizationPreferences.Languages` with
+    /// `GetUserPreferredUILanguages` fallback and live `WM_SETTINGCHANGE` `"Intl"` updates on
+    /// Windows, `NSLocale.preferredLanguages` on macOS/iOS, `navigator.languages` on web, and
+    /// POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG` elsewhere), performing no work before the
+    /// first frame. Tests and hosts can override
     /// the list with [`Runtime::set_languages`](crate::Runtime::set_languages).
     ///
     /// ```

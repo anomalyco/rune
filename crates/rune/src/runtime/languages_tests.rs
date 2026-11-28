@@ -96,3 +96,38 @@ fn unset_languages_lazily_reads_platform_languages_and_unused_views_stay_idle() 
         assert_eq!(tag.trim(), tag);
     }
 }
+
+#[test]
+fn os_language_sync_updates_view_skips_identical_sets_and_respects_explicit_override() {
+    let cap = Rc::new(Capture::default());
+    let mut rt = Runtime::new(cap.clone(), capture_view, (200.0, 80.0), Env::default());
+    rt.frame(0.0);
+    let initial = cap.languages.borrow().clone();
+    assert_eq!(cap.runs.get(), 1);
+    assert_eq!(cap.memo_builds.get(), 1);
+
+    // Re-syncing the same OS language list must not dirty an idle runtime or rebuild memos.
+    assert!(!rt.core_mut().sync_os_languages_with(|| initial.clone()));
+    assert!(!rt.needs_commit());
+    assert_eq!(cap.runs.get(), 1);
+    assert_eq!(cap.memo_builds.get(), 1);
+
+    // A live OS language change updates Cx::system_languages / Cx::locale and rebuilds memos.
+    assert!(rt.core_mut().sync_os_languages_with(|| vec!["  zh-CN ".into(), "en-US".into()]));
+    assert!(rt.needs_commit());
+    rt.frame(1.0 / 60.0);
+    assert_eq!(*cap.languages.borrow(), vec!["zh-CN", "en-US"]);
+    assert_eq!(cap.locale.borrow().as_deref(), Some("zh-CN"));
+    assert_eq!(cap.runs.get(), 2);
+    assert_eq!(cap.memo_builds.get(), 2);
+
+    // Explicit Runtime::set_languages override is preserved across subsequent OS broadcasts.
+    rt.set_languages(["it-IT", "en-GB"]);
+    rt.frame(2.0 / 60.0);
+    assert_eq!(*cap.languages.borrow(), vec!["it-IT", "en-GB"]);
+    let runs_before = cap.runs.get();
+    assert!(!rt.core_mut().sync_os_languages_with(|| vec!["fr-FR".into()]));
+    assert!(!rt.needs_commit());
+    assert_eq!(cap.runs.get(), runs_before);
+    assert_eq!(*cap.languages.borrow(), vec!["it-IT", "en-GB"]);
+}
