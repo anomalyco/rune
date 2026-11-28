@@ -112,3 +112,72 @@ fn zero_overscan_with_gap_never_oscillates_or_reports_uncovered() {
         assert_eq!(v.unfilled(offset, false), 0, "must have 0 unfilled at offset {offset}");
     }
 }
+
+#[test]
+fn viewport_uncovered_handles_pinned_gaps_padding_and_empty_ranges() {
+    // 1) Pinned list with top edge in a gap (60 rows * 20 + 59 * 10 = 1790; viewport 1015 ->
+    //    max_offset 775 inside gap [770, 780) before row 26).
+    let mut v = VirtualList { viewport: 1015.0, indexed: true, ..Default::default() };
+    v.set_estimate(20.0);
+    v.set_gap(10.0);
+    v.set_keys((0..60).map(|i| format!("r{i}")).collect(), 0, None);
+    v.set_overscan(clamp_virtual_overscan(0.0, 0.0));
+    v.select(0.0, true, None);
+    assert_eq!(v.range, 26..60);
+    assert!(!v.viewport_uncovered(0.0, true), "top edge in gap is covered when pinned");
+    // When a mounted row shrinks past the gap, row 25 becomes visible and uncovered.
+    v.set_height("r30", 10.0);
+    assert!(v.viewport_uncovered(0.0, true), "shrinking a row past the gap must report uncovered");
+
+    // 2) Pinned list with pad_bottom and zero overscan.
+    let mut vp = VirtualList { viewport: 700.0, pad_bottom: 20.0, indexed: true, ..Default::default() };
+    vp.set_estimate(20.0);
+    vp.set_keys((0..50).map(|i| format!("r{i}")).collect(), 0, None);
+    vp.set_overscan(clamp_virtual_overscan(0.0, 0.0));
+    vp.select(0.0, true, None);
+    assert_eq!(vp.range, 16..50);
+    assert!(!vp.viewport_uncovered(0.0, true), "pad_bottom fills the bottom without making top uncovered");
+    vp.set_height("r20", 15.0);
+    assert!(vp.viewport_uncovered(0.0, true), "shrinking a row in a padded pinned list reports uncovered");
+
+    // 3) Empty mounted range inside a gap wider than the viewport, or inside pad_top / pad_bottom.
+    let mut vg = VirtualList { viewport: 10.0, pad_top: 30.0, pad_bottom: 40.0, indexed: true, ..Default::default() };
+    vg.set_estimate(20.0);
+    vg.set_gap(30.0);
+    vg.set_keys((0..5).map(|i| format!("r{i}")).collect(), 0, None);
+    vg.set_overscan(clamp_virtual_overscan(0.0, 0.0));
+    // Wholly inside pad_top [0, 30): range 0..0.
+    vg.select(5.0, false, None);
+    assert_eq!(vg.range, 0..0);
+    assert!(!vg.viewport_uncovered(5.0, false));
+    assert!(vg.viewport_uncovered(25.0, false), "reaching past pad_top into row 0 is uncovered");
+    // Wholly inside gap 0 [50, 80): range 1..1.
+    vg.select(60.0, false, None);
+    assert_eq!(vg.range, 1..1);
+    assert!(!vg.viewport_uncovered(60.0, false));
+    assert!(vg.viewport_uncovered(49.0, false), "crossing up into row 0 is uncovered");
+    assert!(vg.viewport_uncovered(71.0, false), "crossing down into row 1 is uncovered");
+    // Wholly inside pad_bottom (rows end at 30 + 5*20 + 4*30 = 250): range 5..5.
+    vg.select(255.0, false, None);
+    assert_eq!(vg.range, 5..5);
+    assert!(!vg.viewport_uncovered(255.0, false));
+    assert!(!vg.needs_window(255.0, false));
+    // Scrolling back up into row 4 [230, 250) must immediately report uncovered (not off by gap!).
+    assert!(vg.viewport_uncovered(248.0, false), "scrolling up from pad_bottom into last row is uncovered");
+    assert!(vg.needs_window(248.0, false), "needs_window must trigger as soon as last row enters viewport");
+
+    // 4) Fractional pad_top boundary consistency between overscan() and viewport_uncovered().
+    let mut vf = VirtualList { viewport: 100.0, pad_top: 0.1, indexed: true, ..Default::default() };
+    vf.set_estimate(20.0);
+    vf.set_gap(8.0);
+    vf.set_keys((0..20).map(|i| format!("r{i}")).collect(), 0, None);
+    vf.set_overscan(clamp_virtual_overscan(0.0, 0.0));
+    for i in 1..10 {
+        let edge = vf.pad_top + vf.row_end(i);
+        for offset in [f32::from_bits(edge.to_bits() - 1), edge, f32::from_bits(edge.to_bits() + 1)] {
+            vf.select(offset, false, None);
+            assert!(!vf.viewport_uncovered(offset, false), "ULP boundary at row {i}, offset {offset}");
+            assert!(!vf.needs_window(offset, false), "needs_window ULP boundary at row {i}, offset {offset}");
+        }
+    }
+}
