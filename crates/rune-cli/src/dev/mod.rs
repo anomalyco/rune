@@ -1,5 +1,6 @@
 //! Cross-platform `rune dev` orchestration: guarded hot patching and watch-and-restart fallback.
 
+pub mod fingerprint;
 pub mod hot;
 pub mod mirror;
 pub mod proc;
@@ -44,7 +45,7 @@ pub fn select_mode(
                     windows_opt_in_notice: is_windows,
                 }),
                 DxStatus::WrongVersion { path, version } => Err(CliError::new(format!(
-                    "expected dioxus-cli {} for `--mode hot`, found '{}' at {} (the Deno `dx` command is unrelated). Install with: {}",
+                    "expected dioxus-cli {} for `--mode hot`, found '{}' at {} (the Deno `dx` command is unrelated). Install with: {} (or set RUNE_DX / RUNE_DX_UNPINNED=1 for a custom/newer dx build)",
                     crate::REQUIRED_DX_VERSION,
                     version,
                     path.display(),
@@ -61,7 +62,7 @@ pub fn select_mode(
             if is_windows {
                 return Ok(SelectedMode::Restart {
                     reason: Some(
-                        "running in watch-and-restart mode on Windows (live dylib patching via dx 0.7.10 is experimental on Windows; pass --mode hot to opt in)".to_string(),
+                        "running in watch-and-restart mode on Windows (stock upstream dx 0.7.10 has known Windows patching bugs; pass --mode hot or set mode = \"hot\" in rune.toml with a patched/newer dx via RUNE_DX or RUNE_DX_UNPINNED=1 to opt in)".to_string(),
                     ),
                 });
             }
@@ -79,7 +80,7 @@ pub fn select_mode(
                 }),
                 DxStatus::WrongVersion { path, version } => Ok(SelectedMode::Restart {
                     reason: Some(format!(
-                        "found '{}' at {} instead of dioxus-cli {}; running in watch-and-restart mode (install with: {})",
+                        "found '{}' at {} instead of dioxus-cli {}; running in watch-and-restart mode (install with: {}, or set RUNE_DX / RUNE_DX_UNPINNED=1)",
                         version,
                         path.display(),
                         crate::REQUIRED_DX_VERSION,
@@ -116,16 +117,17 @@ pub fn run(args: &DevArgs) -> Result<(), CliError> {
         } => {
             if windows_opt_in_notice {
                 eprintln!(
-                    "rune dev: --mode hot on Windows is experimental because upstream dx 0.7.10 has known Windows patching issues"
+                    "rune dev: --mode hot on Windows is opt-in while stock upstream dx {} has known Windows patching bugs (set RUNE_DX or RUNE_DX_UNPINNED=1 to use a patched/newer dx)",
+                    crate::REQUIRED_DX_VERSION
                 );
             }
-            hot::run_hot(&cfg, &dx_path)
+            hot::run_hot_with_reloader(cfg, &dx_path, || resolve_dev_config(args, &cwd))
         }
         SelectedMode::Restart { reason } => {
             if let Some(msg) = reason {
                 eprintln!("rune dev: {msg}");
             }
-            restart::run_restart(&cfg)
+            restart::run_restart_with_reloader(cfg, || resolve_dev_config(args, &cwd))
         }
     }
 }

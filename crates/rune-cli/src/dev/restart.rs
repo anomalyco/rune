@@ -38,18 +38,45 @@ pub fn build_cargo_run_args(cfg: &ResolvedDevConfig) -> Vec<String> {
 
 /// Runs the app with `cargo run` and automatically rebuilds & relaunches on file edits.
 pub fn run_restart(cfg: &ResolvedDevConfig) -> Result<(), CliError> {
+    let initial = cfg.clone();
+    run_restart_with_reloader(initial, || Ok(cfg.clone()))
+}
+
+/// Runs watch-and-restart mode, reloading `ResolvedDevConfig` on each restart so edits to
+/// `Cargo.toml` or `rune.toml` take effect immediately.
+pub fn run_restart_with_reloader<F>(
+    mut cfg: ResolvedDevConfig,
+    mut reload_cfg: F,
+) -> Result<(), CliError>
+where
+    F: FnMut() -> Result<ResolvedDevConfig, CliError>,
+{
     println!("rune dev: watch-and-restart for `{}`", cfg.package);
 
     let mut cache = FileCache::default();
+    let mut first_run = true;
 
     loop {
+        if !first_run {
+            match reload_cfg() {
+                Ok(updated) => cfg = updated,
+                Err(err) => {
+                    eprintln!(
+                        "rune dev: keeping previous config after reload error: {}",
+                        err.message
+                    );
+                }
+            }
+        }
+        first_run = false;
+
         let layout = discover_layout(&cfg.meta.manifest_path)?;
         let sources = layout.source_entries();
         let baseline = scan_sources(&mut cache, &sources).map_err(|err| {
             CliError::new(format!("failed to scan project files: {err}"))
         })?;
 
-        let cargo_args = build_cargo_run_args(cfg);
+        let cargo_args = build_cargo_run_args(&cfg);
         let mut cmd = Command::new("cargo");
         cmd.args(&cargo_args).current_dir(&cfg.meta.crate_dir);
         if let Some(target_dir) = &cfg.target_dir {

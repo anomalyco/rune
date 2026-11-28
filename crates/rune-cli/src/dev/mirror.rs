@@ -16,6 +16,7 @@ use crate::watch::{Snapshot, walk_files};
 const WORKSPACE_TOP_FILES: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
+    "rune.toml",
     "rust-toolchain",
     "rust-toolchain.toml",
     ".cargo/config.toml",
@@ -185,11 +186,54 @@ pub fn mirror_dir_for(manifest_path: &Path) -> PathBuf {
     cache_root().join(format!("mirror-{short}"))
 }
 
-/// Default Cargo target directory for hot-patch builds of `manifest_path`.
+/// Default Cargo target directory for hot-patch builds of `manifest_path`: the project
+/// workspace's own `target/` directory (matching `cargo run` and keeping multi-GB build caches
+/// out of the user's profile cache while `--profile rune-hot` stays separate from `debug`).
 pub fn default_target_dir_for(manifest_path: &Path) -> PathBuf {
-    let hash = blake3::hash(manifest_path.to_string_lossy().as_bytes());
-    let short = &hash.to_hex()[..12];
-    cache_root().join(format!("build-{short}"))
+    let crate_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let root = find_workspace_root(crate_dir).unwrap_or_else(|_| crate_dir.to_path_buf());
+    root.join("target")
+}
+
+/// If a hot-patch build generated `Cargo.lock` inside `mirror_dir` and the real workspace does
+/// not have one yet (and the mirror did not prune a multi-member workspace manifest), copies it
+/// back so future cold starts do not re-resolve the full dependency graph.
+pub fn sync_generated_lockfile(
+    mirror_dir: &Path,
+    layout: &ProjectLayout,
+    workspace_root: &Path,
+    snapshot: &Snapshot,
+) -> Result<bool, CliError> {
+    let host_lock = workspace_root.join("Cargo.lock");
+    if host_lock.exists() {
+        return Ok(false);
+    }
+    if compute_workspace_overrides(&layout.crate_key, snapshot)
+        .is_ok_and(|overrides| !overrides.is_empty())
+    {
+        return Ok(false);
+    }
+    let ws_rel = workspace_root
+        .strip_prefix(&layout.base)
+        .map(|r| glob::normalize_rel(&r.to_string_lossy()))
+        .unwrap_or_default();
+    let mirror_lock_key = if ws_rel.is_empty() {
+        "external/Cargo.lock".to_string()
+    } else {
+        format!("external/{ws_rel}/Cargo.lock")
+    };
+    let mirror_lock = join_posix(mirror_dir, &mirror_lock_key);
+    if !mirror_lock.is_file() {
+        return Ok(false);
+    }
+    let bytes = fs::read(&mirror_lock).map_err(|err| {
+        CliError::new(format!(
+            "failed to read generated {}: {err}",
+            mirror_lock.display()
+        ))
+    })?;
+    atomic_write(&host_lock, &bytes)?;
+    Ok(true)
 }
 
 /// Rewrites `[workspace].members` and `[workspace].default-members` in `ws_toml` so only staged
