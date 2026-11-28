@@ -411,3 +411,36 @@ fn arrow_keys_cross_a_break() {
         assert_eq!(rt.state.selected, ["tab2", "tab1"], "vertical: {vertical}: and crosses it back");
     }
 }
+
+/// An emphasized tab's title fades at the end of its own words, in either direction and in a
+/// strip laid out either way: a Latin title at its right, an Arabic one at its left, so a
+/// right-to-left strip never fades a title's first letters.
+#[test]
+fn a_title_fades_at_the_end_of_its_own_words() {
+    struct S { title: &'static str, rtl: bool }
+    fn view(s: &S, _: &mut rune::Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let strip = TabStrip::<S>::new("strip", TabOrientation::Horizontal)
+            .tabs([TabItem::new("t", s.title)])
+            .active(Some("t"))
+            .viewport_width(Some(600.0))
+            .build(&k);
+        let page = col().size(600.0, 300.0).child(strip);
+        if s.rtl { page.dir(rune::Direction::Rtl) } else { page }
+    }
+    for (title, latin) in [("Wide tables and long code", true), ("جداول عريضة وشيفرة طويلة", false)] {
+        for rtl in [false, true] {
+            let mut rt = rune::Runtime::new(S { title, rtl }, view, (600.0, 300.0), rune::Env::new(true, 1.0));
+            rt.frame(0.0);
+            rt.frame(1.0 / 60.0);
+            let [x, y, w, h] = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("label")).expect("the title").rect;
+            let inside = |r: [f32; 4]| r[0] >= x - 1.0 && r[0] + r[2] <= x + w + 1.0 && r[1] >= y - 1.0 && r[1] + r[3] <= y + h + 1.0;
+            let widths: Vec<[f32; 4]> = rt.instances.iter().filter(|i| inside(i.rect)).map(|i| rune::render::unpack_fade(i.fade).0).filter(|w| w.iter().any(|w| *w != 0.0)).collect();
+            assert!(!widths.is_empty(), "the title fades ({title}, rtl {rtl})");
+            for [left, _, right, _] in widths {
+                let fades = if latin { (left, right) } else { (right, left) };
+                assert!(fades.0 == 0.0 && fades.1 != 0.0, "{title} (rtl {rtl}) fades at its end: left {left}, right {right}");
+            }
+        }
+    }
+}

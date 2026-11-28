@@ -162,7 +162,9 @@ pub struct TabSlot<'a> {
 }
 
 /// A tab strip's words for assistive technology ([`TabStrip::words`]): the close button's name
-/// and each status a tab's mark shows, said after the tab's title.
+/// and each status a tab's mark shows, said after the tab's title. A word left at its English
+/// default is said in the app's language, as `rune::set_labels` names `Label::CloseTab`,
+/// `Label::Working`, `Label::NeedsAttention`, `Label::Unread` and `Label::Failed`.
 #[derive(Clone, Copy, Debug)]
 pub struct TabWords {
     pub close: &'static str,

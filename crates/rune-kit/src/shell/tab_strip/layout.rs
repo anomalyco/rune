@@ -76,6 +76,36 @@ pub(super) struct TabBreakCore {
 }
 
 /// What every tab of one strip shares while it builds.
+/// A strip's [`TabWords`] as it says them: each one the app left at its English default in the
+/// app's language (`rune::set_labels`).
+pub(super) struct Words {
+    pub close: Cow<'static, str>,
+    pub busy: Cow<'static, str>,
+    pub attention: Cow<'static, str>,
+    pub unread: Cow<'static, str>,
+    pub failed: Cow<'static, str>,
+}
+
+impl Words {
+    fn of(w: TabWords) -> Words {
+        let english = TabWords::default();
+        let say = |word: &'static str, default: &'static str, label: rune::Label<'_>| match word == default {
+            true => match rune::labels::label(label) {
+                named if named == default => Cow::Borrowed(default),
+                named => Cow::Owned(named),
+            },
+            false => Cow::Borrowed(word),
+        };
+        Words {
+            close: say(w.close, english.close, rune::Label::CloseTab),
+            busy: say(w.busy, english.busy, rune::Label::Working),
+            attention: say(w.attention, english.attention, rune::Label::NeedsAttention),
+            unread: say(w.unread, english.unread, rune::Label::Unread),
+            failed: say(w.failed, english.failed, rune::Label::Failed),
+        }
+    }
+}
+
 pub(super) struct Strip {
     pub drag: TabDragState,
     pub base: Color,
@@ -96,7 +126,7 @@ pub(super) struct Strip {
     /// `TabStrip::hover_none`.
     pub hover_none: bool,
     pub busy: fn(&Kit) -> El,
-    pub words: TabWords,
+    pub words: Words,
     pub scroll_key: String,
     pub list_key: String,
     /// A torn-out tab floats in the caller's layer ([`TabStrip::build_layered`](super::TabStrip::build_layered)).
@@ -249,7 +279,7 @@ impl<'a> TabStripCore<'a> {
             close_tab_stop: self.close_tab_stop,
             hover_none: self.hover_none,
             busy: self.busy,
-            words: self.words,
+            words: Words::of(self.words),
             auto,
             scroll_key: format!("{}-scroll", self.key),
             list_key: format!("{}-list", self.key),
