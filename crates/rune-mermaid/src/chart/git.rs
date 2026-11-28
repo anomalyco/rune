@@ -7,6 +7,7 @@ use rune::{Align, Color};
 
 use super::{bold, hue, ink, small, solid};
 use crate::canvas::{Canvas, Measured, Scene, dist, ellipse, lerp, measure, rounded_rect, unit};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean, oklab_mix, statements};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +50,7 @@ pub(crate) struct GitGraph {
     pub commits: Vec<Commit>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<GitGraph> {
+pub(crate) fn parse(header: &str, body: &[SourceLine<'_>], max_items: usize) -> Result<GitGraph, ParseFail> {
     let flow = match header.trim().trim_end_matches(':') {
         "TB" | "TD" => Flow::Down,
         "BT" => Flow::Up,
@@ -58,12 +59,13 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Git
     let mut g = GitGraph { flow, branches: vec![Branch { name: "main".into(), order: None }], commits: Vec::new() };
     let mut heads: Vec<Option<usize>> = vec![None];
     let mut cur = 0;
+    let mut skipped = Skipped::default();
     for &line in body {
-        for stmt in statements(line) {
+        for stmt in statements(line.text) {
             let (cmd, rest) = stmt.split_once(char::is_whitespace).unwrap_or((stmt, ""));
             let rest = rest.trim();
             if g.commits.len() + g.branches.len() > max_items {
-                return None;
+                return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
             }
             let find = |g: &GitGraph, name: &str| g.branches.iter().position(|b| b.name == name);
             match cmd {
@@ -110,11 +112,14 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Git
                     g.commits.push(Commit { id: None, tag: get(&a, "tag"), kind: Kind::CherryPick, branch: cur, parents: heads[cur].into_iter().collect(), picked: Some(src) });
                     heads[cur] = Some(g.commits.len() - 1);
                 }
-                _ => {}
+                _ => skipped.record(line.line, stmt),
             }
         }
     }
-    (!g.commits.is_empty()).then_some(g)
+    if g.commits.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(g)
 }
 
 /// Whether `to` is `from` or one of its ancestors.

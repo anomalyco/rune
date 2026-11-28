@@ -1,4 +1,5 @@
 use super::{Lenient, Reader};
+use crate::error::ParseFail;
 
 /// Keeps statements that are words; anything else doesn't read, after adding a junk item.
 #[derive(Default)]
@@ -19,17 +20,18 @@ impl Lenient for Words {
         self.items.push(s.to_owned());
         (s.chars().all(|c| c.is_alphanumeric() || c == '{' || c == '}' || c == ' ') && !s.starts_with('!')).then_some(())
     }
-    fn over(&self) -> bool {
-        self.limit > 0 && self.items.len() > self.limit
+    fn limit(&self) -> Option<ParseFail> {
+        (self.limit > 0 && self.items.len() > self.limit)
+            .then_some(ParseFail::ItemLimit { limit: self.limit, kind: "items" })
     }
 }
 
-fn read(src: &[&str], limit: usize) -> Option<Vec<String>> {
+fn read(src: &[&str], limit: usize) -> Result<Vec<String>, ParseFail> {
     let (mut r, mut p) = (Reader::default(), Words { limit, ..Words::default() });
-    for s in src {
-        r.read(&mut p, s)?;
+    for (idx, s) in src.iter().enumerate() {
+        r.read(&mut p, idx + 1, s)?;
     }
-    Some(p.items)
+    Ok(p.items)
 }
 
 #[test]
@@ -40,5 +42,8 @@ fn an_unreadable_statement_is_undone_with_its_body_and_the_bodies_inside_it() {
 
 #[test]
 fn past_the_bounds_the_whole_diagram_stays_source() {
-    assert!(read(&["a", "b", "!c", "d"], 2).is_none());
+    assert_eq!(
+        read(&["a", "b", "!c", "d"], 2),
+        Err(ParseFail::ItemLimit { limit: 2, kind: "items" })
+    );
 }

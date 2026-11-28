@@ -8,6 +8,7 @@ use rune::Align;
 use super::pie::number;
 use super::{hue, s_curve, small, solid};
 use crate::canvas::{Canvas, Scene, measure, room};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean};
 
 #[derive(Debug, Default)]
@@ -17,15 +18,24 @@ pub(crate) struct Sankey {
     pub links: Vec<(usize, usize, f32)>,
 }
 
-pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Sankey> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<Sankey, ParseFail> {
     let mut s = Sankey::default();
     let mut ids: HashMap<String, usize> = HashMap::new();
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         let f = fields(l);
-        let [a, b, v] = f.as_slice() else { continue };
-        let Some(v) = v.trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 0.0) else { continue };
+        let [a, b, v] = f.as_slice() else {
+            skipped.record(line.line, l);
+            continue;
+        };
+        let Some(v) = v.trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 0.0) else {
+            skipped.record(line.line, l);
+            continue;
+        };
         let (a, b) = (clean(a), clean(b));
         if a.is_empty() || b.is_empty() || a == b {
+            skipped.record(line.line, l);
             continue;
         }
         let mut node = |name: String| {
@@ -38,10 +48,13 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Sankey> {
         let (from, to) = (node(a), node(b));
         s.links.push((from, to, v));
         if s.nodes.len() + s.links.len() > max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
     }
-    (!s.links.is_empty()).then_some(s)
+    if s.links.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(s)
 }
 
 /// One CSV row: commas split fields outside `"…"`, and `""` inside quotes is a quote.

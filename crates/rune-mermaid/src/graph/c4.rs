@@ -10,6 +10,7 @@ use rune::{Color, TextStyle, oklch};
 use crate::canvas::{Scene, measure_wrap};
 use crate::chart::{bold, ink, small};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, PERSON, draw_layered};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::layout::layered::Spacing;
 use crate::{DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, clean_quoted, word};
 
@@ -72,28 +73,35 @@ enum Way {
     Back,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<C4> {
+pub(crate) fn parse(header: &str, body: &[SourceLine<'_>], max_items: usize) -> Result<C4, ParseFail> {
     let dynamic = header == "C4Dynamic";
     let mut d = C4::default();
     let mut ids: HashMap<String, usize> = HashMap::new();
     let mut rels: Vec<Rel> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         if l.starts_with('}') {
-            stack.pop();
+            if stack.pop().is_none() {
+                skipped.record(line.line, l);
+            }
             continue;
         }
         if let Some(rest) = word(l, "title") {
             d.title = Some(clean_quoted(rest)).filter(|t| !t.is_empty());
             continue;
         }
-        let Some((open, close)) = l.find('(').zip(l.rfind(')')).filter(|(o, c)| o < c) else { continue };
+        let Some((open, close)) = l.find('(').zip(l.rfind(')')).filter(|(o, c)| o < c) else {
+            skipped.record(line.line, l);
+            continue;
+        };
         let name = l[..open].trim();
         let (args, named) = args(&l[open + 1..close]);
         let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
         if let Some(kind) = boundary(name) {
             if stack.len() >= MAX_DEPTH {
-                return None;
+                return Err(ParseFail::DepthLimit(MAX_DEPTH));
             }
             let ty = args.get(2).cloned().filter(|t| !t.is_empty()).or_else(|| kind.map(str::to_owned));
             let label = args.get(1).or(args.first()).cloned().unwrap_or_default();
@@ -106,7 +114,10 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<C4>
                 stack.push(d.boundaries.len() - 1);
             }
         } else if let Some((base, store, external)) = element(name) {
-            let Some(alias) = args.first().filter(|a| !a.is_empty()) else { continue };
+            let Some(alias) = args.first().filter(|a| !a.is_empty()) else {
+                skipped.record(line.line, l);
+                continue;
+            };
             let (techn, descr) = if matches!(base, Base::Container | Base::Component) { (arg(2), arg(3)) } else { (String::new(), arg(2)) };
             let techn = named.get("techn").cloned().unwrap_or(techn);
             let descr = named.get("descr").cloned().unwrap_or(descr);
@@ -117,9 +128,11 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<C4>
             let get = |i: usize| a.get(i).cloned().unwrap_or_default();
             let techn = named.get("techn").cloned().unwrap_or_else(|| get(3));
             rels.push(Rel { from: get(0), to: get(1), label: get(2), techn, both, way });
+        } else if !name.starts_with("Update") {
+            skipped.record(line.line, l);
         }
         if d.elements.len() + d.boundaries.len() + rels.len() > max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
     }
     let mut n = 0;
@@ -139,7 +152,10 @@ pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<C4>
         let label = Some(label).filter(|l| !l.trim().is_empty());
         d.edges.push(Edge { from, to, label, line: Line::Solid, start, end, minlen: 1, style: EdgeStyle::default(), on_cluster: [None; 2] });
     }
-    (!d.elements.is_empty()).then_some(d)
+    if d.elements.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(d)
 }
 
 /// Positional arguments, unquoted, and `$name="value"` ones by name.

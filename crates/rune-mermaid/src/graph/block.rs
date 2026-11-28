@@ -9,6 +9,7 @@ use rune::Align;
 use super::flowchart::{ident, link, shape};
 use crate::canvas::shape as shapes;
 use crate::canvas::{Canvas, Measured, Scene, measure_wrap, rounded_rect, unit};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::layout::connector::{connector, inset, label_box};
 use crate::layout::draw::{Edge, NodeShape, boundary, node_size};
 use crate::{Cur, DiagramStyle, EdgeStyle, MAX_DEPTH, NodeStyle, StyleSheet, clean_quoted, statements, word};
@@ -65,10 +66,10 @@ struct Parser {
     stack: Vec<usize>,
     styles: StyleSheet,
     max_items: usize,
-    over: bool,
+    limit: Option<ParseFail>,
 }
 
-pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<BlockDiagram> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<BlockDiagram, ParseFail> {
     let root = Block { id: String::new(), label: String::new(), shape: NodeShape::Rect, span: 1, kind: Kind::Group { columns: None, children: Vec::new() }, style: NodeStyle::default() };
     let mut p = Parser {
         d: BlockDiagram { blocks: vec![root], edges: Vec::new() },
@@ -76,13 +77,16 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<BlockDiagram> {
         stack: vec![0],
         styles: StyleSheet::default(),
         max_items,
-        over: false,
+        limit: None,
     };
+    let mut skipped = Skipped::default();
     for &line in body {
-        for s in statements(line) {
-            p.statement(s);
-            if p.over {
-                return None;
+        for s in statements(line.text) {
+            if p.statement(s).is_none() {
+                if let Some(fail) = p.limit {
+                    return Err(fail);
+                }
+                skipped.record(line.line, s);
             }
         }
     }
@@ -90,13 +94,18 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<BlockDiagram> {
     for (id, i) in ids {
         d.blocks[i].style = styles.get(&id);
     }
-    (d.blocks.len() > 1).then_some(d)
+    if d.blocks.len() <= 1 {
+        return Err(skipped.into_no_items());
+    }
+    Ok(d)
 }
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.blocks.len() + self.d.edges.len() >= self.max_items;
-        (!self.over).then_some(())
+        if self.limit.is_none() && self.d.blocks.len() + self.d.edges.len() >= self.max_items {
+            self.limit = Some(ParseFail::ItemLimit { limit: self.max_items, kind: "items" });
+        }
+        self.limit.is_none().then_some(())
     }
 
     fn group(&mut self) -> usize {
@@ -119,7 +128,7 @@ impl Parser {
             let id = parts.next().unwrap_or("").trim();
             let span = parts.next().and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 24);
             if self.stack.len() > MAX_DEPTH {
-                self.over = true;
+                self.limit = Some(ParseFail::DepthLimit(MAX_DEPTH));
                 return None;
             }
             let i = self.add(Item { id: id.to_owned(), label: Some(String::new()), shape: None, arrow: None, span })?;

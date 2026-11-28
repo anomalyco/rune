@@ -5,6 +5,7 @@ use rune::{Align, oklch};
 
 use super::{bold, dark, hue, ink, small, soft, solid, strong};
 use crate::canvas::{Canvas, Measured, Scene, arc, arrowhead, ellipse, measure, measure_wrap, rounded_rect};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean, word};
 
 #[derive(Debug, PartialEq)]
@@ -23,9 +24,11 @@ pub(crate) struct Journey {
     pub tasks: Vec<Task>,
 }
 
-pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Journey> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<Journey, ParseFail> {
     let mut j = Journey { title: None, sections: Vec::new(), actors: Vec::new(), tasks: Vec::new() };
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         if let Some(rest) = word(l, "title") {
             j.title = Some(clean(rest)).filter(|s| !s.is_empty());
             continue;
@@ -38,13 +41,20 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Journey> {
             continue;
         }
         let mut parts = l.splitn(3, ':');
-        let (Some(name), Some(score)) = (parts.next(), parts.next()) else { continue };
-        let Ok(score) = score.trim().parse::<f32>() else { continue };
+        let (Some(name), Some(score)) = (parts.next(), parts.next()) else {
+            skipped.record(line.line, l);
+            continue;
+        };
+        let Ok(score) = score.trim().parse::<f32>() else {
+            skipped.record(line.line, l);
+            continue;
+        };
         if !score.is_finite() {
+            skipped.record(line.line, l);
             continue;
         }
         if j.tasks.len() + j.sections.len() >= max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
         let mut actors = Vec::new();
         for a in parts.next().unwrap_or("").split(',').map(clean).filter(|a| !a.is_empty()) {
@@ -58,7 +68,10 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Journey> {
         }
         j.tasks.push(Task { name: clean(name), score: score.clamp(1.0, 5.0), actors, section: j.sections.len().checked_sub(1) });
     }
-    (!j.tasks.is_empty()).then_some(j)
+    if j.tasks.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(j)
 }
 
 const COL: f32 = 112.0;

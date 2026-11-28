@@ -23,33 +23,56 @@ use rune::El;
 use crate::markdown::{DiagramPaint, MarkdownStyle};
 
 pub use rune_mermaid::{
-    DiagramStyle, Drawing, DrawingModel, Hover, may_draw, render_svg, render_svg_bare, supported,
-    supported_with,
+    DiagramStyle, Drawing, DrawingModel, Hover, MermaidError, may_draw, render_svg,
+    render_svg_bare, supported, supported_with, try_prepare_drawing, try_render_drawing,
+    try_render_svg, try_render_svg_bare, try_render_with_hover,
 };
 
 /// Prepare the drawn label runs for a viewer that searches and highlights a diagram.
 pub fn prepare(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<DrawingModel> {
+    try_prepare(src, style, max_width).ok()
+}
+
+/// Like [`prepare`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_prepare(src: &str, style: &MarkdownStyle, max_width: f32) -> Result<DrawingModel, MermaidError> {
     let paint = &style.diagram;
     let mut full = self::style(paint);
     full.max_width = max_width;
-    rune_mermaid::prepare_drawing(src, &full, hover(paint), paint.hover)
+    rune_mermaid::try_prepare_drawing(src, &full, hover(paint), paint.hover)
 }
 
 /// `src` drawn as a diagram card with `style`'s diagram colours, or `None` when it is outside
 /// the supported subset.
 pub fn render(src: &str, style: &MarkdownStyle) -> Option<El> {
-    diagram(src, &style.diagram, false, false)
+    try_render(src, style).ok()
+}
+
+/// Like [`render`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_render(src: &str, style: &MarkdownStyle) -> Result<El, MermaidError> {
+    let paint = &style.diagram;
+    let card = rune_mermaid::try_render_with_hover(src, &self::style(paint), hover(paint), paint.hover)?;
+    Ok(card.role("figure").label(kind(src)).description(src.trim()))
 }
 
 /// `src` rendered as a static, self-contained framed-card SVG document with `style`'s diagram
 /// colours, or `None` when it is outside the supported subset.
 pub fn svg(src: &str, style: &MarkdownStyle) -> Option<String> {
-    rune_mermaid::render_svg(src, &self::style(&style.diagram))
+    try_svg(src, style).ok()
+}
+
+/// Like [`svg`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_svg(src: &str, style: &MarkdownStyle) -> Result<String, MermaidError> {
+    rune_mermaid::try_render_svg(src, &self::style(&style.diagram))
 }
 
 /// Like [`svg`], without the surrounding card frame or card padding.
 pub fn svg_bare(src: &str, style: &MarkdownStyle) -> Option<String> {
-    rune_mermaid::render_svg_bare(src, &self::style(&style.diagram))
+    try_svg_bare(src, style).ok()
+}
+
+/// Like [`svg_bare`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_svg_bare(src: &str, style: &MarkdownStyle) -> Result<String, MermaidError> {
+    rune_mermaid::try_render_svg_bare(src, &self::style(&style.diagram))
 }
 
 /// [`render`]'s title and drawing without the card, laid out for a card `max_width` points wide
@@ -57,12 +80,17 @@ pub fn svg_bare(src: &str, style: &MarkdownStyle) -> Option<String> {
 /// as it reads best instead of turned to fit the column, and a chart fills the room. For a
 /// viewer that frames and scales the drawing itself.
 pub fn drawing(src: &str, style: &MarkdownStyle, max_width: f32) -> Option<Drawing> {
+    try_drawing(src, style, max_width).ok()
+}
+
+/// Like [`drawing`], returning a [`MermaidError`] explaining why `src` produced no diagram.
+pub fn try_drawing(src: &str, style: &MarkdownStyle, max_width: f32) -> Result<Drawing, MermaidError> {
     let paint = &style.diagram;
     let mut full = self::style(paint);
     full.max_width = max_width;
-    let mut d = rune_mermaid::render_drawing(src, &full, hover(paint), paint.hover)?;
+    let mut d = rune_mermaid::try_render_drawing(src, &full, hover(paint), paint.hover)?;
     d.el = std::mem::replace(&mut d.el, rune::el()).role("figure").label(kind(src)).description(src.trim());
-    Some(d)
+    Ok(d)
 }
 
 fn hover(paint: &DiagramPaint) -> Hover {
@@ -147,5 +175,67 @@ mod tests {
         assert!(!bare.contains("<rect "));
         assert!(direct.contains(">One</text>"));
         assert!(svg("unsupported", &md).is_none());
+    }
+
+    #[test]
+    fn kit_mermaid_try_apis_expose_errors_and_preserve_option_behavior() {
+        let md = MarkdownStyle::neutral(false);
+        let valid = "flowchart LR\n  A[One] --> B[Two]\n";
+        let unknown = "kanban\n  col[Item]";
+        let empty = "   \n%% only comment";
+        let no_items = "flowchart LR\n  not valid syntax";
+
+        assert_eq!(try_svg(valid, &md).ok(), svg(valid, &md));
+        assert_eq!(try_svg_bare(valid, &md).ok(), svg_bare(valid, &md));
+        assert!(try_render(valid, &md).is_ok());
+        assert!(try_drawing(valid, &md, 680.0).is_ok());
+        assert!(try_prepare(valid, &md, 680.0).is_ok());
+        assert!(try_render_svg(valid, &DiagramStyle::neutral(false)).is_ok());
+        assert!(try_render_svg_bare(valid, &DiagramStyle::neutral(false)).is_ok());
+
+        assert_eq!(try_svg(unknown, &md), Err(MermaidError::UnsupportedDiagram { header: "kanban".into() }));
+        assert_eq!(try_svg_bare(empty, &md), Err(MermaidError::Empty));
+        assert_eq!(
+            try_render(no_items, &md).err(),
+            Some(MermaidError::NoItems {
+                diagram: "flowchart".into(),
+                line: Some(2),
+                statement: Some("not valid syntax".into()),
+            })
+        );
+        assert_eq!(try_drawing(unknown, &md, 680.0).err(), Some(MermaidError::UnsupportedDiagram { header: "kanban".into() }));
+        assert_eq!(try_prepare(unknown, &md, 680.0).err(), Some(MermaidError::UnsupportedDiagram { header: "kanban".into() }));
+        assert_eq!(
+            try_render_svg(unknown, &DiagramStyle::neutral(false)),
+            Err(MermaidError::UnsupportedDiagram { header: "kanban".into() })
+        );
+
+        let small = MarkdownStyle::neutral(false).diagram_max_items(2);
+        assert_eq!(
+            try_svg("flowchart TD\n  A --> B\n  B --> C", &small),
+            Err(MermaidError::ItemLimitExceeded { diagram: "flowchart".into(), limit: 2, kind: "items" })
+        );
+    }
+
+    #[test]
+    fn markdown_mermaid_fence_rendering_and_fallback_remain_unchanged() {
+        let md = MarkdownStyle::neutral(false);
+        // Valid fence renders a diagram card; invalid fence returns None so Markdown falls back to code block.
+        assert!(diagram("flowchart LR\n  A --> B", &md.diagram, false, false).is_some());
+        assert!(diagram("kanban\n  todo", &md.diagram, false, false).is_none());
+        let doc = "```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\nkanban\n  todo\n```\n".to_owned();
+        let mut rt = rune::Runtime::new(
+            doc,
+            |src: &String, _: &mut rune::Cx<String>| {
+                let st = MarkdownStyle::neutral(false);
+                rune::col().w(680.0).child(crate::Markdown::new(src).render(&st).key("md"))
+            },
+            (680.0, 800.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        let keys: Vec<String> = rt.elements().into_iter().filter_map(|e| e.key).collect();
+        assert!(keys.iter().any(|k| k == "diagram"), "valid fence renders diagram: {keys:?}");
+        assert!(keys.iter().any(|k| k == "source"), "invalid fence falls back to code block: {keys:?}");
     }
 }

@@ -7,6 +7,7 @@ use rune::{Align, Color, TextStyle};
 use super::{bold, hue, ink, s_curve, soft, solid, strong};
 use crate::canvas::shape::{self, NodeShape};
 use crate::canvas::{Canvas, Measured, Scene, measure_wrap, over_color, rounded_rect};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, MAX_DEPTH, clean_quoted};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,19 +35,23 @@ pub(crate) struct Mindmap {
     pub nodes: Vec<Node>,
 }
 
-pub(crate) fn parse(body: &[&str], indents: &[usize], max_items: usize) -> Option<Mindmap> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<Mindmap, ParseFail> {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
-    for (i, line) in body.iter().enumerate() {
-        let l = line.trim();
+    let mut skipped = Skipped::default();
+    for line in body {
+        let l = line.text.trim();
         if l.starts_with("::icon(") || l.starts_with(":::") || l.starts_with("accTitle") || l.starts_with("accDescr") {
             continue;
         }
-        let Some((text, look)) = node(l) else { continue };
+        let Some((text, look)) = node(l) else {
+            skipped.record(line.line, l);
+            continue;
+        };
         if nodes.len() >= max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
-        let indent = indents.get(i).copied().unwrap_or(0);
+        let indent = line.indent;
         let id = nodes.len();
         if id == 0 {
             nodes.push(Node { text, look, depth: 0, children: Vec::new() });
@@ -60,13 +65,16 @@ pub(crate) fn parse(body: &[&str], indents: &[usize], max_items: usize) -> Optio
         let parent = stack.last().map_or(0, |s| s.1);
         let depth = nodes[parent].depth + 1;
         if depth > MAX_DEPTH {
-            return None;
+            return Err(ParseFail::DepthLimit(MAX_DEPTH));
         }
         nodes[parent].children.push(id);
         nodes.push(Node { text, look, depth, children: Vec::new() });
         stack.push((indent, id));
     }
-    (!nodes.is_empty()).then_some(Mindmap { nodes })
+    if nodes.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(Mindmap { nodes })
 }
 
 /// `id[text]`, `id((text))`, … or a bare line. An opener without its closer reads as written.

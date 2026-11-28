@@ -8,6 +8,7 @@ use rune::Color;
 
 use crate::canvas::Scene;
 use crate::layout::draw::{Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::layout::layered::Spacing;
 use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean_quoted, parse_style_props, word};
 
@@ -40,12 +41,14 @@ const KINDS: [(&str, &str); 7] = [
 
 const RELATIONS: [&str; 7] = ["contains", "copies", "derives", "satisfies", "verifies", "refines", "traces"];
 
-pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Requirements> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<Requirements, ParseFail> {
     let mut d = Requirements { dir: Dir::Down, nodes: Vec::new(), edges: Vec::new() };
     let mut ids: HashMap<String, usize> = HashMap::new();
     let mut styles = StyleSheet::default();
     let mut open: Option<usize> = None;
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         if let Some(i) = open {
             let (l, closes) = l.strip_suffix('}').map_or((l, false), |r| (r.trim(), true));
             if let Some((k, v)) = l.split_once(':') {
@@ -84,7 +87,10 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Requirements> {
                 }
             }
         } else if let Some((kind, rest)) = KINDS.iter().find_map(|(w, k)| word(l, w).map(|r| (*k, r))) {
-            let Some(name) = rest.strip_suffix('{').map(str::trim).filter(|n| !n.is_empty()) else { continue };
+            let Some(name) = rest.strip_suffix('{').map(str::trim).filter(|n| !n.is_empty()) else {
+                skipped.record(line.line, l);
+                continue;
+            };
             let i = node(&mut d, &mut ids, &mut styles, name);
             d.nodes[i].kind = kind.to_owned();
             open = Some(i);
@@ -102,15 +108,20 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Requirements> {
                 style: EdgeStyle::default(),
                 on_cluster: [None; 2],
             });
+        } else {
+            skipped.record(line.line, l);
         }
         if d.nodes.len() + d.edges.len() > max_items {
-            return None;
+            return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
         }
     }
     for (name, i) in ids {
         d.nodes[i].style = styles.get(&name);
     }
-    (!d.nodes.is_empty()).then_some(d)
+    if d.nodes.is_empty() {
+        return Err(skipped.into_no_items());
+    }
+    Ok(d)
 }
 
 /// The node `name` (`"quoted"`, maybe with a `:::class`) names, added if it's new.

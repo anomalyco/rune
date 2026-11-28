@@ -8,6 +8,7 @@ use rune::{Align, Color};
 
 use super::{bold, small, soft, strong};
 use crate::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, over_color, room};
+use crate::error::{ParseFail, Skipped, SourceLine};
 use crate::{DiagramStyle, clean, parse_color_spec, word};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -47,12 +48,14 @@ pub(crate) struct Quadrant {
     pub points: Vec<Point>,
 }
 
-pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Quadrant> {
+pub(crate) fn parse(body: &[SourceLine<'_>], max_items: usize) -> Result<Quadrant, ParseFail> {
     let mut q = Quadrant::default();
     let mut classes: HashMap<String, Look> = HashMap::new();
     let mut pending: Vec<(String, [f32; 2], Look, Option<String>)> = Vec::new();
     let mut any = false;
-    for &l in body {
+    let mut skipped = Skipped::default();
+    for &line in body {
+        let l = line.text;
         let axis = |rest: &str| {
             let (a, b) = rest.split_once("-->").unwrap_or((rest, ""));
             [clean(a), clean(b)]
@@ -69,15 +72,19 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Quadrant> {
             if let Ok(n @ 1..=4) = n.parse::<usize>() {
                 q.names[n - 1] = clean(rest);
                 any = true;
+            } else {
+                skipped.record(line.line, l);
             }
         } else if let Some(rest) = word(l, "classDef") {
             let (name, props) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
             classes.insert(name.to_owned(), look(props));
         } else if let Some(p) = point(l) {
             if pending.len() >= max_items {
-                return None;
+                return Err(ParseFail::ItemLimit { limit: max_items, kind: "items" });
             }
             pending.push(p);
+        } else {
+            skipped.record(line.line, l);
         }
     }
     q.points = pending
@@ -87,7 +94,10 @@ pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Quadrant> {
             Point { name, at, look: look.or(&base) }
         })
         .collect();
-    (any || !q.points.is_empty()).then_some(q)
+    if !(any || !q.points.is_empty()) {
+        return Err(skipped.into_no_items());
+    }
+    Ok(q)
 }
 
 /// `Name[:::class]: [x, y] props`.
