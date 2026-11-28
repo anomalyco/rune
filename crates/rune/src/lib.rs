@@ -11,6 +11,8 @@ mod flight;
 mod frame;
 mod haptics;
 mod input;
+#[cfg(test)]
+mod labels_tests;
 mod native_menu;
 mod open_path;
 mod open_url;
