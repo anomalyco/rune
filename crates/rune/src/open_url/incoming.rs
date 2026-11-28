@@ -246,6 +246,11 @@ pub(crate) fn prepare() {
         INBOX.launched(links);
         if !files.is_empty() { FILES_INBOX.receive(files); }
     }
+    // macOS outside a bundle: Launch Services hands it nothing, so its links are its arguments.
+    #[cfg(target_os = "macos")]
+    if !crate::relaunch::bundled() {
+        INBOX.launched(super::instance::launch_arguments().0);
+    }
 }
 
 /// A link from a later launch of the app (Windows, Linux, `single_instance`), or the Dock menu's

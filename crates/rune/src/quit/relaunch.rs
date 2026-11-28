@@ -11,7 +11,7 @@
 const AFTER: &str = "RUNE_RELAUNCH_AFTER";
 /// The variable that tells a launch handed on by a quitting process (`spawn_with`) that process's
 /// pid: it claims the instance once that one lets go of it, not once it has exited.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 const HANDED: &str = "RUNE_INSTANCE_HANDED";
 /// The longest a relaunched process waits for the previous one.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -34,7 +34,7 @@ pub(crate) fn spawn() {
 /// quits (`single_instance`). The new process claims the instance as soon as this one lets go of
 /// it (`release_instance`), and starts meanwhile. The launch's activation token (Linux) goes to
 /// it as `XDG_ACTIVATION_TOKEN`, so its first window takes the focus the launch asked for.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn spawn_with(args: Vec<String>, token: Option<String>) {
     if let Err(e) = start(args.into_iter().map(Into::into).collect(), HANDED, token.as_deref()) {
         eprintln!("rune: couldn't start the app for a launch that came while it quit: {e}");
@@ -42,7 +42,7 @@ pub(crate) fn spawn_with(args: Vec<String>, token: Option<String>) {
 }
 
 /// The quitting process that handed this launch on (`spawn_with`), once.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn handed_from() -> Option<u32> {
     std::env::var_os(HANDED).and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok())).filter(|pid| *pid != std::process::id())
 }
@@ -60,7 +60,7 @@ fn start(args: Vec<std::ffi::OsString>, wait_var: &str, token: Option<&str>) -> 
     let mut cmd = Command::new(&exe);
     // Only this launch's wait goes to the new process, not one this process was started with.
     cmd.args(&args).env_remove(AFTER);
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     cmd.env_remove(HANDED);
     cmd.env(wait_var, &pid).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if let Some(token) = token { cmd.env("XDG_ACTIVATION_TOKEN", token).env_remove("DESKTOP_STARTUP_ID"); }
@@ -86,6 +86,14 @@ fn bundle_of(exe: &std::path::Path) -> Option<std::path::PathBuf> {
     let macos = exe.parent().filter(|p| p.file_name().is_some_and(|n| n == "MacOS"))?;
     let bundle = macos.parent().filter(|p| p.file_name().is_some_and(|n| n == "Contents"))?.parent()?;
     bundle.extension().is_some_and(|e| e == "app").then(|| bundle.to_path_buf())
+}
+
+/// Whether this process runs from an app bundle (`<name>.app/Contents/MacOS`), so Launch Services
+/// keeps it the app's only one and hands it its links.
+#[cfg(target_os = "macos")]
+pub(crate) fn bundled() -> bool {
+    static BUNDLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *BUNDLED.get_or_init(|| std::env::current_exe().ok().is_some_and(|exe| bundle_of(&exe).is_some()))
 }
 
 /// A relaunched process waits here, once, for the process that started it to exit, for at most
@@ -200,7 +208,7 @@ fn wait(pid: u32) {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 #[allow(unsafe_code)]
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }

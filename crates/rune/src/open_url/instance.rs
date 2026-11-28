@@ -35,7 +35,12 @@
 //! them. Without that a flag's value (`--server http://localhost:4096`) is taken for a link, and
 //! a later launch that carries one doesn't reopen the app.
 //!
-//! macOS keeps one process per app itself and hands links to it, so there this only says yes.
+//! macOS keeps one process per app bundle itself and hands links to it, so there a process
+//! started from its bundle only says yes. One started from an executable outside a bundle (a
+//! `target/debug` build, a launcher script's) gets nothing from Launch Services: a second one
+//! starts beside the first, and the links it was started with go nowhere. Such a process claims
+//! the same per-user socket as Linux (in `/tmp/rune-<uid>`, mode 0700), so a later launch's links reach the
+//! first one's `App::on_open_url`, and its own launch links reach its own.
 
 /// Makes this process the app's only running one, before it opens a window (Windows, Linux).
 ///
@@ -60,7 +65,11 @@
 /// the socket. A `DBusActivatable` entry also needs the desktop file named `<id>.desktop` and a
 /// session service file (`dbus-1/services/<id>.service`) that starts the app.
 ///
-/// macOS and other platforms: always true. macOS already reaches the running app.
+/// macOS: true for a process started from its app bundle (Launch Services already reaches the
+/// running app). A process started from an executable outside a bundle claims the socket as Linux
+/// does (without the session bus), so a later such launch's links reach this one.
+///
+/// Other platforms: always true.
 pub fn single_instance(id: &str) -> bool {
     // A relaunch (`Tx::relaunch`) claims once the process it restarts has let go.
     #[cfg(target_os = "windows")]
@@ -74,7 +83,11 @@ pub fn single_instance(id: &str) -> bool {
     {
         linux::claim(id)
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        if crate::relaunch::bundled() { true } else { linux::claim(id) }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = id;
         true
@@ -89,7 +102,7 @@ pub fn single_instance(id: &str) -> bool {
 pub fn release_instance() {
     #[cfg(target_os = "windows")]
     windows::release();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     linux::release();
 }
 
@@ -172,14 +185,14 @@ pub(crate) fn sort_with(args: &[String], schemes: Option<&[String]>) -> (Vec<Str
 
 /// The links and files among this process's launch arguments (Windows passes a link to the
 /// process it starts for it as an argument, Linux a link or a file's URI).
-#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub(crate) fn launch_arguments() -> (Vec<String>, Vec<std::path::PathBuf>) {
     sort_arguments(&std::env::args().skip(1).collect::<Vec<_>>())
 }
 
 /// The loop's side of a later launch without links (`on_relaunch`), and the window it brings
 /// forward (Windows).
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) use handoff::{exited, launches_waiting, on_relaunch, served};
 #[cfg(target_os = "linux")]
 pub(crate) use handoff::token_waiting;
@@ -207,8 +220,8 @@ pub(crate) fn handed_token(own: Option<String>) -> Option<String> {
 pub(crate) use windows::{raise_front, released};
 
 /// What Windows' pipe and Linux's socket share: the message, its answers and their waits, and
-/// what the first process does with a launch it took.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+/// what the first process does with a launch it took (and macOS's, outside a bundle).
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod handoff {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -472,7 +485,8 @@ mod handoff {
 #[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(target_os = "linux")]
+/// Linux's socket, which a macOS process outside a bundle claims too.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux;
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]

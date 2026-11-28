@@ -625,8 +625,13 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 let proxy = this.proxy.clone();
                 crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
+            // macOS: only a process outside a bundle takes later launches (`single_instance`).
+            #[cfg(target_os = "macos")]
+            let takes_launches = !crate::relaunch::bundled();
             #[cfg(any(target_os = "windows", target_os = "linux"))]
-            {
+            let takes_launches = true;
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+            if takes_launches {
                 let proxy = this.proxy.clone();
                 crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
@@ -736,7 +741,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             // Windows, Linux: a later launch handed to this loop (`single_instance`) is served once
             // the app goes on with a window shown. One that came as the app ended (its last window
             // already closing, the quit not started) isn't: the process starts the app again for it.
-            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             if crate::open_url::instance::launches_waiting() && !event_loop.exiting() {
                 let windows: Vec<_> = this.hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect();
                 if crate::platform::reopen::has_visible(&windows) {
@@ -870,7 +875,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             },
             || crate::relaunch::spawn(),
             || {
-                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                 crate::open_url::instance::exited();
             },
         );

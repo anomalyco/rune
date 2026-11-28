@@ -8,8 +8,11 @@ use std::time::Duration;
 
 use super::handoff::{ACCEPTED, ANSWER_WITHIN, HANDED_WAIT, MAGIC, MAX_MESSAGE, QUITTING, REACH_FOR, arguments, message, relaunched};
 
-/// `sockaddr_un`'s path holds 108 bytes, its NUL included.
+/// `sockaddr_un`'s path holds 108 bytes on Linux, 104 on macOS, its NUL included.
+#[cfg(not(target_os = "macos"))]
 const PATH_MAX: usize = 107;
+#[cfg(target_os = "macos")]
+const PATH_MAX: usize = 103;
 
 /// The claimed socket's path and inode (a launch that took it over binds its own there, which
 /// `release` leaves alone), and the listener's thread.
@@ -34,7 +37,7 @@ pub(super) fn claim(id: &str) -> bool {
             Ok(listener) => {
                 let claimed = claimed(path, listener);
                 // The session bus's `org.freedesktop.Application`, served beside the socket.
-                #[cfg(feature = "dbus")]
+                #[cfg(all(target_os = "linux", feature = "dbus"))]
                 super::dbus::serve(id);
                 return claimed;
             }
@@ -82,7 +85,13 @@ fn socket_path(id: &str) -> Option<PathBuf> {
 fn own_temp_dir() -> Option<PathBuf> {
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };
-    let dir = std::env::temp_dir().join(format!("rune-{uid}"));
+    // macOS's per-user temporary folder (`/var/folders/…/T`) leaves too little of a socket's
+    // 104 bytes for its name: `/tmp`, where the folder's owner and mode keep it the user's.
+    #[cfg(target_os = "macos")]
+    let temp = std::path::PathBuf::from("/tmp");
+    #[cfg(not(target_os = "macos"))]
+    let temp = std::env::temp_dir();
+    let dir = temp.join(format!("rune-{uid}"));
     match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
         Ok(()) => {}
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
@@ -129,7 +138,7 @@ pub(super) fn release() {
     if RELEASED.swap(true, Ordering::AcqRel) {
         return;
     }
-    #[cfg(feature = "dbus")]
+    #[cfg(all(target_os = "linux", feature = "dbus"))]
     super::dbus::release();
     // A launch took the name over while this process didn't answer: the socket there is its,
     // and this listener, which nothing reaches any more, goes with the process.
@@ -209,3 +218,7 @@ fn wait_free(path: &Path) {
     }
     std::fs::remove_file(path).ok();
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "linux_tests.rs"]
+mod tests;
