@@ -226,3 +226,97 @@ fn from_popup_menu_clamps_under_roomy_menu_metrics() {
     let rect = rt.presented("pm-menu").expect("roomy clamped menu").0;
     assert!(rect[0] >= 0.0 && rect[1] >= 0.0 && rect[0] + rect[2] <= 260.5 && rect[1] + rect[3] <= 200.5, "clamped: {rect:?}");
 }
+
+#[test]
+fn rtl_with_anchor_rect_and_positioned_anchor_open_from_start_edge() {
+    use crate::{MenuItem, Placement};
+    #[derive(Default)]
+    struct S { positioned: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let mut layer = Vec::new();
+        let body = el().key("body").w_full().h_full();
+        let anchor = if s.positioned { [420.0, 60.0, 120.0, 0.0] } else { [420.0, 60.0, 120.0, 28.0] };
+        let gutter = if s.positioned { 0.0 } else { 4.0 };
+        let _ = Menu::new("rtl-anchor")
+            .with_anchor_rect(anchor)
+            .placement(Placement::BottomStart)
+            .gutter(gutter)
+            .item(MenuItem::new("First"))
+            .item(MenuItem::new("Second"))
+            .open(true)
+            .build(&k, &mut layer);
+        root(body, layer).dir(rune::Direction::Rtl)
+    }
+
+    // Dropdown anchor_rect: physical [420..540, 60..88] in a 600pt RTL window must NOT mirror
+    // to [60..180]; the menu's right edge aligns with the anchor's right (start) edge (540).
+    let mut rt = rune::Runtime::new(S { positioned: false }, view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let proxy = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("rtl-anchor-anchor")).unwrap();
+    assert!((proxy.rect[0] - 420.0).abs() < 0.5, "anchor proxy must stay unmirrored at x=420: {:?}", proxy.rect);
+    let menu = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("rtl-anchor-menu")).unwrap();
+    assert!((menu.rect[0] + menu.rect[2] - 540.0).abs() < 1.0, "RTL dropdown aligns right edge with anchor start edge 540: {:?}", menu.rect);
+    assert!((menu.rect[1] - 92.0).abs() < 1.0, "dropdown opens below anchor + gutter: {:?}", menu.rect);
+
+    // Positioned anchor_rect: [420, 60, 120, 0] covers from top of anchor, right edge at 540.
+    let mut rt = rune::Runtime::new(S { positioned: true }, view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let menu = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("rtl-anchor-menu")).unwrap();
+    assert!((menu.rect[0] + menu.rect[2] - 540.0).abs() < 1.0, "RTL positioned menu aligns right edge with anchor start edge 540: {:?}", menu.rect);
+    assert!((menu.rect[1] - 60.0).abs() < 1.0, "positioned menu opens at anchor top y=60: {:?}", menu.rect);
+}
+
+#[test]
+fn from_popup_menu_formats_keycaps_and_positions_from_start_edge_in_rtl() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    fn rtl_view(s: &Demo, cx: &mut Cx<Demo>) -> El {
+        let k = Kit::neutral(cx.system_dark());
+        let mut layer = Vec::new();
+        let body = col().key("body").w_full().h_full().padding(20.0)
+            .child(el().key("picker-btn").size(120.0, 28.0).focusable(true).on_press_tx(|s: &mut Demo, tx: &mut Tx| {
+                let menu = PopupMenu::picker([("a", "Alpha"), ("b", "Beta")], &s.theme);
+                tx.popup_menu(menu, "picker-btn", |_: &mut Demo, _, _| {});
+            }))
+            .child(el().key("ctx-btn").size(120.0, 28.0).on_press_tx(|_: &mut Demo, tx: &mut Tx| {
+                let menu = PopupMenu::new().item(PopupItem::new("reset", "Reset Zoom").key_equivalent("ctrl+alt+0".parse().unwrap()));
+                tx.popup_menu(menu, (400.0, 80.0), |_: &mut Demo, _, _| {});
+            }));
+        if let Some(req) = &s.popup {
+            let _ = Menu::from_popup_menu("pm", req, |s: &mut Demo, picked, tx: &mut Tx| {
+                s.popup = None;
+                tx.resolve_popup_menu(picked);
+            }).build(&k, &mut layer);
+        }
+        root(body, layer).dir(rune::Direction::Rtl)
+    }
+    let mut rt = App::new(AppSpec::new("kit-popup-rtl", (600.0, 300.0), || Demo { theme: "a".into(), ..Demo::default() }, rtl_view))
+        .on_popup_menu(|s: &mut Demo, req: PopupMenuRequest, _| s.popup = Some(req))
+        .headless_runtime((600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // 1. Positioned picker opens from the trigger's start (right) edge in RTL.
+    let btn = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("picker-btn")).unwrap();
+    let (bx, by) = rt.find("picker-btn").unwrap();
+    rt.pointer_down(bx, by);
+    rt.pointer_up(bx, by);
+    rt.frame(0.0);
+    let menu = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("pm-menu")).unwrap();
+    let btn_right = btn.rect[0] + btn.rect[2];
+    let menu_right = menu.rect[0] + menu.rect[2];
+    assert!((menu_right - btn_right).abs() < 1.5, "RTL positioned popup right edge {menu_right} should match trigger start edge {btn_right}");
+    rt.key(KeyEvent::from(Key::Escape));
+    rt.frame(0.0);
+
+    // 2. Shortcut displays formatted keycaps (not raw accelerator string "ctrl+alt+0").
+    let (cx, cy) = rt.find("ctx-btn").unwrap();
+    rt.pointer_down(cx, cy);
+    rt.pointer_up(cx, cy);
+    rt.frame(0.0);
+    let shortcut_el = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("shortcut")).expect("shortcut text mounted");
+    let expected = "ctrl+alt+0".parse::<rune::Shortcut>().unwrap().menu_keycaps().join(if cfg!(target_os = "macos") { "" } else { "+" });
+    assert_eq!(shortcut_el.text.as_deref(), Some(expected.as_str()));
+    assert_ne!(shortcut_el.text.as_deref(), Some("ctrl+alt+0"));
+}

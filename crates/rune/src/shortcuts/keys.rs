@@ -153,6 +153,8 @@ mod tests {
 
     #[test]
     fn keycaps_capitalize_characters_and_name_keys() {
+        let _guard = crate::labels::test_lock();
+        crate::set_labels(|_| None);
         let key = |s: &str| s.parse::<Shortcut>().unwrap().keycaps().pop().unwrap();
         assert_eq!(key("ctrl+space"), "Space");
         assert_eq!(key("ctrl+f5"), "F5");

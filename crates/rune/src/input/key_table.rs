@@ -204,10 +204,21 @@ pub(crate) fn modifier_glyphs(m: Mods) -> String {
     held_mod_specs(m).map(|s| s.glyph).collect()
 }
 
-/// Keycaps for held modifiers (`rune::modifier_keycaps`): glyphs on macOS, words elsewhere.
+/// Localizes a keycap word longer than one character (`"Ctrl"`, `"Shift"`, `"Page Up"`,
+/// `"Space"`, `"F5"`) through [`crate::Label::Key`]. Single characters and macOS glyphs stay
+/// untouched so native key equivalents never pick up a translated word.
+fn key_word(word: &str) -> String {
+    if word.chars().nth(1).is_some() {
+        crate::labels::label(crate::Label::Key(word))
+    } else {
+        word.to_owned()
+    }
+}
+
+/// Keycaps for held modifiers (`rune::modifier_keycaps`): glyphs on macOS, localized words elsewhere.
 pub(crate) fn modifier_keycaps(m: Mods) -> Vec<String> {
     let mac = cfg!(target_os = "macos");
-    held_mod_specs(m).map(|s| if mac { s.glyph } else { s.word }.to_owned()).collect()
+    held_mod_specs(m).map(|s| if mac { s.glyph.to_owned() } else { key_word(s.word) }).collect()
 }
 
 // ── Named & Function Keys ────────────────────────────────────────────────────
@@ -271,12 +282,13 @@ pub(crate) fn canonical_named_alias(alias: &str) -> Option<&'static str> {
 }
 
 /// Keycap label for a `Shortcut`'s stable lowercase named/function key (`"space"`, `"f5"`,
-/// `"enter"`, `"left"`, ...). Returns `None` for letters, digits, and punctuation.
+/// `"enter"`, `"left"`, ...). Returns `None` for letters, digits, and punctuation. Multi-character
+/// words resolve through [`crate::Label::Key`]; single characters and macOS glyphs stay as given.
 pub(crate) fn shortcut_named_label(name: &str) -> Option<String> {
-    if name == "space" { return Some("Space".into()); }
-    if let Some(n) = parse_function_key(name, 'f') { return Some(format!("F{n}")); }
+    if name == "space" { return Some(key_word("Space")); }
+    if let Some(n) = parse_function_key(name, 'f') { return Some(key_word(&format!("F{n}"))); }
     let spec = named_by_alias(name)?;
-    Some(if cfg!(target_os = "macos") { spec.mac_label } else { spec.shortcut_pc_label }.into())
+    Some(key_word(if cfg!(target_os = "macos") { spec.mac_label } else { spec.shortcut_pc_label }))
 }
 
 /// Compact cap glyph for a named `Key` in the `--keys` overlay.

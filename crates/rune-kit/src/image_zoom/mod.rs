@@ -343,7 +343,7 @@ struct PreviewCore {
     natural: [f32; 2],
     image: El,
     icons: Option<[&'static Icon; 2]>,
-    labels: [String; 4],
+    labels: Option<[String; 4]>,
     format: fn(u32) -> String,
     controls: Option<rune::Transition>,
     pan_cursors: bool,
@@ -355,7 +355,7 @@ impl PreviewCore {
             natural,
             image,
             icons: None,
-            labels: ["Zoom out".into(), "Zoom to fit".into(), "Zoom in".into(), "Close".into()],
+            labels: None,
             format: |n| format!("{n}%"),
             controls: None,
             pan_cursors: true,
@@ -389,7 +389,12 @@ impl PreviewCore {
     /// The zoom bar (`image-preview-controls`): −, the level (which fits it), +, a divider and
     /// close, on the first layer with the floating shadow.
     fn bar(&self, zoom: &ImageZoom, k: &Kit, bind: &dyn PreviewBind) -> El {
-        let [out, fit, into, close_label] = self.labels.clone();
+        let [out, fit, into, close_label] = self.labels.clone().unwrap_or_else(|| [
+            rune::labels::label(rune::Label::ZoomOut),
+            rune::labels::label(rune::Label::ZoomToFit),
+            rune::labels::label(rune::Label::ZoomIn),
+            rune::labels::label(rune::Label::Close),
+        ]);
         let level = (self.format)(zoom.level());
         let mut bar = row().key("image-preview-controls").gap(2.0).padding(2.0).center_y().radius(8.0).fill(k.c.layer_01);
         if let Some(t) = self.controls.clone() { bar = bar.transition(t); }
@@ -457,7 +462,7 @@ impl<S: 'static> Preview<S> {
 
     /// Accessible names: zoom out, zoom to fit (also the level's tooltip), zoom in and close.
     pub fn labels(mut self, zoom_out: impl Into<String>, fit: impl Into<String>, zoom_in: impl Into<String>, close: impl Into<String>) -> Self {
-        self.core.labels = [zoom_out.into(), fit.into(), zoom_in.into(), close.into()];
+        self.core.labels = Some([zoom_out.into(), fit.into(), zoom_in.into(), close.into()]);
         self
     }
 

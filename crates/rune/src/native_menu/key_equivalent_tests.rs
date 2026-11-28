@@ -53,6 +53,8 @@ fn every_key_has_one_lowercase_character() {
 
 #[test]
 fn menu_keycaps_show_the_accelerator() {
+    let _guard = crate::labels::test_lock();
+    crate::set_labels(|_| None);
     let caps = |s: &str| s.parse::<Shortcut>().unwrap().menu_keycaps();
     let mac = cfg!(target_os = "macos");
     assert_eq!(caps("cmd+b"), [if mac { "⌘" } else { "Super" }, "B"]);
@@ -76,6 +78,21 @@ fn cmd_q_shortcut_matches_builtin_terminate_yield_equivalent() {
     assert_eq!(eq, super::standard::yieldable_equivalent(true, false, false, Some("terminate:")));
 }
 
+#[test]
+fn label_key_translation_never_affects_native_key_equivalents() {
+    let _guard = crate::labels::test_lock();
+    crate::set_labels(|l| match l {
+        crate::Label::Key(_) => Some("TRANSLATED".into()),
+        _ => None,
+    });
+    assert_eq!(equivalent("cmd+s"), eq("s", COMMAND));
+    assert_eq!(equivalent("cmd+="), eq("=", COMMAND));
+    assert_eq!(equivalent("cmd+space"), eq(" ", COMMAND));
+    assert_eq!(equivalent("cmd+enter"), eq("\r", COMMAND));
+    assert_eq!(equivalent("alt+cmd+left"), eq("\u{f702}", OPTION | COMMAND));
+    assert_eq!(equivalent("f5"), eq("\u{f708}", 0));
+}
+
 /// Dvorak's characters at QWERTY positions, by Carbon key code, under any modifiers.
 #[cfg(target_os = "macos")]
 fn dvorak(key: u32, _modifiers: u32) -> Option<String> {
@@ -85,6 +102,8 @@ fn dvorak(key: u32, _modifiers: u32) -> Option<String> {
 #[cfg(target_os = "macos")]
 #[test]
 fn dvorak_moves_keycaps_but_not_menu_equivalents() {
+    let _guard = crate::labels::test_lock();
+    crate::set_labels(|_| None);
     crate::shortcuts::force_layout(Some(dvorak));
     let shortcut = |s: &str| s.parse::<Shortcut>().unwrap();
     // Layout labels follow the key's position: QWERTY B types "x" on Dvorak.

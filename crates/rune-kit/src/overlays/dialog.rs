@@ -95,7 +95,7 @@ impl Dialog {
         if let Some(button) = self.button {
             let close_label = self.close_label
                 .filter(|l| !l.trim().is_empty())
-                .unwrap_or_else(|| "Close".into());
+                .unwrap_or_else(|| rune::labels::label(rune::Label::Close));
             let dismiss = IconButton::new(k.glyph.close).variant(IconButtonVariant::Ghost)
                 .control_size(ControlSize::Regular).label(close_label).disabled(self.close_disabled)
                 .build(k).key("close");

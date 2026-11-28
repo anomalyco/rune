@@ -254,7 +254,7 @@ struct ComboboxCore {
     options: Rc<Vec<ComboboxOption>>,
     current: Option<String>,
     placeholder: String,
-    search_placeholder: String,
+    search_placeholder: Option<String>,
     search_label: Option<String>,
     empty: String,
     width: f32,
@@ -276,7 +276,7 @@ impl ComboboxCore {
             options: Rc::new(options.to_vec()),
             current: None,
             placeholder: String::new(),
-            search_placeholder: "Search".into(),
+            search_placeholder: None,
             search_label: None,
             empty: "No results".into(),
             width: 280.0,
@@ -316,11 +316,16 @@ impl ComboboxCore {
         let page = page_size(self.max_height, k.popup_row_metrics().height);
         // The search field sits borderless over a divider: the open popover is its frame, and the
         // caret shows its focus.
+        let search_placeholder = self.search_placeholder
+            .unwrap_or_else(|| rune::labels::label(rune::Label::Search(None)));
         let search_label = self.search_label
             .filter(|l| !l.trim().is_empty())
-            .unwrap_or_else(|| if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") });
+            .unwrap_or_else(|| {
+                let target = (!name.is_empty()).then_some(name.as_str());
+                rune::labels::label(rune::Label::Search(target))
+            });
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
-            .width(None).placeholder(self.search_placeholder).label(search_label)
+            .width(None).placeholder(search_placeholder).label(search_label)
             .auto_complete(rune::AutoComplete::List)
             .active_descendant(active.map(|i| format!("{}-option-{}", self.key, self.options[i].id)));
         // Without it, an edit's commit is instant: the filtered rows and the height land with the text.
@@ -368,7 +373,7 @@ impl<S: 'static> Combobox<S> {
     pub fn label(mut self, text: impl Into<String>) -> Self { self.core.label = Some(text.into()); self }
     pub fn current(mut self, id: Option<&str>) -> Self { self.core.current = id.map(str::to_owned); self }
     pub fn placeholder(mut self, text: impl Into<String>) -> Self { self.core.placeholder = text.into(); self }
-    pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.core.search_placeholder = text.into(); self }
+    pub fn search_placeholder(mut self, text: impl Into<String>) -> Self { self.core.search_placeholder = Some(text.into()); self }
     /// The accessible name for the popover's search input (the web's `aria-label`), for
     /// localisation or a more specific prompt than the default `"Search"` / `"Search <label>"`.
     /// Accessibility-only (not drawn); blank values fall back to the default.
