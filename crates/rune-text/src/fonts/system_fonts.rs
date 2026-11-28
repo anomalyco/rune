@@ -4,12 +4,14 @@
 //! None is touched at launch: a system font loads the first time a text has a character the
 //! app's own fonts lack (`TextSystem::load_fallbacks`). The platform's own fallback names the
 //! font and its files, as browsers ask it: DirectWrite on Windows (`direct_write`), CoreText on
-//! Apple platforms (`core_text`), fontconfig in process elsewhere (`fontconfig`). No font
-//! folder is walked and no process is started. `RUNE_SYSTEM_FONTS=off` or
-//! `set_system_fonts(false)` loads none at all (`switch`).
+//! Apple platforms (`core_text`), `font_fallback.xml` / `fonts.xml` on Android (`android`), and
+//! fontconfig in process on Linux/BSDs (`fontconfig`). No font folder is walked and no process is
+//! started. `RUNE_SYSTEM_FONTS=off` or `set_system_fonts(false)` loads none at all (`switch`).
 
 use crate::*;
 
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+mod android;
 mod async_load;
 mod blobs;
 #[cfg(target_vendor = "apple")]
@@ -23,14 +25,16 @@ mod fontconfig;
 mod installed;
 mod switch;
 mod warm;
+#[cfg(target_os = "android")]
+use android as platform;
 #[cfg(target_vendor = "apple")]
 use core_text as platform;
 #[cfg(windows)]
 use direct_write as platform;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 use fontconfig as platform;
-/// Android and the web: no system fonts to ask.
-#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+/// Web: no system fonts to ask.
+#[cfg(target_arch = "wasm32")]
 mod platform {
     pub(crate) fn family_files(_: &[&str]) -> Vec<std::path::PathBuf> { Vec::new() }
     pub(crate) fn fallback_family_files(_: &[char], _: Option<&str>) -> Vec<std::path::PathBuf> { Vec::new() }
@@ -81,7 +85,7 @@ pub(crate) const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Emoji"];
 // without one of them, a Latin combining mark Inter lacks (U+0335, U+0322) draws as tofu.
 // Current Noto releases name Symbols 2 with a space ("Noto Sans Symbols 2"), while older packages
 // used "Noto Sans Symbols2"; list both so either matches fontique's family lookup.
-#[cfg_attr(any(target_vendor = "apple", windows), allow(dead_code))]
+#[cfg_attr(any(target_vendor = "apple", windows, target_os = "android"), allow(dead_code))]
 pub(crate) const LINUX_SYMBOL_FAMILIES: &[&str] = &[
     "DejaVu Sans",
     "Noto Sans",
@@ -91,11 +95,20 @@ pub(crate) const LINUX_SYMBOL_FAMILIES: &[&str] = &[
     "DejaVu Sans Mono",
     "Noto Color Emoji",
 ];
-#[cfg(not(any(target_vendor = "apple", windows)))]
+#[cfg(target_os = "android")]
+pub(crate) const SYMBOL_FAMILIES: &[&str] = &[
+    "Roboto",
+    "Noto Sans",
+    "Noto Sans Symbols 2",
+    "Noto Sans Symbols2",
+    "Noto Sans Symbols",
+    "Noto Color Emoji",
+];
+#[cfg(not(any(target_vendor = "apple", windows, target_os = "android")))]
 pub(crate) const SYMBOL_FAMILIES: &[&str] = LINUX_SYMBOL_FAMILIES;
 // Only Noto Sans's upright regular file, static or variable, so other Noto Sans* script fonts
 // stay out when matching by file name.
-#[cfg_attr(any(target_vendor = "apple", windows), allow(dead_code))]
+#[cfg_attr(any(target_vendor = "apple", windows, target_os = "android"), allow(dead_code))]
 pub(crate) const LINUX_SYMBOL_FONT_FILES: &[&str] = &[
     "dejavusans",
     "notosans-regular",
@@ -103,7 +116,15 @@ pub(crate) const LINUX_SYMBOL_FONT_FILES: &[&str] = &[
     "notosanssymbols",
     "notocoloremoji",
 ];
-#[cfg(not(any(target_vendor = "apple", windows)))]
+#[cfg(target_os = "android")]
+pub(crate) const SYMBOL_FONT_FILES: &[&str] = &[
+    "roboto",
+    "notosans-regular",
+    "notosans[",
+    "notosanssymbols",
+    "notocoloremoji",
+];
+#[cfg(not(any(target_vendor = "apple", windows, target_os = "android")))]
 pub(crate) const SYMBOL_FONT_FILES: &[&str] = LINUX_SYMBOL_FONT_FILES;
 
 // `Family::SystemMono`: the platform's monospaced UI families, most preferred first, and the
@@ -116,10 +137,15 @@ const SYSTEM_MONO_FILES: &[&str] = &["sfnsmono", "menlo"];
 const SYSTEM_MONO_FAMILIES: &[&str] = &["Cascadia Mono", "Consolas", "Courier New"];
 #[cfg(windows)]
 const SYSTEM_MONO_FILES: &[&str] = &["cascadiamono", "consola", "cour"];
+// After Android's own `monospace` family (`android::monospace_files`).
+#[cfg(target_os = "android")]
+const SYSTEM_MONO_FAMILIES: &[&str] = &["Droid Sans Mono", "Roboto Mono", "Noto Sans Mono", "Cutive Mono"];
+#[cfg(target_os = "android")]
+const SYSTEM_MONO_FILES: &[&str] = &["droidsansmono", "robotomono", "notosansmono", "cutivemono"];
 // After fontconfig's own answer (`fontconfig_monospace`).
-#[cfg(not(any(target_vendor = "apple", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows, target_os = "android")))]
 const SYSTEM_MONO_FAMILIES: &[&str] = &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"];
-#[cfg(not(any(target_vendor = "apple", windows)))]
+#[cfg(not(any(target_vendor = "apple", windows, target_os = "android")))]
 const SYSTEM_MONO_FILES: &[&str] = &["dejavusansmono", "liberationmono", "notosansmono", "ubuntumono"];
 
 /// The installed `Family::SystemMono` families, most preferred first, loading their files.
@@ -133,6 +159,15 @@ pub(crate) fn load_system_mono(collection: &mut Collection, loaded: &mut LoadedF
     if let Some((family, files)) = fontconfig::monospace() {
         load_files(collection, loaded, files);
         names.push(family);
+    }
+    // Android's own `monospace` family from `font_fallback.xml` / `fonts.xml`.
+    #[cfg(target_os = "android")]
+    for id in load_files(collection, loaded, android::monospace_files()) {
+        if let Some(name) = collection.family_name(id)
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
     }
     load_files(collection, loaded, installed_files(SYSTEM_MONO_FAMILIES, SYSTEM_MONO_FILES).into_iter().take(12));
     for name in SYSTEM_MONO_FAMILIES {
@@ -350,11 +385,19 @@ impl TextSystem {
         {
             self.add_fallback_emoji(&family, files);
         }
+        #[cfg(target_os = "android")]
+        if self.emoji.is_none() {
+            let files = android::emoji_files();
+            if !files.is_empty() {
+                self.add_fallback_emoji("", files);
+            }
+        }
     }
 
-    /// Loads `files` and registers `family` (from fontconfig's generic `emoji`) at the end of
-    /// `symbol_families` as the colour emoji family when none is set yet.
-    #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
+    /// Loads `files` and registers `family` (from fontconfig's generic `emoji`, or Android's
+    /// `und-Zsye` fallback) at the end of `symbol_families` as the colour emoji family when none
+    /// is set yet.
+    #[cfg_attr(not(all(unix, not(target_vendor = "apple"))), allow(dead_code))]
     pub(crate) fn add_fallback_emoji(&mut self, family: &str, files: Vec<std::path::PathBuf>) {
         if self.emoji.is_some() {
             return;
@@ -363,7 +406,7 @@ impl TextSystem {
         self.finish_fallback_emoji(family, added);
     }
 
-    #[cfg_attr(not(all(unix, not(target_vendor = "apple"), not(target_os = "android"))), allow(dead_code))]
+    #[cfg_attr(not(all(unix, not(target_vendor = "apple"))), allow(dead_code))]
     pub(super) fn finish_fallback_emoji(&mut self, family: &str, added: Vec<FamilyId>) {
         let emoji_id = self
             .font_cx
@@ -650,6 +693,8 @@ fn walk_font_dirs() -> Vec<(String, std::path::PathBuf)> {
         }
     } else if cfg!(target_os = "ios") {
         dirs.push("/System/Library/Fonts".into());
+    } else if cfg!(target_os = "android") {
+        dirs.extend(["/system/fonts", "/product/fonts", "/system_ext/fonts"].map(Into::into));
     } else if cfg!(windows) {
         let root = std::env::var_os("WINDIR").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from);
         dirs.push(root.join("Fonts"));
