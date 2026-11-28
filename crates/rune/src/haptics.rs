@@ -314,7 +314,9 @@ impl<S: 'static> crate::Runtime<S> {
     ///
     /// At most 32 requests are kept (oldest dropped first), with a 30 ms same-kind cooldown on
     /// the runtime clock. Shown macOS windows and overlays drain and play them automatically via
-    /// `NSHapticFeedbackManager`; Windows, Linux and Web windows drain and discard them.
+    /// `NSHapticFeedbackManager`; Android's `RuneView` drains and plays them after each drawn
+    /// frame via `View.performHapticFeedback`; Windows, Linux and Web windows drain and discard
+    /// them.
     ///
     /// ```
     /// # use rune::{Env, Haptic, Runtime, el};

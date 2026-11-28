@@ -126,6 +126,15 @@ open class RuneView(
         mainHandler.post(wakeRunnable)
     }
 
+    /**
+     * Called by Rust (UI thread) after a drawn frame to play one
+     * [android.view.HapticFeedbackConstants] effect on this view without override flags, requiring
+     * no `VIBRATE` permission and following the system Touch Feedback setting.
+     */
+    fun performHaptic(feedbackConstant: Int) {
+        performHapticFeedback(feedbackConstant)
+    }
+
     fun onResume() {
         nativeResume()
     }
