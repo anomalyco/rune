@@ -51,6 +51,12 @@ const PROBE_ATTEMPTS: usize = 2;
 #[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
 static TRIM_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// Process-wide opt-in (default `false`; set by `App::trim_c_heap_at_rest(true)`) to trim
+/// glibc's C-library arenas (Mesa/Vulkan, GLib/GIO, fontconfig) even when Rust's global
+/// allocator is not glibc (e.g. mimalloc or jemalloc).
+#[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
+static TRIM_C_HEAP: AtomicBool = AtomicBool::new(false);
+
 /// Explicit state machine for the process-wide background heap trim.
 #[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +131,23 @@ pub(crate) fn set_trim_enabled(enabled: bool) {
 #[inline]
 pub(crate) fn set_trim_enabled(_enabled: bool) {}
 
+/// Sets the process-wide opt-in flag behind [`App::trim_c_heap_at_rest`](crate::App::trim_c_heap_at_rest).
+#[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn set_trim_c_heap(enabled: bool) {
+    TRIM_C_HEAP.store(enabled, Ordering::Relaxed);
+}
+
+/// No-op off Linux/glibc in non-test builds.
+#[cfg(not(any(test, all(target_os = "linux", target_env = "gnu"))))]
+#[inline]
+pub(crate) fn set_trim_c_heap(_enabled: bool) {}
+
+/// Whether trimming glibc's C-library arenas is opted in even under a custom Rust global allocator.
+#[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn trim_c_heap_enabled() -> bool {
+    TRIM_C_HEAP.load(Ordering::Relaxed)
+}
+
 /// Parses `RUNE_MALLOC_TRIM`: `"0"`, `"false"`, `"off"`, or `"no"` (case-insensitive)
 /// disables trimming; unset, empty, or other values leave it allowed.
 #[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
@@ -191,7 +214,7 @@ pub(super) fn probe_glibc_used(
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[allow(unsafe_code)]
 mod glibc {
-    use super::{TrimEffect, TrimEvent, TrimState, probe_glibc_used, step, trim_enabled};
+    use super::{TrimEffect, TrimEvent, TrimState, probe_glibc_used, step, trim_c_heap_enabled, trim_enabled};
     use std::ffi::{CStr, c_int};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
@@ -239,6 +262,7 @@ mod glibc {
     }
 
     static GLIBC_TRIM: OnceLock<Option<MallocTrimFn>> = OnceLock::new();
+    static GLIBC_C_TRIM: OnceLock<Option<MallocTrimFn>> = OnceLock::new();
     static COORD: OnceLock<Coordinator> = OnceLock::new();
     static TRIM_CALLS: AtomicU64 = AtomicU64::new(0);
     static LAST_TRIM_NANOS: AtomicU64 = AtomicU64::new(0);
@@ -305,6 +329,11 @@ mod glibc {
         probed.then_some(trim_fn)
     }
 
+    fn resolve_raw_glibc_trim() -> Option<MallocTrimFn> {
+        // SAFETY: `malloc_trim` matches glibc `<malloc.h>` ABI (`int malloc_trim(size_t)`).
+        unsafe { dlsym_default(c"malloc_trim") }
+    }
+
     pub(super) fn uses_glibc_allocator() -> bool {
         GLIBC_TRIM.get_or_init(resolve_glibc_trim).is_some()
     }
@@ -313,7 +342,12 @@ mod glibc {
         if !trim_enabled() {
             return;
         }
-        let Some(trim_fn) = *GLIBC_TRIM.get_or_init(resolve_glibc_trim) else {
+        let trim_fn = if trim_c_heap_enabled() {
+            *GLIBC_C_TRIM.get_or_init(resolve_raw_glibc_trim)
+        } else {
+            *GLIBC_TRIM.get_or_init(resolve_glibc_trim)
+        };
+        let Some(trim_fn) = trim_fn else {
             return;
         };
         let c = coord();

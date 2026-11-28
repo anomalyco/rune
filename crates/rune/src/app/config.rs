@@ -273,6 +273,23 @@ impl<S: 'static> crate::App<S> {
         self
     }
 
+    /// Opts in to trimming glibc's C-library arenas at rest on Linux (`target_env = "gnu"`)
+    /// even when the binary uses a custom Rust `#[global_allocator]` (such as mimalloc or
+    /// jemalloc).
+    ///
+    /// By default (`false`), Rune's rest trim skips when its allocator probe detects a custom
+    /// global allocator. Apps that link heavy glibc-allocating C libraries (Mesa/Vulkan,
+    /// GLib/GIO, fontconfig) can enable this so freed C-library arena pages still return to
+    /// `VmRSS` at rest, sharing the same 30 s cooldown, off-UI-thread task pool, and
+    /// `.trim_heap_at_rest(false)` / `RUNE_MALLOC_TRIM=0` opt-outs. Ignored off Linux/glibc.
+    pub fn trim_c_heap_at_rest(self, enabled: bool) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::window::rest::set_c_heap_trim_enabled(enabled);
+        #[cfg(target_arch = "wasm32")]
+        let _ = enabled;
+        self
+    }
+
     /// Controls whether whole mouse-wheel notches ease smoothly rather than jumping immediately
     /// for this app's window and overlays (default `true`; reduced motion still jumps).
     ///

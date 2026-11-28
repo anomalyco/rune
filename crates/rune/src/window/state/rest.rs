@@ -112,4 +112,7 @@ pub(crate) const fn should_poll_on_idle_rest(is_macos: bool, oversized_in_flight
     is_macos || oversized_in_flight
 }
 
-pub(crate) use super::heap_trim::{maybe_trim_heap, set_trim_enabled as set_heap_trim_enabled};
+pub(crate) use super::heap_trim::{
+    maybe_trim_heap, set_trim_c_heap as set_c_heap_trim_enabled,
+    set_trim_enabled as set_heap_trim_enabled,
+};

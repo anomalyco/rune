@@ -119,6 +119,33 @@ fn custom_global_allocator_skips_glibc_malloc_trim() {
     assert_eq!(
         rune::__heap_trim::trim_calls(),
         0,
-        "malloc_trim(0) must never run under a custom global allocator"
+        "malloc_trim(0) must never run under a custom global allocator by default"
     );
+
+    // Explicit opt-in trims glibc C-library arenas even under a custom global allocator.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let spec = rune::AppSpec::new("TrimCHeap", (320.0, 200.0), || (), |_, _| rune::el());
+        let _app = rune::App::new(spec).trim_c_heap_at_rest(true);
+        rune::__heap_trim::reset_cooldown();
+        rune::__heap_trim::on_rest();
+        rune::__heap_trim::wait_idle();
+        assert_eq!(
+            rune::__heap_trim::trim_calls(),
+            1,
+            "trim_c_heap_at_rest(true) must invoke malloc_trim(0) at rest under a custom allocator"
+        );
+
+        // trim_heap_at_rest(false) still overrides trim_c_heap_at_rest(true).
+        let spec_off = rune::AppSpec::new("TrimCHeapOff", (320.0, 200.0), || (), |_, _| rune::el());
+        let _app_off = rune::App::new(spec_off).trim_heap_at_rest(false);
+        rune::__heap_trim::reset_cooldown();
+        rune::__heap_trim::on_rest();
+        rune::__heap_trim::wait_idle();
+        assert_eq!(
+            rune::__heap_trim::trim_calls(),
+            1,
+            "trim_heap_at_rest(false) must still suppress trimming when trim_c_heap_at_rest is enabled"
+        );
+    }
 }
