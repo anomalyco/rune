@@ -79,6 +79,30 @@ fn tx_set_window_backdrop_merges_last_wins() {
 }
 
 #[test]
+fn tx_set_resize_anchor_latches_and_merges_last_wins() {
+    use crate::ResizeAnchor;
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| crate::el(), (300.0, 200.0), Env::default());
+    rt.frame(0.0);
+    assert_eq!(rt.host.window_resize_anchor, None);
+
+    rt.update(|_, tx| {
+        tx.set_resize_anchor(ResizeAnchor::Bottom);
+        tx.set_resize_anchor(ResizeAnchor::BottomRight);
+    });
+    assert_eq!(rt.host.window_resize_anchor.take(), Some(ResizeAnchor::BottomRight));
+    assert_eq!(rt.host.window_resize_anchor, None);
+
+    let mut base = Tx::default();
+    base.set_resize_anchor(ResizeAnchor::Bottom);
+    let mut later = Tx::default();
+    later.set_resize_anchor(ResizeAnchor::TopRight);
+    crate::runtime::input::action::merge(&mut base, later);
+    assert_eq!(base.resize_anchor, Some(ResizeAnchor::TopRight));
+    crate::runtime::input::action::merge(&mut base, Tx::default());
+    assert_eq!(base.resize_anchor, Some(ResizeAnchor::TopRight));
+}
+
+#[test]
 fn tx_set_represented_file_and_document_edited_latch_deduplicate_and_retain() {
     use std::path::PathBuf;
 

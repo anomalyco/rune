@@ -93,6 +93,74 @@ impl From<ResizeEdge> for winit::window::ResizeDirection {
     }
 }
 
+/// Which edge or corner of a window stays fixed when Rune resizes it
+/// ([`App::fit_content_height`](crate::App::fit_content_height),
+/// [`Tx::resize_window`](crate::Tx::resize_window),
+/// [`Tx::resize_window_instant`](crate::Tx::resize_window_instant),
+/// [`WindowHandle::resize`](crate::WindowHandle::resize),
+/// [`WindowHandle::resize_instant`](crate::WindowHandle::resize_instant)).
+///
+/// Defaults to [`ResizeAnchor::TopLeft`], keeping the top-left corner fixed as the window grows
+/// rightward and downward. Use [`ResizeAnchor::Bottom`] (or [`ResizeAnchor::BottomLeft`] /
+/// [`ResizeAnchor::BottomRight`]) for a bottom-anchored panel whose height grows upward.
+///
+/// Honoured on macOS (including spring-animated resizes), Windows (in one atomic `SetWindowPos`),
+/// X11, and headless virtual desktops. Ignored on Wayland (where compositors own window positions)
+/// and web.
+///
+/// ```no_run
+/// use rune::{AppSpec, ResizeAnchor, WindowSpec, el};
+///
+/// let spec = WindowSpec::new("launcher", AppSpec::new("Launcher", (600.0, 400.0), || (), |_, _| el()))
+///     .fit_content_height()
+///     .resize_anchor(ResizeAnchor::Bottom);
+/// let _ = spec;
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ResizeAnchor {
+    /// Keep the top and left edges fixed (default).
+    #[default]
+    TopLeft,
+    /// Keep the top edge fixed and preserve the horizontal centre when width changes.
+    Top,
+    /// Keep the top and right edges fixed.
+    TopRight,
+    /// Keep the left edge fixed and preserve the vertical centre when height changes.
+    Left,
+    /// Keep the centre fixed, growing and shrinking symmetrically.
+    Center,
+    /// Keep the right edge fixed and preserve the vertical centre when height changes.
+    Right,
+    /// Keep the bottom and left edges fixed.
+    BottomLeft,
+    /// Keep the bottom edge fixed and preserve the horizontal centre when width changes.
+    Bottom,
+    /// Keep the bottom and right edges fixed.
+    BottomRight,
+}
+
+impl ResizeAnchor {
+    /// Whether the right edge stays pinned when width changes.
+    pub(crate) const fn pins_right(self) -> bool {
+        matches!(self, Self::TopRight | Self::Right | Self::BottomRight)
+    }
+
+    /// Whether the horizontal centre stays pinned when width changes.
+    pub(crate) const fn centers_x(self) -> bool {
+        matches!(self, Self::Top | Self::Center | Self::Bottom)
+    }
+
+    /// Whether the bottom edge stays pinned when height changes.
+    pub(crate) const fn pins_bottom(self) -> bool {
+        matches!(self, Self::BottomLeft | Self::Bottom | Self::BottomRight)
+    }
+
+    /// Whether the vertical centre stays pinned when height changes.
+    pub(crate) const fn centers_y(self) -> bool {
+        matches!(self, Self::Left | Self::Center | Self::Right)
+    }
+}
+
 /// Process-level settings applied once, before constructing the native event loop.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RunOptions {
@@ -821,6 +889,17 @@ impl<S: 'static> WindowSpec<S> {
         reveal_fps(fps: f32);
         /// Size this window's height to its content, like `App::fit_content_height`.
         fit_content_height();
+        /// Which edge or corner stays fixed when Rune resizes this window, like [`App::resize_anchor`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ResizeAnchor, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("launcher", AppSpec::new("Launcher", (600.0, 400.0), || (), |_, _| el()))
+        ///     .fit_content_height()
+        ///     .resize_anchor(ResizeAnchor::Bottom);
+        /// let _ = spec;
+        /// ```
+        resize_anchor(anchor: crate::ResizeAnchor);
         /// Ask a tiling window manager to float this window when it opens, like `App::float_on_open`.
         float_on_open();
         /// Open this window without taking focus from the window that has it, such as a window a

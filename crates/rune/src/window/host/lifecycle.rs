@@ -195,6 +195,14 @@ impl Host {
         let _ = w;
     }
 
+    pub(in crate::window) fn set_resize_anchor(&mut self, anchor: crate::ResizeAnchor) {
+        self.resize_anchor = anchor;
+        #[cfg(target_os = "macos")]
+        if let Some(surface) = self.win.as_ref().and_then(|w| w.surface.as_ref()) {
+            crate::platform::macos::set_contents_gravity(surface, anchor);
+        }
+    }
+
     pub(in crate::window) fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
         self.color_scheme = scheme;
         self.apply_window_color_scheme();
@@ -705,6 +713,7 @@ impl Host {
         self.apply_tx_macos_document();
         self.show_title();
         self.apply_tx_color_scheme();
+        self.apply_tx_resize_anchor();
         if !self.gpu_loss_failed() { self.apply_tx_window_backdrop(); }
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
             w.toggle_maximized();

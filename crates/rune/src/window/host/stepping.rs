@@ -445,6 +445,7 @@ impl Host {
     /// inside the window's minimum and maximum. A size outlives the window: one created later
     /// opens at it. Returns whether macOS resized the surface immediately.
     pub(in crate::window) fn take_frame_request(&mut self, start: f64, painting: bool) -> bool {
+        self.apply_tx_resize_anchor();
         let rt = self.app.rt_mut();
         rt.host.fit.take_held();
         let Some(mut request) = rt.host.window_frame.take() else { return false };
@@ -467,7 +468,7 @@ impl Host {
         let Some(w) = &self.win else { return false };
         #[cfg(target_os = "macos")]
         {
-            use crate::window::frame::{FrameAnim, snap, target};
+            use crate::window::frame::{FrameAnim, snap_anchored, target};
             let Some((frame, visible, scale)) = crate::platform::macos::window_geometry(&w.window) else { return false };
             // Resizing again mid-flight keeps the edge the first resize keeps.
             let base = match &self.frame_move {
@@ -475,7 +476,7 @@ impl Host {
                 _ => frame,
             };
             let outer = request.size.and_then(|size| crate::platform::macos::outer_size(&w.window, size));
-            let to = snap(target(base, outer, request.center, visible), scale);
+            let to = snap_anchored(target(base, outer, request.center, visible, self.resize_anchor), scale, self.resize_anchor);
             // Centring alone carries on with a resize already moving.
             let spring = request.spring
                 .or(match &self.frame_move {
@@ -498,7 +499,31 @@ impl Host {
                 self.sync_surface_size()
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let _ = (start, painting);
+            let window = &w.window;
+            let requested = request.size;
+            if let Some(size) = requested {
+                self.frame_move = Some(FrameMove::jumped(size));
+            }
+            if let Some(plan) = crate::platform::win32::apply_window_frame(
+                window,
+                requested,
+                request.center,
+                self.resize_anchor,
+            ) {
+                if !plan.resized && requested.is_some() {
+                    self.frame_move = None;
+                }
+                if plan.moved {
+                    self.sync_origin();
+                    self.placement_watch.mark_dirty();
+                }
+            }
+            false
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         {
             let _ = start;
             let window = &w.window;
@@ -524,7 +549,7 @@ impl Host {
             let current = [position.x as f32, position.y as f32, outer.width as f32, outer.height as f32];
             let (origin, area) = (monitor.position(), monitor.size());
             let visible = [origin.x as f32, origin.y as f32, area.width as f32, area.height as f32];
-            let [x, y, ..] = crate::window::frame::target(current, size, request.center, visible);
+            let [x, y, ..] = crate::window::frame::target(current, size, request.center, visible, self.resize_anchor);
             if [x, y] != [current[0], current[1]] {
                 window.set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
                 self.sync_origin();
@@ -555,7 +580,7 @@ impl Host {
         self.take_frame_request(now, true);
         #[cfg(target_os = "macos")]
         {
-            use crate::window::frame::snap;
+            use crate::window::frame::snap_anchored;
             // The window server shows a move on the first frame after an idle spell before the
             // frame drawn for it, leaving a stale strip. A request taken then starts here and
             // moves from the next frame.
@@ -572,7 +597,7 @@ impl Host {
             if (frame[0] - x).abs() > 0.5 || (frame[1] - y).abs() > 0.5 {
                 anim.shift(frame[0] - x, frame[1] - y);
             }
-            let rect = snap(anim.sample(now).0, scale);
+            let rect = snap_anchored(anim.sample(now).0, scale, self.resize_anchor);
             crate::platform::macos::set_window_frame(&w.window, rect);
             *origin = [rect[0], rect[1]];
             if anim.done(now) { self.frame_move = None; }

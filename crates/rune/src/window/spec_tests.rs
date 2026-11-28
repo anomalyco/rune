@@ -865,3 +865,19 @@ fn app_and_window_spec_wide_color_defaults_false_and_retains_opt_in() {
     let headless = Display { id: None, name: None, position: (0, 0), size: (1280, 800), scale: 2.0, primary: true };
     assert!(!headless.wide_color(), "headless virtual display reports wide_color = false");
 }
+
+#[test]
+fn app_and_window_spec_resize_anchor_defaults_top_left_and_retains() {
+    use crate::ResizeAnchor;
+    let spec = || AppSpec::new("launcher", (600.0, 400.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).resize_anchor, ResizeAnchor::TopLeft);
+    assert_eq!(App::new(spec()).resize_anchor(ResizeAnchor::Bottom).resize_anchor, ResizeAnchor::Bottom);
+
+    let from_app = WindowSpec::from_app("launcher", App::new(spec()).resize_anchor(ResizeAnchor::BottomRight));
+    assert_eq!(from_app.app.resize_anchor, ResizeAnchor::BottomRight);
+
+    let via_spec = WindowSpec::new("launcher", spec()).resize_anchor(ResizeAnchor::Bottom);
+    assert_eq!(via_spec.app.resize_anchor, ResizeAnchor::Bottom);
+    // Replacing WindowOptions keeps portable resize_anchor intact.
+    assert_eq!(via_spec.options(WindowOptions::default()).app.resize_anchor, ResizeAnchor::Bottom);
+}

@@ -239,6 +239,21 @@ impl WindowHandle {
         let place = crate::windows::PlaceRequest::new(display, placement);
         self.send(move |slot| WakeEvent::Place(slot, place));
     }
+    /// Sets which edge or corner of this window stays fixed when Rune resizes it
+    /// ([`App::resize_anchor`](crate::App::resize_anchor),
+    /// [`Tx::set_resize_anchor`](crate::Tx::set_resize_anchor)). Retained across native window
+    /// recreation.
+    ///
+    /// ```no_run
+    /// use rune::{AppSpec, ResizeAnchor, WindowSpec, el};
+    ///
+    /// let spec = WindowSpec::new("launcher", AppSpec::new("Launcher", (600.0, 400.0), || (), |_, _| el()))
+    ///     .on_created(|handle| handle.set_resize_anchor(ResizeAnchor::Bottom));
+    /// let _ = spec;
+    /// ```
+    pub fn set_resize_anchor(&self, anchor: crate::ResizeAnchor) {
+        self.send(move |slot| WakeEvent::ResizeAnchor(slot, anchor));
+    }
     /// [`crate::Tx::resize_window`] from outside a handler, on `tok::motion::DEFAULT`.
     pub fn resize(&self, size: (f32, f32)) {
         self.frame(crate::window::frame::FrameRequest { size: Some(size), animate: true, ..Default::default() });

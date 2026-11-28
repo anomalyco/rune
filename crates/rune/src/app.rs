@@ -171,6 +171,7 @@ pub struct App<S: 'static> {
     pub(crate) canvas_id: Option<String>,
     pub(crate) full_viewport: bool,
     pub(crate) fit_content_height: bool,
+    pub(crate) resize_anchor: crate::ResizeAnchor,
     pub(crate) web_document: bool,
     /// `App::font_url`'s fonts, which a web app fetches before its first frame.
     #[cfg(target_arch = "wasm32")]
@@ -259,6 +260,7 @@ impl<S: 'static> App<S> {
             canvas_id: None,
             full_viewport: false,
             fit_content_height: false,
+            resize_anchor: crate::ResizeAnchor::TopLeft,
             web_document: false,
             #[cfg(target_arch = "wasm32")]
             font_urls: Vec::new(),

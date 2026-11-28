@@ -199,6 +199,7 @@ pub(crate) enum WakeEvent {
     ColorScheme(usize, crate::ColorScheme),
     #[cfg(not(target_arch = "wasm32"))]
     WindowBackdrop(usize, crate::WindowBackdrop),
+    ResizeAnchor(usize, crate::ResizeAnchor),
     /// App-wide color scheme changed (`AppHandle::set_color_scheme`): every host syncs with
     /// `app_color_scheme()`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -654,7 +655,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let _handling = crate::quit::handling();
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                    | WakeEvent::Position(i, _) | WakeEvent::LogicalPosition(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::WindowBackdrop(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::Position(i, _) | WakeEvent::LogicalPosition(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::WindowBackdrop(i, _) | WakeEvent::ResizeAnchor(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                     | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) | WakeEvent::ResizeSync(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);

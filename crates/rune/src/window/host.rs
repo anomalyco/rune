@@ -72,6 +72,9 @@ pub(in crate::window) struct Host {
     /// Requested whole-window system backdrop (`App::window_backdrop`, `Tx::set_window_backdrop`,
     /// `WindowHandle::set_window_backdrop`), retained across native window recreation.
     pub(in crate::window) window_backdrop: crate::WindowBackdrop,
+    /// Fixed edge or corner for programmatic/content resizes (`App::resize_anchor`,
+    /// `Tx::set_resize_anchor`, `WindowHandle::set_resize_anchor`), retained across recreation.
+    pub(in crate::window) resize_anchor: crate::ResizeAnchor,
     /// Optional macOS swap-chain frame latency (`App::frame_latency`).
     pub(in crate::window) frame_latency: Option<u32>,
     /// Opt-in wide-color extended-range linear sRGB surface (`App::wide_color`).
@@ -237,6 +240,7 @@ struct HostInit {
     exclude_from_capture: Option<bool>,
     color_scheme: crate::ColorScheme,
     window_backdrop: crate::WindowBackdrop,
+    resize_anchor: crate::ResizeAnchor,
     frame_latency: Option<u32>,
     wide_color: bool,
     native_handle: WindowHandle,
@@ -319,6 +323,7 @@ impl Host {
         let exclude_from_capture = app.exclude_from_capture;
         let color_scheme = app.color_scheme;
         let window_backdrop = app.window_backdrop;
+        let resize_anchor = app.resize_anchor;
         let frame_latency = app.frame_latency;
         let wide_color = app.wide_color;
         let gpu_loss_policy = app.gpu_loss_policy;
@@ -389,6 +394,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            resize_anchor,
             frame_latency,
             wide_color,
             native_handle,
@@ -450,6 +456,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            resize_anchor,
             frame_latency,
             wide_color,
             native_handle,
@@ -587,6 +594,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            resize_anchor,
             frame_latency,
             wide_color,
             applied_theme: None,
