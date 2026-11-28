@@ -16,3 +16,12 @@ mod machine_tests;
 pub use host::jni_on_load;
 #[cfg(target_os = "android")]
 pub(crate) use host::run;
+
+/// `winit`'s Android backend links `android-activity`'s `NativeActivity` glue, whose exported
+/// `ANativeActivity_onCreate` calls `android_main`. Rune hosts Android apps through
+/// `dev.rune.RuneView` (`JNI_OnLoad`), so that glue never runs; this no-op satisfies the
+/// symbol so Android's dynamic loader accepts the `.so`.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+fn android_main(_: winit::platform::android::activity::AndroidApp) {}

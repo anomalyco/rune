@@ -1,0 +1,1 @@
+- Android: defined a no-op `android_main` symbol in `rune::platform::android` to satisfy `winit`/`android-activity`'s linked `NativeActivity` glue so Android's dynamic loader accepts `cdylib` apps hosted by `dev.rune.RuneView`, and added dynamic-symbol verification to `scripts/android-run.sh`.
