@@ -38,18 +38,23 @@ pub fn run(opts: &DoctorArgs) -> Result<(), CliError> {
 
     match dx::detect() {
         DxStatus::Ready { path, version } => {
+            let unpinned_tag = if dx::is_required_dioxus_version(&version) {
+                ""
+            } else {
+                " [unpinned; default pin is 0.7.10]"
+            };
             if cfg!(windows) {
                 println!(
-                    "[warn] dx: {version} ({}) — live dylib patching is experimental on Windows; `rune dev` defaults to watch-and-restart (pass `--mode hot` to opt in)",
+                    "[warn] dx: {version} ({}){unpinned_tag} — stock upstream dx {REQUIRED_DX_VERSION} has known Windows patching bugs; `rune dev` defaults to watch-and-restart (pass `--mode hot` with a patched/newer dx via RUNE_DX or RUNE_DX_UNPINNED=1 to opt in)",
                     path.display()
                 );
             } else {
-                println!("[ok]   dx: {version} ({})", path.display());
+                println!("[ok]   dx: {version} ({}){unpinned_tag}", path.display());
             }
         }
         DxStatus::WrongVersion { path, version } => {
             println!(
-                "[warn] dx: found '{}' at {}, expected dioxus-cli {REQUIRED_DX_VERSION} (the Deno `dx` command is unrelated). Install with: {}",
+                "[warn] dx: found '{}' at {}, expected dioxus-cli {REQUIRED_DX_VERSION} (the Deno `dx` command is unrelated). Install with: {} (or set RUNE_DX / RUNE_DX_UNPINNED=1)",
                 version,
                 path.display(),
                 DxStatus::install_hint()

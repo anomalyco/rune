@@ -1,4 +1,4 @@
-//! Detection and version verification for Dioxus CLI (`dx`) 0.7.10.
+//! Detection and version verification for Dioxus CLI (`dx`).
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -26,9 +26,30 @@ impl DxStatus {
 }
 
 /// Locates `dx` (checking `RUNE_DX`, `CARGO_HOME/bin`, `~/.cargo/bin`, and `PATH`) and checks
-/// that it is Dioxus CLI 0.7.10 (not the unrelated Deno `dx` binary or another version).
+/// that it is a supported Dioxus CLI binary.
+///
+/// By default, auto-detected binaries must match `REQUIRED_DX_VERSION` (`0.7.10`) so unrelated
+/// tools like Deno's `dx` and untested versions are skipped. Setting `RUNE_DX=/path/to/dx`
+/// accepts any Dioxus CLI build (relaxing the exact version pin), and setting
+/// `RUNE_DX_UNPINNED=1` also relaxes the exact version pin on auto-detected paths (still skipping
+/// non-Dioxus binaries such as Deno's `dx`).
 pub fn detect() -> DxStatus {
-    let candidates = candidate_paths();
+    let unpinned = is_unpinned_env();
+    let explicit = env::var_os("RUNE_DX")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = explicit {
+        if !path.is_file() {
+            return DxStatus::Missing;
+        }
+        let version = read_version(&path);
+        if accepts_version(&version, true, unpinned) {
+            return DxStatus::Ready { path, version };
+        }
+        return DxStatus::WrongVersion { path, version };
+    }
+
+    let candidates = auto_candidate_paths();
     let mut fallback_wrong: Option<(PathBuf, String)> = None;
 
     for path in candidates {
@@ -36,7 +57,7 @@ pub fn detect() -> DxStatus {
             continue;
         }
         let version = read_version(&path);
-        if is_required_dioxus_version(&version) {
+        if accepts_version(&version, false, unpinned) {
             return DxStatus::Ready { path, version };
         }
         if fallback_wrong.is_none() {
@@ -50,16 +71,49 @@ pub fn detect() -> DxStatus {
     }
 }
 
-/// Returns `true` if `version_output` identifies Dioxus CLI 0.7.10.
+/// Returns `true` if `version_output` identifies Dioxus CLI `REQUIRED_DX_VERSION`.
 pub fn is_required_dioxus_version(version_output: &str) -> bool {
-    let lower = version_output.to_ascii_lowercase();
-    if !lower.contains("dioxus") {
+    if !is_any_dioxus_version(version_output) {
         return false;
     }
+    let lower = version_output.to_ascii_lowercase();
     // Match exact token `0.7.10` (avoiding e.g. `0.7.100`).
-    lower.split(|c: char| !c.is_ascii_alphanumeric() && c != '.').any(|tok| {
-        tok == REQUIRED_DX_VERSION || tok.strip_prefix('v') == Some(REQUIRED_DX_VERSION)
-    })
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .any(|tok| {
+            tok == REQUIRED_DX_VERSION || tok.strip_prefix('v') == Some(REQUIRED_DX_VERSION)
+        })
+}
+
+/// Returns `true` if `version_output` identifies any Dioxus CLI build (excluding unrelated
+/// binaries such as Deno's `dx`).
+pub fn is_any_dioxus_version(version_output: &str) -> bool {
+    version_output.to_ascii_lowercase().contains("dioxus")
+}
+
+/// Decides whether a `dx --version` string is accepted under the active pin policy.
+pub fn accepts_version(version_output: &str, explicit_override: bool, unpinned: bool) -> bool {
+    if explicit_override && unpinned {
+        return !version_output.starts_with("failed to execute:");
+    }
+    if explicit_override || unpinned {
+        return is_any_dioxus_version(version_output);
+    }
+    is_required_dioxus_version(version_output)
+}
+
+/// Parses an env-var flag value for `RUNE_DX_UNPINNED` (`1`, `true`, `yes`, `on`).
+pub fn parse_unpinned_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn is_unpinned_env() -> bool {
+    env::var_os("RUNE_DX_UNPINNED")
+        .and_then(|v| v.into_string().ok())
+        .is_some_and(|v| parse_unpinned_flag(&v))
 }
 
 fn read_version(path: &Path) -> String {
@@ -79,16 +133,9 @@ fn read_version(path: &Path) -> String {
     }
 }
 
-fn candidate_paths() -> Vec<PathBuf> {
+fn auto_candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let bin_name = if cfg!(windows) { "dx.exe" } else { "dx" };
-
-    if let Some(explicit) = env::var_os("RUNE_DX")
-        && !explicit.is_empty()
-    {
-        out.push(PathBuf::from(explicit));
-        return out;
-    }
 
     if let Some(cargo_home) = env::var_os("CARGO_HOME")
         && !cargo_home.is_empty()

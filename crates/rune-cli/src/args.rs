@@ -399,8 +399,13 @@ Options:
   --port <port>                 Devserver port for dx hot patching (default: 18745)
   --mode <auto|hot|restart>     Dev loop mode (default: auto)
   -j, --jobs <n>                Cargo build jobs (default: RUNE_DEV_JOBS / CARGO_BUILD_JOBS / 2)
-  --target-dir <dir>            Override Cargo target directory for hot mirror builds
+  --target-dir <dir>            Override Cargo target directory (default: <workspace>/target)
   -h, --help                    Show this help message
+
+Environment:
+  RUNE_DX                       Explicit path to a custom/patched `dx` binary (relaxes exact 0.7.10 pin)
+  RUNE_DX_UNPINNED=1            Accept any Dioxus CLI version on PATH (still skips Deno `dx`)
+  RUNE_DEV_TARGET_DIR           Default override for --target-dir
 
 Configuration:
   Defaults can be stored in `rune.toml` under `[dev]` or in `Cargo.toml` under

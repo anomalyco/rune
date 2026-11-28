@@ -1,4 +1,4 @@
-//! Guarded live hot-patching loop powered by Dioxus CLI (`dx` 0.7.10) and the embedded AST guard.
+//! Guarded live hot-patching loop powered by Dioxus CLI (`dx`) and the embedded AST guard.
 
 use std::path::Path;
 use std::process::Command;
@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use crate::CliError;
 use crate::config::ResolvedDevConfig;
+use crate::dev::fingerprint::{clear_manifest_fingerprints, is_manifest_change};
 use crate::dev::mirror::{
-    atomic_write, default_target_dir_for, discover_layout, join_posix, mirror_dir_for, sync_mirror,
-    touch_bin_entries,
+    atomic_write, default_target_dir_for, discover_layout, join_posix, mirror_dir_for,
+    sync_generated_lockfile, sync_mirror, touch_bin_entries,
 };
 use crate::dev::proc::ChildGuard;
 use crate::glob;
@@ -17,6 +18,7 @@ use crate::guard::{self, GuardOutcome};
 use crate::watch::{FileCache, Snapshot, diff_snapshots, scan_sources};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
+const HOT_PROFILE_NAME: &str = "rune-hot";
 
 const RUNE_HOT_PROFILE_CONFIG: &[&str] = &[
     r#"profile.rune-hot.inherits="dev""#,
@@ -31,6 +33,43 @@ pub enum ChangeDecision {
     Patch { files: Vec<String> },
     WaitForSyntax { file: String, error: String },
     Restart { reason: String },
+}
+
+/// Quotes a single argument using POSIX shell rules compatible with `shell_words::split` (which
+/// `dx` uses to parse `--cargo-args`).
+pub fn shell_quote_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    let safe = arg.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+            )
+    });
+    if safe {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('\'');
+    for ch in arg.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Joins arguments with POSIX shell quoting so `shell_words::split` recovers each token verbatim.
+pub fn shell_join(args: &[String]) -> String {
+    args.iter()
+        .map(|a| shell_quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Evaluates a snapshot diff against `patch_globs` and the embedded AST guard.
@@ -130,7 +169,7 @@ pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
         "--features".to_string(),
         features.join(","),
         "--profile".to_string(),
-        "rune-hot".to_string(),
+        HOT_PROFILE_NAME.to_string(),
     ];
 
     if let Some(bin) = &cfg.bin {
@@ -144,7 +183,7 @@ pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
             cargo_args.push("--config".to_string());
             cargo_args.push((*item).to_string());
         }
-        args.push(format!("--cargo-args={}", cargo_args.join(" ")));
+        args.push(format!("--cargo-args={}", shell_join(&cargo_args)));
     }
 
     if !cfg.app_args.is_empty() {
@@ -154,15 +193,22 @@ pub fn build_dx_args(cfg: &ResolvedDevConfig) -> Vec<String> {
     args
 }
 
-/// Runs the guarded hot-patching loop, automatically rebuilding and relaunching on restart-needed
-/// edits.
+/// Runs the guarded hot-patching loop with a fixed config.
 pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> {
-    let mirror_dir = mirror_dir_for(&cfg.meta.manifest_path);
-    let target_dir = cfg
-        .target_dir
-        .clone()
-        .unwrap_or_else(|| default_target_dir_for(&cfg.meta.manifest_path));
+    let initial = cfg.clone();
+    run_hot_with_reloader(initial, dx_path, || Ok(cfg.clone()))
+}
 
+/// Runs the guarded hot-patching loop, reloading `ResolvedDevConfig` on each restart so edits to
+/// `Cargo.toml` or `rune.toml` take effect without restarting `rune dev`.
+pub fn run_hot_with_reloader<F>(
+    mut cfg: ResolvedDevConfig,
+    dx_path: &Path,
+    mut reload_cfg: F,
+) -> Result<(), CliError>
+where
+    F: FnMut() -> Result<ResolvedDevConfig, CliError>,
+{
     println!(
         "rune dev: guarded hot reload for `{}` (port {}, patch: {})",
         cfg.package,
@@ -171,8 +217,33 @@ pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> 
     );
 
     let mut cache = FileCache::default();
+    let mut first_run = true;
+    let mut clear_fingerprints_next = false;
 
     loop {
+        if !first_run {
+            match reload_cfg() {
+                Ok(updated) => cfg = updated,
+                Err(err) => {
+                    eprintln!(
+                        "rune dev: keeping previous config after reload error: {}",
+                        err.message
+                    );
+                }
+            }
+        }
+        first_run = false;
+
+        let mirror_dir = mirror_dir_for(&cfg.meta.manifest_path);
+        let target_dir = cfg
+            .target_dir
+            .clone()
+            .unwrap_or_else(|| default_target_dir_for(&cfg.meta.manifest_path));
+
+        if std::mem::take(&mut clear_fingerprints_next) {
+            clear_manifest_fingerprints(&target_dir, HOT_PROFILE_NAME, &cfg.package);
+        }
+
         let layout = discover_layout(&cfg.meta.manifest_path)?;
         let sources = layout.source_entries();
         let mut baseline = scan_sources(&mut cache, &sources).map_err(|err| {
@@ -188,7 +259,7 @@ pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> 
         )?;
 
         let dx_cwd = join_posix(&mirror_dir, &layout.crate_key);
-        let dx_args = build_dx_args(cfg);
+        let dx_args = build_dx_args(&cfg);
 
         let mut cmd = Command::new(dx_path);
         cmd.args(&dx_args)
@@ -214,6 +285,14 @@ pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> 
                 .try_wait()
                 .map_err(|err| CliError::new(format!("failed waiting on dx: {err}")))?
             {
+                if let Err(err) = sync_generated_lockfile(
+                    &mirror_dir,
+                    &layout,
+                    &cfg.meta.workspace_root,
+                    &baseline,
+                ) {
+                    eprintln!("rune dev: warning: {}", err.message);
+                }
                 if status.success() {
                     return Ok(());
                 }
@@ -257,9 +336,19 @@ pub fn run_hot(cfg: &ResolvedDevConfig, dx_path: &Path) -> Result<(), CliError> 
                     }
                 }
                 ChangeDecision::Restart { reason } => {
+                    let changed_keys = diff_snapshots(&baseline, &current).all_changed();
+                    clear_fingerprints_next = is_manifest_change(&changed_keys);
                     println!("rune dev: restart needed: {reason}");
                     println!("rune dev: rebuilding and relaunching...");
                     child.stop();
+                    if let Err(err) = sync_generated_lockfile(
+                        &mirror_dir,
+                        &layout,
+                        &cfg.meta.workspace_root,
+                        &baseline,
+                    ) {
+                        eprintln!("rune dev: warning: {}", err.message);
+                    }
                     break;
                 }
             }

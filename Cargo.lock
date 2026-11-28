@@ -3914,6 +3914,7 @@ name = "rune-cli"
 version = "0.0.1"
 dependencies = [
  "blake3",
+ "libc",
  "quote",
  "serde_json",
  "syn 2.0.119",

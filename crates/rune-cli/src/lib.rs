@@ -1,6 +1,7 @@
 //! Cross-platform CLI for creating, checking, and running Rune apps with guarded hot reload.
-
-#![forbid(unsafe_code)]
+//!
+//! Workspace lints enforce `deny(unsafe_code)` across the crate; only the leaf process-group
+//! signal helpers in `dev::proc` opt in locally.
 
 pub mod args;
 pub mod config;
