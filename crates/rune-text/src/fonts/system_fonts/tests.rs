@@ -413,6 +413,23 @@ fn covered_punctuation_skips_fallback_and_math_for_bundled_and_collection_fonts(
     assert!(col_ts.emoji.is_none(), "covered punctuation must not load emoji fallback: {:?}", col_ts.emoji);
 }
 
+/// Once the system's CJK fonts are loaded, a character they cover is drawn in them without asking
+/// the platform again; one they lack still is asked for, once.
+#[test]
+fn cjk_covered_by_a_loaded_system_font_is_not_looked_up_again() {
+    let mut ts = TextSystem::new_local(&[], ("Inter", "ui-monospace"));
+    let id = register_test_font(&mut ts, make_test_font("Loaded CJK", &['日', '本', '語'], false));
+    let text = "日本語の中";
+    ts.fallbacks.system_cjk.push(id);
+    // The text's language (Japanese, by its kana) has had its CJK fonts loaded.
+    ts.fallbacks.cjk.push(crate::fonts::language::of_text(text, ts.language).map(|l| l.to_string()));
+    glyph_signature(&mut ts, text, &[], TextStyle::new(16.0, 400.0));
+    for ch in ['日', '本', '語'] {
+        assert!(!ts.fallbacks.asked.contains(&ch), "{ch} is in a loaded CJK font: {:?}", ts.fallbacks.asked);
+    }
+    assert!(ts.fallbacks.asked.contains(&'中'), "中 isn't: {:?}", ts.fallbacks.asked);
+}
+
 /// On macOS, an unresolved font slot loads only the system UI text family at startup (deferring
 /// Apple Color Emoji), covered punctuation in that font triggers no CoreText or math lookup,
 /// and emoji still register Apple Color Emoji on demand and emit colour glyphs.

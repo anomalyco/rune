@@ -308,6 +308,7 @@ impl TextSystem {
         let mut mono_cov = (!mono_spans.is_empty() && !matches!(style.family, rune_core::tok::Family::Mono | rune_core::tok::Family::SystemMono))
             .then(|| FamilyCoverage::from_ids(self.active_family_ids(style.family, true), attributes));
         let mut cjk_own_cov: Option<FamilyCoverage> = None;
+        let mut cjk_loaded_cov: Option<FamilyCoverage> = None;
         let mut preferred_emoji_cov: Option<FamilyCoverage> = None;
         let mut selected_color_primary: Option<FamilyCoverage> = None;
         let mut selected_color_mono: Option<FamilyCoverage> = None;
@@ -347,7 +348,12 @@ impl TextSystem {
                 } else if !self.fallbacks.asked.contains(&ch) && !cjk_more.contains(&ch) {
                     // A character the CJK fonts loaded so far may lack (Simplified Chinese in a
                     // Japanese font): the platform names a font that has it, once per character.
-                    cjk_more.push(ch);
+                    // One they have is drawn in them, without asking: each lookup costs the UI
+                    // thread a platform call, and a page of new kanji made dozens in one frame.
+                    let loaded = cjk_loaded_cov.get_or_insert_with(|| FamilyCoverage::from_ids(self.fallbacks.system_cjk.clone(), attributes));
+                    if !loaded.covers(&mut self.font_cx, ch) {
+                        cjk_more.push(ch);
+                    }
                 }
                 continue;
             }
