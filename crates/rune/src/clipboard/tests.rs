@@ -684,3 +684,75 @@ fn copy_image_then_roundtrips_png_and_svg_through_memory_clipboard() {
         assert_eq!(&px[..4], &[0x20, 0x80, 0x40, 255]);
     }
 }
+
+#[test]
+fn copy_then_and_copy_rich_then_report_ack_failure_and_supersession() {
+    use crate::{col, Cx, El, Env};
+
+    #[derive(Default)]
+    struct S {
+        plain: Vec<Result<(), CopyError>>,
+        images: Vec<Result<(), CopyImageError>>,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El { col() }
+
+    let m = memory();
+    let mut rt = Runtime::new(S::default(), view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+
+    // 1. Plain copy_then succeeds and writes to clipboard.
+    rt.update(|_, tx| tx.copy_then("hello ack", |s: &mut S, r, _| s.plain.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain.pop(), Some(Ok(())));
+    assert_eq!(text(&m).as_deref(), Some("hello ack"));
+
+    // 2. Rich copy_rich_then succeeds and writes both plain + HTML.
+    let rich = ClipboardContent::new("bold").with_html("<b>bold</b>");
+    rt.update(move |_, tx| tx.copy_rich_then(rich, |s: &mut S, r, _| s.plain.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain.pop(), Some(Ok(())));
+    let stored = m.content().unwrap();
+    assert_eq!(stored.text(), "bold");
+    assert_eq!(stored.html(), Some("<b>bold</b>"));
+
+    // 3. Backend write failure reports CopyError::Failed without modifying clipboard.
+    m.fail_writes(Some("denied"));
+    rt.update(|_, tx| tx.copy_then("nope", |s: &mut S, r, _| s.plain.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain.pop(), Some(Err(CopyError::Failed("denied".into()))));
+    assert_eq!(text(&m).as_deref(), Some("bold"));
+    m.fail_writes(None);
+
+    // 4. Same-handler supersession across copy_then / copy_rich_then / copy / copy_image_then / copy_secret.
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let img = cache.rgba(1, 1, vec![10, 20, 30, 255]);
+    img.wait().unwrap();
+    rt.update(|_, tx| {
+        tx.copy_then("first", |s: &mut S, r, _| s.plain.push(r));
+        tx.copy_rich_then(ClipboardContent::new("second"), |s: &mut S, r, _| s.plain.push(r));
+        tx.copy_image_then(&img, |s: &mut S, r, _| s.images.push(r));
+        tx.copy_then("winner", |s: &mut S, r, _| s.plain.push(r));
+    });
+    rt.frame(0.0);
+    assert_eq!(
+        rt.state.plain,
+        vec![Err(CopyError::Superseded), Err(CopyError::Superseded), Ok(())],
+    );
+    assert_eq!(rt.state.images, vec![Err(CopyImageError::Superseded)]);
+    assert_eq!(text(&m).as_deref(), Some("winner"));
+
+    // 5. Worker with no clipboard reports CopyError::Failed (via CopyImageError::Failed).
+    let no_cb = native::Worker::spawn(|| None::<Board>);
+    let (tx_reply, rx_reply) = mpsc::channel();
+    let mut w = ClipboardWrite::new(ClipboardContent::new("offline"));
+    w.set_copy_image_id(99);
+    w.attach_copy_reply(CopyReply { id: 99, sender: tx_reply, wake: Arc::new(|| {}) });
+    no_cb.send_write(w, None, None);
+    let reply = rx_reply.recv_timeout(Duration::from_secs(2)).unwrap();
+    match reply {
+        Reply::CopyImage { id: 99, result: Err(CopyImageError::Failed(_)) } => {}
+        _ => panic!("expected Failed reply from no-clipboard worker"),
+    }
+    no_cb.stop();
+}

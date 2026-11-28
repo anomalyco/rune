@@ -60,6 +60,10 @@ pub enum ChordKey {
     /// `mediapause`, `mediatracknext`/`medianext`, `mediatrackprevious`/`mediaprev`,
     /// `mediastop`, `mediafastforward`/`fastforward`, `mediarewind`/`rewind`).
     Media(MediaKey),
+    /// Dedicated browser/history Back key (`browserback`).
+    BrowserBack,
+    /// Dedicated browser/history Forward key (`browserforward`).
+    BrowserForward,
 }
 
 /// A key with modifiers, as an app binds it: `Chord::parse("mod+shift+t")`. Parsing is
@@ -70,7 +74,7 @@ pub enum ChordKey {
 /// `backspace`, `delete` (`del`), `insert`, `home`, `end`, `pageup`, `pagedown`,
 /// `left`/`right`/`up`/`down` (`arrowleft`, …), `space`, `plus` (or a trailing "+":
 /// "mod++"), `comma`, the punctuation names (`minus`, `bracketleft`, …), `f1`–`f24`,
-/// `contextmenu` (`menu`), `printscreen`, `scrolllock`, `pause` and the hardware media keys (`mediaplaypause`/`playpause`, `mediaplay`, `mediapause`, `mediatracknext`/`medianext`, `mediatrackprevious`/`mediaprev`, `mediastop`, `mediafastforward`/`fastforward`, `mediarewind`/`rewind`). "{" and "}" read as Shift
+/// `contextmenu` (`menu`), `printscreen`, `scrolllock`, `pause`, `browserback`, `browserforward`, and the hardware media keys (`mediaplaypause`/`playpause`, `mediaplay`, `mediapause`, `mediatracknext`/`medianext`, `mediatrackprevious`/`mediaprev`, `mediastop`, `mediafastforward`/`fastforward`, `mediarewind`/`rewind`). "{" and "}" read as Shift
 /// with "[" and "]", the keys that type them on a US layout. `Display` writes the canonical
 /// form back ("mod+shift+t"), for settings files.
 #[derive(Clone, Copy, Debug)]

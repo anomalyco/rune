@@ -198,6 +198,7 @@ pub struct InputSpec {
     pub(crate) selection_change: Option<PressFn>,
     pub(crate) paste: Option<InputPasteFn>,
     pub(crate) copy: Option<InputCopyFn>,
+    pub(crate) field_menu: Option<(FieldMenuBuildFn, FieldMenuPickFn)>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
     pub(crate) spellcheck: bool,
     /// [`El::reveal_caret_on_focus`]: scroll enclosing viewports to the caret when this field gains focus.
@@ -281,6 +282,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         selection_change: None,
         paste: None,
         copy: None,
+        field_menu: None,
         spellcheck: false,
         reveal_caret_on_focus: false,
         read_only: false,

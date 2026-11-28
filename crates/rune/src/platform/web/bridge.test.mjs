@@ -2318,6 +2318,32 @@ test('keydown leaves media keys untouched until syncMediaKeys(true), then preven
     }
 });
 
+test('keydown forwards BrowserBack and BrowserForward and prevents default only when Rune consumes them', () => {
+    const { canvas, events, h } = setup();
+    const navKeys = ['BrowserBack', 'BrowserForward'];
+    try {
+        // Canvas: unhandled leaves browser navigation alone; consumed prevents default.
+        for (const name of navKeys) {
+            bridge.syncKey(h, false);
+            assert.equal(dispatchKeydown(canvas, { key: name, code: name }), false, `canvas unhandled ${name}`);
+            bridge.syncKey(h, true);
+            assert.equal(dispatchKeydown(canvas, { key: name, code: name }), true, `canvas consumed ${name}`);
+        }
+
+        // Focused field: forwards key to Rune; prevents default only when syncKey(h, true) runs synchronously.
+        bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+        bridge.activate(h);
+        for (const name of navKeys) {
+            events.length = 0;
+            assert.equal(dispatchKeydown(h.textarea, { key: name, code: name }), false, `textarea unhandled ${name}`);
+            assert.equal(events.length, 1);
+            assert.equal(events[0].key, name);
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
 test('scheduleTouchHoldConfirm waits two animation frames before confirming so pointerup delivered after raf1 cancels the hold', () => {
     const { events, h } = setup();
     const origRAF = globalThis.requestAnimationFrame;

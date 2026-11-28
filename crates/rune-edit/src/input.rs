@@ -76,7 +76,7 @@ impl TextEdit {
         self.key_inner(ev, layout, true)
     }
 
-    fn key_inner(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>, read_only: bool) -> EditOutcome {
+    pub(super) fn key_inner(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>, read_only: bool) -> EditOutcome {
         let mut out = EditOutcome::default();
         if matches!(ev.key, Key::Modifier { .. } | Key::Media(_)) { return out; }
         // Any key but Up and Down lets the column go.
@@ -126,7 +126,14 @@ impl TextEdit {
             Key::Text(s) => {
                 if s.chars().any(|c| !c.is_control() || (!self.is_single_line() && matches!(c, '\n' | '\r' | '\t'))) {
                     let s = self.sanitize(s);
-                    if !s.is_empty() { self.replace(self.range(), &s, if s.contains(['\r', '\n']) { EditKind::LineBreak } else { EditKind::Text }); }
+                    if !s.is_empty() {
+                        let kind = if s.contains(['\r', '\n']) { EditKind::LineBreak } else { EditKind::Text };
+                        if !self.secondary.is_empty() && !self.secure {
+                            self.multi_insert(&s, kind);
+                        } else {
+                            self.replace(self.range(), &s, kind);
+                        }
+                    }
                 }
             }
             // A composition's Return and Escape are the input method's.
@@ -140,6 +147,12 @@ impl TextEdit {
                         out.submit = true;
                     } else {
                         self.replace(self.range(), "\n", EditKind::LineBreak);
+                    }
+                } else if !self.secondary.is_empty() {
+                    if m.shift || m.alt {
+                        self.multi_insert("\n", EditKind::LineBreak);
+                    } else {
+                        out.submit = true;
                     }
                 } else {
                     let (a, b) = self.range();
@@ -197,8 +210,15 @@ impl TextEdit {
                 }
             }
             Key::PageUp | Key::PageDown => {}
-            Key::Escape => out.blur = true,
+            Key::Escape => {
+                if !self.clear_extra_carets() {
+                    out.blur = true;
+                }
+            }
             Key::Backspace if read_only => {}
+            Key::Backspace if !self.secondary.is_empty() => {
+                self.multi_backspace(word, line);
+            }
             Key::Backspace => {
                 let (a, b) = self.range();
                 if a != b || (self.is_hidden_multiline() && self.is_pristine()) {
@@ -240,6 +260,9 @@ impl TextEdit {
                 }
             }
             Key::Delete if read_only => {}
+            Key::Delete if !self.secondary.is_empty() => {
+                self.multi_delete(word);
+            }
             Key::Delete => {
                 let (a, b) = self.range();
                 if a != b || (self.is_hidden_multiline() && self.is_pristine()) {
@@ -248,6 +271,9 @@ impl TextEdit {
                     let to = if word { self.next_word(a) } else { next_char(&self.text, a) };
                     self.replace((a, to), "", if word { EditKind::DeleteRun } else { EditKind::Delete });
                 }
+            }
+            Key::Left | Key::Right | Key::Up | Key::Down | Key::Home | Key::End if !self.secondary.is_empty() => {
+                self.multi_navigate(ev, layout, column);
             }
             Key::Left if !line && let Some(to) = self.visual_step(layout, false, word) => self.move_h(to, m.shift, false, layout),
             Key::Left => {
@@ -308,6 +334,7 @@ impl TextEdit {
                 Some('a') => {
                     self.anchor = 0;
                     self.focus = self.text.len();
+                    self.secondary.clear();
                     self.typing = Typing::Inherited;
                 }
                 Some('b' | 'i' | 'u') if !read_only => {
@@ -315,14 +342,14 @@ impl TextEdit {
                         self.toggle_mark(mark);
                     }
                 }
-                Some('c') if !self.secure => out.copy = Some(self.selected().to_owned()),
+                Some('c') if !self.secure => out.copy = Some(self.selected_all()),
                 Some('x') if !read_only && !self.secure => {
-                    out.copy = Some(self.selected().to_owned());
+                    out.copy = Some(self.selected_all());
                     self.insert("");
                 }
                 _ => {}
             },
-            Key::Function(_) | Key::ContextMenu | Key::Insert | Key::PrintScreen | Key::ScrollLock | Key::Pause | Key::Media(_) | Key::Modifier { .. } => {}
+            Key::Function(_) | Key::ContextMenu | Key::Insert | Key::PrintScreen | Key::ScrollLock | Key::Pause | Key::Media(_) | Key::BrowserBack | Key::BrowserForward | Key::Modifier { .. } => {}
         }
         out
     }
@@ -444,13 +471,21 @@ impl TextEdit {
         let clean = self.sanitize(s);
         if clean.is_empty() { return; }
         let kind = if clean.contains(['\r', '\n']) { EditKind::LineBreak } else { EditKind::Text };
-        self.replace(self.range(), &clean, kind);
+        if !self.secondary.is_empty() && !self.secure {
+            self.multi_insert(&clean, kind);
+        } else {
+            self.replace(self.range(), &clean, kind);
+        }
     }
 
     pub fn paste(&mut self, s: &str) -> EditOutcome {
         self.normalize_hidden_selection();
         let s = self.sanitize(s);
-        self.insert(&s);
+        if !self.secondary.is_empty() && !self.secure {
+            self.multi_paste(&s);
+        } else {
+            self.insert(&s);
+        }
         EditOutcome::default()
     }
 

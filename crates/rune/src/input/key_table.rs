@@ -108,6 +108,8 @@ pub(crate) const NAMED_KEYS: &[NamedKeySpec] = &[
     NamedKeySpec::new(ChordKey::Media(MediaKey::Stop), Key::Media(MediaKey::Stop), NamedKey::MediaStop, "MediaStop", &["mediastop"], "⏹", "Stop"),
     NamedKeySpec::new(ChordKey::Media(MediaKey::FastForward), Key::Media(MediaKey::FastForward), NamedKey::MediaFastForward, "MediaFastForward", &["mediafastforward", "fastforward"], "⏩", "Fast Forward"),
     NamedKeySpec::new(ChordKey::Media(MediaKey::Rewind), Key::Media(MediaKey::Rewind), NamedKey::MediaRewind, "MediaRewind", &["mediarewind", "rewind"], "⏪", "Rewind"),
+    NamedKeySpec::new(ChordKey::BrowserBack, Key::BrowserBack, NamedKey::BrowserBack, "BrowserBack", &["browserback"], "Back", "Back"),
+    NamedKeySpec::new(ChordKey::BrowserForward, Key::BrowserForward, NamedKey::BrowserForward, "BrowserForward", &["browserforward"], "Forward", "Forward"),
 ];
 
 const WINIT_FUNCTION_KEYS: &[NamedKey] = &[

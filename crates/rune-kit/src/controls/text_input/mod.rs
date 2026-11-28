@@ -228,6 +228,16 @@ macro_rules! field_hook_forwarders {
             self.edits.pill_secondary(f);
             self
         }
+        /// Extend or customize the inner editor's built-in context menu across every platform
+        /// ([`El::field_menu`](rune::El::field_menu)). Skipped when disabled.
+        pub fn field_menu<S: 'static>(
+            mut self,
+            build: impl Fn(&mut S, &rune::FieldMenuContext, rune::PopupMenu) -> rune::PopupMenu + 'static,
+            on_pick: impl Fn(&mut S, &str, &rune::FieldMenuContext, &mut Tx) + 'static,
+        ) -> Self {
+            self.edits.field_menu(build, on_pick);
+            self
+        }
         /// Called when the focused inner editor loses focus: the window losing focus (another
         /// app, a hidden window), Tab, a click elsewhere or `Tx::focus` moving it off, so a form
         /// can commit a half-typed value. Use [`Self::on_focus_change`] for in-window focus gain
@@ -315,6 +325,13 @@ impl EditActs {
     }
     fn pill_secondary<S: 'static>(&mut self, f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_pill_secondary(f)));
+    }
+    fn field_menu<S: 'static>(
+        &mut self,
+        build: impl Fn(&mut S, &rune::FieldMenuContext, rune::PopupMenu) -> rune::PopupMenu + 'static,
+        on_pick: impl Fn(&mut S, &str, &rune::FieldMenuContext, &mut Tx) + 'static,
+    ) {
+        self.handlers.push(Box::new(move |e: El| e.field_menu(build, on_pick)));
     }
     fn blur<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_focus_lost(f)));

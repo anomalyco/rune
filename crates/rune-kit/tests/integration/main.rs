@@ -13,6 +13,7 @@ mod diff_labels;
 mod diff_scroll_bar;
 mod disabled;
 mod elevation_compat;
+mod field_menu;
 mod focus_ring;
 mod form_help_wrap;
 mod glyphs;

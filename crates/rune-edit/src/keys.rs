@@ -169,6 +169,14 @@ pub enum Key {
     /// Text fields ignore it; apps can bind it in `on_key`, `El::on_key`, `El::on_key_preview`,
     /// `El::on_key_up`, and `Chord`.
     Media(MediaKey),
+    /// Dedicated browser/history Back key (`XF86Back`, `VK_BROWSER_BACK`, DOM `"BrowserBack"`).
+    /// Text fields ignore it; apps can bind it in `on_key`, `El::on_key`, `El::on_key_preview`,
+    /// `El::on_key_up`, and `Chord`.
+    BrowserBack,
+    /// Dedicated browser/history Forward key (`XF86Forward`, `VK_BROWSER_FORWARD`, DOM
+    /// `"BrowserForward"`). Text fields ignore it; apps can bind it in `on_key`, `El::on_key`,
+    /// `El::on_key_preview`, `El::on_key_up`, and `Chord`.
+    BrowserForward,
 }
 
 /// A hardware media transport key carried by [`Key::Media`].

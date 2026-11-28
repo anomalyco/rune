@@ -357,7 +357,7 @@ impl RuntimeCore {
                         one.commit = one.commit.instant();
                         return true;
                     }
-                    let before = (e.anchor, e.focus);
+                    let before = e.carets();
                     if let (Some(l), Some([tx, ty])) = (layout, point) {
                         let h = hit(e, l.view(), tx, ty, s, single);
                         if shift {
@@ -381,7 +381,7 @@ impl RuntimeCore {
                             if origin == (h.caret, h.caret) { e.affinity = h.side; }
                         }
                     }
-                    (e.anchor, e.focus) != before
+                    e.carets() != before
                 };
                 if changed_sel && let Some(selection_change) = selection_change {
                     selection_change(app.states(), one);
@@ -405,9 +405,9 @@ impl RuntimeCore {
                     let h = hit(e, l.view(), tx, ty, s, single);
                     let at = unit_at(e, h, self.edit.input_click.unit);
                     let (anchor, focus) = extend(self.edit.input_click.origin, at);
-                    let before = (e.anchor, e.focus);
+                    let before = e.carets();
                     e.set_selection(anchor, focus);
-                    if (e.anchor, e.focus) == before {
+                    if e.carets() == before {
                         return false;
                     }
                     e.break_history_group();

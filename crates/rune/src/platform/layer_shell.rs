@@ -501,6 +501,8 @@ fn named_keysym(symbol: u32) -> Option<crate::Key> {
         0x1008_ff15 => crate::Key::Media(crate::MediaKey::Stop),
         0x1008_ff97 => crate::Key::Media(crate::MediaKey::FastForward),
         0x1008_ff3e => crate::Key::Media(crate::MediaKey::Rewind),
+        0x1008_ff26 => crate::Key::BrowserBack,
+        0x1008_ff27 => crate::Key::BrowserForward,
         _ => return None,
     })
 }

@@ -183,12 +183,24 @@ impl Client {
                     });
                 } else {
                     // The browser's Clipboard API takes plain text, HTML and PNG; RTF and files stay behind.
+                    let copy_reply = copy.copy_image_id().map(|id| CopyReply {
+                        id,
+                        sender: self.sender.clone(),
+                        wake: self.wake.clone(),
+                    });
                     let content = copy.content();
                     let png = content.image().map_or(&[][..], ClipboardImage::png);
                     let promise = crate::platform::web::platform::write_clipboard(content.text(), content.html().unwrap_or(""), png);
                     wasm_bindgen_futures::spawn_local(async move {
-                        if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
-                            web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());
+                        match wasm_bindgen_futures::JsFuture::from(promise).await {
+                            Ok(_) => if let Some(r) = copy_reply { r.send(Ok(())); },
+                            Err(err) => {
+                                if let Some(r) = copy_reply {
+                                    r.send(Err(CopyImageError::Failed(js_error_message(&err))));
+                                } else {
+                                    web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());
+                                }
+                            }
                         }
                     });
                 }

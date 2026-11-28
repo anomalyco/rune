@@ -205,6 +205,38 @@ impl std::fmt::Debug for ClipboardImage {
     }
 }
 
+/// Why [`Tx::copy_then`](crate::Tx::copy_then) or
+/// [`Tx::copy_rich_then`](crate::Tx::copy_rich_then) did not put its content on the clipboard.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CopyError {
+    /// A newer clipboard write (from this app or another) superseded this copy before it
+    /// wrote to the clipboard.
+    Superseded,
+    /// The OS or browser clipboard rejected or could not perform the write.
+    Failed(String),
+}
+
+impl std::fmt::Display for CopyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Superseded => f.write_str("copy superseded by a newer clipboard write"),
+            Self::Failed(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for CopyError {}
+
+impl From<CopyError> for CopyImageError {
+    fn from(err: CopyError) -> Self {
+        match err {
+            CopyError::Superseded => Self::Superseded,
+            CopyError::Failed(msg) => Self::Failed(msg),
+        }
+    }
+}
+
 /// Why [`Tx::copy_image`](crate::Tx::copy_image) or
 /// [`Tx::copy_image_then`](crate::Tx::copy_image_then) did not put the image on the clipboard.
 #[non_exhaustive]

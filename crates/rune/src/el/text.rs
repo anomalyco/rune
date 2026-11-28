@@ -415,6 +415,33 @@ impl El {
         }
         self
     }
+
+    /// Extend or customize this [`text_input`]'s built-in context menu across every platform
+    /// (native macOS/Windows menus, [`App::on_field_menu`](crate::App::on_field_menu) /
+    /// [`App::on_popup_menu`](crate::App::on_popup_menu) fallbacks, and web) without rebuilding
+    /// Cut, Copy, Paste, Select All, or spellcheck yourself.
+    ///
+    /// `build` runs when the field menu opens with the app state, a
+    /// [`FieldMenuContext`](crate::FieldMenuContext) (pointer point, hit byte offset, caret,
+    /// selection, and misspelled word), and Rune's ready-built [`PopupMenu`](crate::PopupMenu);
+    /// return the customized menu. `on_pick` runs when the user selects any item whose id is not
+    /// one of Rune's built-in field items (`"cut"`, `"copy"`, `"paste"`, `"select-all"`,
+    /// `"learn-spelling"`, `"spellcheck"`, `"no-guesses"`, `"suggestion-*"`, `"language-*"`).
+    ///
+    /// Ignored when the field also sets [`El::on_secondary_press`], which replaces the field menu
+    /// outright.
+    pub fn field_menu<S: 'static>(
+        mut self,
+        build: impl Fn(&mut S, &crate::FieldMenuContext, crate::PopupMenu) -> crate::PopupMenu + 'static,
+        on_pick: impl Fn(&mut S, &str, &crate::FieldMenuContext, &mut Tx) + 'static,
+    ) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            let build: FieldMenuBuildFn = Rc::new(move |s, ctx, menu| build(downcast::<S>(s), ctx, menu));
+            let on_pick: FieldMenuPickFn = Rc::new(move |s, id, ctx, tx| on_pick(downcast::<S>(s), id, ctx, tx));
+            inp.field_menu = Some((build, on_pick));
+        }
+        self
+    }
     pub(super) fn sync_input_pills(&mut self) {
         let (Some(inp), Some(t)) = (&self.cold.input, &mut self.text) else { return };
         if inp.edit.is_plain() {

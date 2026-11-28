@@ -117,3 +117,23 @@ fn media_key_chords_parse_aliases_format_labels_and_keep_pause_distinct() {
         assert!(chord.matches(&KeyEvent::from(Key::Media(expected))), "{spec}");
     }
 }
+
+#[test]
+fn browser_navigation_chords_parse_format_and_match() {
+    use crate::{Key, KeyEvent, Mods};
+
+    for (spec, expected, key, canonical, label) in [
+        ("browserback", ChordKey::BrowserBack, Key::BrowserBack, "browserback", "Back"),
+        ("BrowserBack", ChordKey::BrowserBack, Key::BrowserBack, "browserback", "Back"),
+        ("browserforward", ChordKey::BrowserForward, Key::BrowserForward, "browserforward", "Forward"),
+        ("BrowserForward", ChordKey::BrowserForward, Key::BrowserForward, "browserforward", "Forward"),
+    ] {
+        let chord = Chord::parse(spec).unwrap();
+        assert_eq!(chord.key(), expected, "{spec}");
+        assert_eq!(chord.to_string(), canonical, "{spec}");
+        assert_eq!(chord.label_on(KeyPlatform::Mac), label, "{spec}");
+        assert_eq!(chord.label_on(KeyPlatform::Windows), label, "{spec}");
+        assert!(chord.matches(&KeyEvent::from(key.clone())), "{spec}");
+        assert!(!chord.matches(&KeyEvent { key, mods: Mods { shift: true, ..Mods::default() } }), "{spec}");
+    }
+}

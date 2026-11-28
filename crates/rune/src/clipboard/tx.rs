@@ -34,9 +34,39 @@ impl Tx {
         self.copy_image_callback = cb;
     }
 
+    fn map_copy_result(result: Result<(), crate::CopyImageError>) -> Result<(), crate::CopyError> {
+        result.map_err(|err| match err {
+            crate::CopyImageError::Superseded => crate::CopyError::Superseded,
+            crate::CopyImageError::Failed(msg) => crate::CopyError::Failed(msg),
+            other => crate::CopyError::Failed(other.to_string()),
+        })
+    }
+
     /// Request a clipboard write from the shell after this handler finishes.
     pub fn copy(&mut self, text: impl Into<String>) {
         self.set_copy(crate::ClipboardWrite::new(crate::ClipboardContent::new(text)), None);
+    }
+
+    /// Like [`Tx::copy`], and calls `on_result` on a later frame with `Ok(())` once the OS or
+    /// browser clipboard accepts the write, or `Err(CopyError)` when superseded by a newer
+    /// clipboard write or rejected by the OS/browser clipboard.
+    ///
+    /// On Linux (X11/Wayland), `Ok(())` confirms the clipboard backend accepted the payload; it
+    /// does not guarantee durable selection ownership if another application claims it later.
+    ///
+    /// ```
+    /// # use rune::Tx;
+    /// # struct App { copied: bool }
+    /// # fn _copy(tx: &mut Tx) {
+    /// tx.copy_then("Ship it", |s: &mut App, res, _| s.copied = res.is_ok());
+    /// # }
+    /// ```
+    pub fn copy_then<S: 'static>(
+        &mut self,
+        text: impl Into<String>,
+        on_result: impl FnOnce(&mut S, Result<(), crate::CopyError>, &mut Tx) + 'static,
+    ) {
+        self.copy_rich_then(crate::ClipboardContent::new(text), on_result);
     }
 
     /// Copy several forms at once: plain text for every app, HTML and RTF for apps that paste
@@ -56,6 +86,35 @@ impl Tx {
     /// ```
     pub fn copy_rich(&mut self, content: crate::ClipboardContent) {
         self.set_copy(crate::ClipboardWrite::new(content), None);
+    }
+
+    /// Like [`Tx::copy_rich`], and calls `on_result` on a later frame with `Ok(())` once the OS
+    /// or browser clipboard accepts the write, or `Err(CopyError)` when superseded by a newer
+    /// clipboard write or rejected by the OS/browser clipboard.
+    ///
+    /// On Linux (X11/Wayland), `Ok(())` confirms the clipboard backend accepted the payload; it
+    /// does not guarantee durable selection ownership if another application claims it later.
+    ///
+    /// ```
+    /// # use rune::{ClipboardContent, Tx};
+    /// # struct App { copy_error: Option<String> }
+    /// # fn _copy(tx: &mut Tx) {
+    /// let content = ClipboardContent::new("Ship it").with_html("<b>Ship</b> it");
+    /// tx.copy_rich_then(content, |s: &mut App, res, _| {
+    ///     s.copy_error = res.err().map(|e| e.to_string());
+    /// });
+    /// # }
+    /// ```
+    pub fn copy_rich_then<S: 'static>(
+        &mut self,
+        content: crate::ClipboardContent,
+        on_result: impl FnOnce(&mut S, Result<(), crate::CopyError>, &mut Tx) + 'static,
+    ) {
+        let f: CopyImageFn = Box::new(move |s, result, tx| {
+            if let Some(s) = s.cast::<S>() { on_result(s, Self::map_copy_result(result), tx); }
+        });
+        let cb = CopyImageCallback(Rc::new(std::cell::Cell::new(Some(f))));
+        self.set_copy(crate::ClipboardWrite::new(content), Some(cb));
     }
 
     /// Copy an image an [`ImageCache`](crate::ImageCache) decoded as PNG, encoded off the event

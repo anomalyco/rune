@@ -353,6 +353,7 @@ pub(super) fn retire_removed_nodes(
             input.selection_change = None;
             input.on_pill_press = None;
             input.on_pill_secondary = None;
+            input.field_menu = None;
             input.edit.focused = false;
             input.edit.cancel_composition();
             input.edit.conceal();

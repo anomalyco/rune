@@ -732,3 +732,131 @@ fn dismiss_repost_onto_second_field_does_not_clobber_new_field_menu() {
     assert!(rt.state.b.text.contains('Z'), "field B received paste: {:?}", rt.state.b.text);
     assert_eq!(rt.state.a.text, "alpha", "field A stayed untouched");
 }
+
+#[test]
+fn el_field_menu_extends_native_and_fallback_menus_and_dispatches_custom_vs_builtin_items() {
+    use crate::{FieldMenuContext, PopupEntry, PopupItem};
+
+    struct CustomState {
+        edit: TextEdit,
+        built: Vec<FieldMenuContext>,
+        picked: Vec<(String, Option<usize>)>,
+        fallback: Option<FieldMenuRequest>,
+    }
+
+    fn view(s: &CustomState, _: &mut Cx<CustomState>) -> El {
+        col().w_full().h_full().padding(12.0).child(
+            text_input(&s.edit, TextStyle::new(14.0, 400.0))
+                .key("doc")
+                .label("Doc")
+                .w(240.0)
+                .h(40.0)
+                .on_edit(|s: &mut CustomState| &mut s.edit)
+                .field_menu(
+                    |s: &mut CustomState, ctx, menu| {
+                        s.built.push(ctx.clone());
+                        menu.separator()
+                            .item(PopupItem::new("app:upper", "UPPERCASE"))
+                    },
+                    |s: &mut CustomState, id, ctx, _| {
+                        s.picked.push((id.to_owned(), ctx.hit_offset()));
+                        if id == "app:upper" {
+                            let (a, b) = s.edit.range();
+                            if a < b {
+                                let up = s.edit.text[a..b].to_uppercase();
+                                s.edit.insert(&up);
+                            }
+                        }
+                    },
+                ),
+        )
+    }
+
+    // 1. Native popup path: right-click builds menu with built-ins + custom item, claims "app" on web,
+    //    dispatches custom pick, and keeps built-in Copy working without calling on_pick.
+    let board = crate::clipboard::memory();
+    let mut rt = Runtime::new(
+        CustomState {
+            edit: TextEdit::new("hello world"),
+            built: Vec::new(),
+            picked: Vec::new(),
+            fallback: None,
+        },
+        view,
+        (300.0, 120.0),
+        Env::new(true, 1.0),
+    );
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+    rt.update(|s, _| {
+        s.edit.focused = true;
+        s.edit.set_selection(0, 5);
+    });
+    rt.frame(0.0);
+    let r = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("doc")).unwrap().target;
+    let (px, py) = (r[0] + 10.0, r[1] + 10.0);
+    rt.secondary_down(px, py);
+    assert_eq!(rt.core().secondary_claim(), "app", "customized field menu claims app menu on web");
+    rt.secondary_up(px, py);
+    rt.frame(0.0);
+
+    let ctx = rt.state.built.last().expect("field_menu build called").clone();
+    assert!(ctx.hit_offset().is_some(), "pointer right-click provides hit_offset");
+    assert_eq!(ctx.selection(), (0, 5));
+    let opened = rt.popup_menu().expect("native popup menu opened");
+    let ids: Vec<&str> = opened.entries().iter().filter_map(|e| match e {
+        PopupEntry::Item(i) => Some(i.id()),
+        _ => None,
+    }).collect();
+    assert!(ids.contains(&"copy") && ids.contains(&"app:upper"), "menu keeps built-ins + custom item: {ids:?}");
+
+    // Pick built-in "copy" -> copies "hello", does NOT invoke custom on_pick.
+    assert!(rt.resolve_popup(Some("copy")).is_ok());
+    rt.frame(0.0);
+    assert_eq!(board.text().as_deref().map(String::as_str), Some("hello"));
+    assert!(rt.state.picked.is_empty());
+
+    // Open via keyboard Menu key (hit_offset is None) and pick custom "app:upper".
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    assert_eq!(rt.state.built.last().unwrap().hit_offset(), None);
+    assert!(rt.resolve_popup(Some("app:upper")).is_ok());
+    rt.frame(0.0);
+    assert_eq!(rt.state.picked, vec![("app:upper".into(), None)]);
+    assert_eq!(rt.state.edit.text, "HELLO world");
+
+    // 2. Fallback App::on_field_menu path also receives customized menu and dispatches custom pick.
+    let app = App::new(AppSpec::new(
+        "custom-fm-fallback",
+        (300.0, 120.0),
+        || CustomState {
+            edit: TextEdit::new("abc"),
+            built: Vec::new(),
+            picked: Vec::new(),
+            fallback: None,
+        },
+        view,
+    ))
+    .on_field_menu(|s: &mut CustomState, req, _| s.fallback = Some(req));
+    let mut frt = app.headless_runtime((300.0, 120.0), Env::new(true, 1.0));
+    frt.core_mut().host.force_field_menu_fallback = true;
+    frt.frame(0.0);
+    frt.update(|s, _| {
+        s.edit.focused = true;
+        s.edit.set_selection(0, 3);
+    });
+    frt.frame(0.0);
+    frt.key(KeyEvent::from(Key::ContextMenu));
+    frt.frame(0.0);
+    let req = frt.state.fallback.as_ref().expect("fallback received customized menu");
+    assert!(req.menu().find("app:upper").is_some());
+    frt.update(|_, tx| tx.resolve_field_menu(Some("app:upper")));
+    frt.frame(0.0);
+    assert_eq!(frt.state.edit.text, "ABC");
+    assert_eq!(frt.state.picked.len(), 1);
+
+    // 3. Public rune::spell::{misspelled_at, suggest, learn} are directly usable.
+    assert_eq!(crate::spell::misspelled_at("", 0), None);
+    let _suggestions: Vec<String> = crate::spell::suggest("teh");
+    crate::spell::learn("rune_test_nonexistent_word_xyz");
+}

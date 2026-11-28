@@ -66,6 +66,7 @@ pub(crate) const KEYCODE_BREAK: i32 = 121;
 pub(crate) const KEYCODE_MOVE_HOME: i32 = 122;
 pub(crate) const KEYCODE_MOVE_END: i32 = 123;
 pub(crate) const KEYCODE_INSERT: i32 = 124;
+pub(crate) const KEYCODE_FORWARD: i32 = 125;
 pub(crate) const KEYCODE_MEDIA_PLAY: i32 = 126;
 pub(crate) const KEYCODE_MEDIA_PAUSE: i32 = 127;
 pub(crate) const KEYCODE_F1: i32 = 131;
@@ -156,6 +157,7 @@ fn named_key(key_code: i32) -> Option<Key> {
         KEYCODE_MOVE_HOME => Key::Home,
         KEYCODE_MOVE_END => Key::End,
         KEYCODE_INSERT => Key::Insert,
+        KEYCODE_FORWARD => Key::BrowserForward,
         KEYCODE_F1..=KEYCODE_F12 => Key::Function((key_code - KEYCODE_F1 + 1) as u8),
         _ => return None,
     })

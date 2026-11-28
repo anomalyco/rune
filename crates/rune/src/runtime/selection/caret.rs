@@ -7,30 +7,23 @@ use super::*;
 pub(in crate::runtime) struct CaretFollowCheck {
     path: String,
     text: crate::edit::Wiped,
-    anchor: usize,
-    focus: usize,
+    carets: Vec<crate::Caret>,
     affinity: parley::Affinity,
 }
 
 impl CaretFollowCheck {
     pub(in crate::runtime) fn new(path: String, edit: &crate::TextEdit) -> Self {
-        let (a, b) = edit.range();
-        let (anchor, focus) = if edit.anchor <= edit.focus { (a, b) } else { (b, a) };
         Self {
             path,
             text: crate::edit::Wiped(edit.text.clone()),
-            anchor,
-            focus,
+            carets: edit.carets(),
             affinity: edit.affinity,
         }
     }
 
     pub(in crate::runtime) fn changed(&self, path: &str, edit: &crate::TextEdit) -> bool {
         if self.path != path { return false; }
-        let (a, b) = edit.range();
-        let (anchor, focus) = if edit.anchor <= edit.focus { (a, b) } else { (b, a) };
-        self.anchor != anchor
-            || self.focus != focus
+        self.carets != edit.carets()
             || self.affinity != edit.affinity
             || self.text.as_str() != edit.text.as_str()
     }
