@@ -1,0 +1,1 @@
+- Middle-click autoscroll on Windows and Linux now resumes automatically without requiring pointer movement when layout or scroll changes give a viewport stuck at an edge room to scroll toward the pointer again (such as infinite scroll prepending older rows at the top).

@@ -9,7 +9,8 @@
 //! takes and nothing else hears. Wheel scrolls go on as usual meanwhile, and a pointer that leaves
 //! the window keeps the speed its last position gave, as Chromium's does. The pointer shows
 //! Chromium's pan cursors. A step asks for the next frame only while it moves something, so a
-//! pointer resting inside the radius, or a viewport at its end, wakes nothing until it moves.
+//! pointer resting inside the radius, or a viewport at its end, wakes nothing until the pointer
+//! moves or a layout or scroll gives the viewport room to scroll that way again.
 use crate::machine::{Attempt, Effects, Seq};
 use crate::PointerButton;
 
@@ -56,6 +57,8 @@ enum Event {
     Due { attempt: Attempt, now: f64 },
     /// The step scrolled nothing: the viewports are at their ends that way.
     Stuck,
+    /// A layout or scroll gave a stuck viewport room to scroll toward the pointer again.
+    Room { now: f64 },
     Press(PointerButton),
     Release(PointerButton),
     Key,
@@ -108,6 +111,12 @@ fn step(seq: &mut Seq, state: &mut State, event: Event) -> (bool, Effects<Effect
         (Event::Stuck, State::Active { views, origin, at, held, away, last, .. }) => {
             *state = State::Active { views, origin, at, held, away, last, attempt: None };
             (false, Effects::none())
+        }
+        (Event::Room { now }, State::Active { views, origin, at, held, away, attempt: None, .. })
+            if velocity(views, origin, at) != (0.0, 0.0) =>
+        {
+            *state = State::Active { views, origin, at, held, away, last: now, attempt: Some(seq.next()) };
+            (false, Effects::one(Effect::WakeAt(now)))
         }
         (Event::Release(PointerButton::Middle), State::Active { views, origin, at, held: true, away, last, attempt }) => {
             *state = if away { State::Idle } else { State::Active { views, origin, at, held: false, away, last, attempt } };
@@ -196,10 +205,10 @@ impl capture::PointerState {
         Some(crate::el::Cursor::Image(crate::cursor::pan((views.0.is_some(), views.1.is_some()), v)))
     }
 
-    fn autoscroll_due(&mut self, has_viewport: impl Fn(NodeId) -> bool, now: f64) -> Effects<Effect> {
-        let State::Active { views, attempt: Some(attempt), .. } = self.autoscroll.state else { return Effects::none() };
+    fn autoscroll_due(&mut self, has_viewport: bool, now: f64) -> Effects<Effect> {
+        let State::Active { attempt: Some(attempt), .. } = self.autoscroll.state else { return Effects::none() };
         // The viewports went: nothing to scroll.
-        if [views.0, views.1].into_iter().flatten().all(|id| !has_viewport(id)) {
+        if !has_viewport {
             self.autoscroll_cancel();
             return Effects::none();
         }
@@ -208,6 +217,17 @@ impl capture::PointerState {
 
     fn autoscroll_stuck(&mut self) {
         let _ = self.autoscroll_step(Event::Stuck);
+    }
+
+    /// Re-arms a stuck autoscroll once a viewport has room to scroll toward the pointer again.
+    #[inline]
+    fn autoscroll_room(&mut self, now: f64) -> Option<f64> {
+        if !matches!(self.autoscroll.state, State::Active { attempt: None, .. }) { return None; }
+        let (_, effects) = self.autoscroll_step(Event::Room { now });
+        effects.into_iter().find_map(|e| match e {
+            Effect::WakeAt(due) => Some(due),
+            Effect::Scroll { .. } => None,
+        })
     }
 }
 
@@ -230,9 +250,16 @@ impl RuntimeCore {
         }
     }
 
+    fn autoscroll_has_viewport(&self, id: NodeId) -> bool {
+        self.scroll.scrolls.contains_key(&id)
+            && self.tree.node_index.get(&id).is_some_and(|&i| self.tree.nodes[i].scroll.is_some() && !self.subtree_exiting(i))
+    }
+
     /// Takes the step due by this frame.
     pub(in crate::runtime) fn fire_autoscroll(&mut self) {
-        let effects = self.pointer.autoscroll_due(|id| self.scroll.scrolls.contains_key(&id), self.clock);
+        let State::Active { views, attempt: Some(_), .. } = self.pointer.autoscroll.state else { return };
+        let has_viewport = [views.0, views.1].into_iter().flatten().any(|id| self.autoscroll_has_viewport(id));
+        let effects = self.pointer.autoscroll_due(has_viewport, self.clock);
         for effect in effects {
             match effect {
                 // A step of no length (the first, in the frame of the move that armed it) moves
@@ -240,11 +267,46 @@ impl RuntimeCore {
                 Effect::Scroll { views, by } => {
                     if by != (0.0, 0.0) && !self.autoscroll_by(views, by) {
                         self.pointer.autoscroll_stuck();
+                        return;
                     }
                 }
                 Effect::WakeAt(due) => self.wake_at(due),
             }
         }
+    }
+
+    /// After a frame's scroll and layout settle: an active autoscroll that stopped at a
+    /// viewport's end resumes once content or scroll gives it room to scroll toward the pointer
+    /// again (for instance, infinite scroll prepending older rows while waiting at the top).
+    pub(in crate::runtime) fn laid_autoscroll(&mut self) {
+        let State::Active { views, origin, at, attempt: None, .. } = self.pointer.autoscroll.state else { return };
+        if [views.0, views.1].into_iter().flatten().all(|id| !self.autoscroll_has_viewport(id)) {
+            self.pointer.autoscroll_cancel();
+            return;
+        }
+        let v = velocity(views, origin, at);
+        if v == (0.0, 0.0) || !self.autoscroll_has_room(views, v) { return; }
+        if let Some(due) = self.pointer.autoscroll_room(self.clock) {
+            self.wake_at(due);
+        }
+    }
+
+    /// Whether either autoscroll viewport has room to move in the direction of velocity `v`.
+    fn autoscroll_has_room(&self, views: Viewports, v: (f32, f32)) -> bool {
+        let x_room = views.0.is_some_and(|id| {
+            v.0 != 0.0
+                && self.scroll.scrolls.get(&id).is_some_and(|st| {
+                    let dx = st.x.toward(f64::from(v.0));
+                    st.x.max > 0.0 && ((dx < 0.0 && st.x.offset > 0.0) || (dx > 0.0 && st.x.offset < st.x.max))
+                })
+        });
+        let y_room = views.1.is_some_and(|id| {
+            v.1 != 0.0
+                && self.scroll.scrolls.get(&id).is_some_and(|st| {
+                    st.max > 0.0 && ((v.1 < 0.0 && st.offset > 0.0) || (v.1 > 0.0 && st.offset < st.max))
+                })
+        });
+        x_room || y_room
     }
 
     /// The pan cursor while it runs: which way it scrolls, or the axes it can.
@@ -287,3 +349,7 @@ impl RuntimeCore {
         moved
     }
 }
+
+#[cfg(test)]
+#[path = "autoscroll_tests.rs"]
+mod tests;
