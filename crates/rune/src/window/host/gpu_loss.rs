@@ -429,6 +429,7 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let frame_latency = crate::window::frame_latency(self.frame_latency);
+        let frame_callback_paced = self.wayland;
         let transparent = self.options.transparent;
         let client_frame = self.client_frame(&window);
         let setup = || -> Result<wgpu::SurfaceConfiguration, SurfaceSetupError> {
@@ -436,7 +437,7 @@ impl Host {
                 return Err(SurfaceSetupError::unsupported("the GPU device is gone"));
             };
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
-            let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend)
+            let (mut config, translucent) = surface_config(&surface, &gpu.adapter, size, srgb_blend, frame_callback_paced)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
             config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {
