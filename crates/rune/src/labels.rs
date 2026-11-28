@@ -1,6 +1,7 @@
 //! The words Rune itself puts on screen: a text field's menu (Cut, Copy, Paste, Select All and
 //! the spelling items), selectable text's Copy, the Windows custom-titlebar caption buttons
-//! (Minimize, Maximize, Restore, Close), and on macOS the menu bar's standard items and menus.
+//! (Minimize, Maximize, Restore, Close), on macOS the menu bar's standard items and menus, the
+//! names of keys in shortcuts, and what rune-kit's components say to assistive technology.
 //! They are English until the app names them in its own language with [`set_labels`], and
 //! [`set_locale`] says which language that is.
 //!
@@ -131,6 +132,39 @@ pub enum Label<'a> {
     /// assert_eq!(rune::labels::label(rune::Label::CopyImageAddress), "Bildadresse kopieren");
     /// ```
     CopyImageAddress,
+    /// A key's name in a shortcut, by Rune's English word for it (`Ctrl`, `Shift`, `Space`,
+    /// `Page Up`, `F5`): every keycap of more than one character that `Shortcut::keycaps`,
+    /// `Shortcut::menu_keycaps` and `modifier_keycaps` return, so menus, tooltips and settings
+    /// write a chord as the language does (German `Strg+Umschalt+S`). macOS's glyphs (⌘ ⇧) are
+    /// single characters and stay as they are.
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::Key("Ctrl") => Some("Strg".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::Key("Ctrl")), "Strg");
+    /// ```
+    Key(&'a str),
+    /// A field's button that empties it (rune-kit's `TextInput::clear_button`).
+    Clear,
+    /// A tab's close button (rune-kit's `TabStrip`).
+    CloseTab,
+    /// What a tab or row's status mark says: work in progress, needs attention, unread, failed.
+    Working,
+    NeedsAttention,
+    Unread,
+    Failed,
+    /// A spinner or progress indicator.
+    Loading,
+    /// A search field: alone, or naming what it searches (`Search Fruit`).
+    Search(Option<&'a str>),
+    /// An image viewer's controls (rune-kit's `ImageZoom`).
+    ZoomIn,
+    ZoomOut,
+    ZoomToFit,
+    /// An in-window pop-up menu, as assistive technology names it.
+    ContextMenu,
 }
 
 type Namer = Arc<dyn Fn(Label<'_>) -> Option<String> + Send + Sync>;
@@ -221,7 +255,30 @@ pub(crate) fn english(label: Label<'_>) -> String {
         Label::SaveImageAs => "Save Image As…".into(),
         Label::CopyImage => "Copy Image".into(),
         Label::CopyImageAddress => "Copy Image Address".into(),
+        Label::Key(word) => word.into(),
+        Label::Clear => "Clear".into(),
+        Label::CloseTab => "Close tab".into(),
+        Label::Working => "Working".into(),
+        Label::NeedsAttention => "Needs attention".into(),
+        Label::Unread => "Unread".into(),
+        Label::Failed => "Failed".into(),
+        Label::Loading => "Loading".into(),
+        Label::Search(None) => "Search".into(),
+        Label::Search(Some(what)) => format!("Search {what}"),
+        Label::ZoomIn => "Zoom in".into(),
+        Label::ZoomOut => "Zoom out".into(),
+        Label::ZoomToFit => "Zoom to fit".into(),
+        Label::ContextMenu => "Context menu".into(),
     }
+}
+
+/// A keycap as the app's language names it (`Label::Key`): a word of more than one character,
+/// else the cap as it is.
+pub(crate) fn keycap(cap: String) -> String {
+    if cap.chars().nth(1).is_none() {
+        return cap;
+    }
+    named(Label::Key(&cap)).unwrap_or(cap)
 }
 
 #[cfg(test)]
@@ -247,3 +304,7 @@ pub(crate) fn test_lock() -> LabelsGuard {
     let prev = NAMER.read().ok().and_then(|n| n.clone());
     LabelsGuard { _lock: lock, prev }
 }
+
+#[cfg(test)]
+#[path = "labels_tests.rs"]
+mod tests;

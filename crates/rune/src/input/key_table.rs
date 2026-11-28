@@ -207,7 +207,7 @@ pub(crate) fn modifier_glyphs(m: Mods) -> String {
 /// Keycaps for held modifiers (`rune::modifier_keycaps`): glyphs on macOS, words elsewhere.
 pub(crate) fn modifier_keycaps(m: Mods) -> Vec<String> {
     let mac = cfg!(target_os = "macos");
-    held_mod_specs(m).map(|s| if mac { s.glyph } else { s.word }.to_owned()).collect()
+    held_mod_specs(m).map(|s| crate::labels::keycap(if mac { s.glyph } else { s.word }.to_owned())).collect()
 }
 
 // ── Named & Function Keys ────────────────────────────────────────────────────

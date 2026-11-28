@@ -85,7 +85,7 @@ impl Shortcut {
     /// `menu_keycaps` instead.
     pub fn keycaps(&self) -> Vec<String> {
         let mut labels = modifier_keycaps(self.modifiers());
-        labels.push(self.key_label());
+        labels.push(crate::labels::keycap(self.key_label()));
         labels
     }
 
@@ -97,8 +97,8 @@ impl Shortcut {
     pub fn menu_keycaps(&self) -> Vec<String> {
         let mut labels = modifier_keycaps(self.modifiers());
         let name = self.key_name();
-        labels.push(crate::input::key_table::shortcut_named_label(name)
-            .unwrap_or_else(|| crate::input::key_table::capital_keycap(us_label(name))));
+        labels.push(crate::labels::keycap(crate::input::key_table::shortcut_named_label(name)
+            .unwrap_or_else(|| crate::input::key_table::capital_keycap(us_label(name)))));
         labels
     }
 
