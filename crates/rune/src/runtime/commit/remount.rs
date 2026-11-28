@@ -89,7 +89,15 @@ impl CommitState {
             }
             let Some(&list_id) = tree.path_ids.get(path) else { return false };
             let Some(&list_idx) = tree.node_index.get(&list_id) else { return false };
-            if !tree.nodes.get(list_idx).is_some_and(|n| n.id == list_id && n.path == *path && n.virtual_list && n.growth.is_some()) {
+            if !tree.nodes.get(list_idx).is_some_and(|n| {
+                n.id == list_id
+                    && n.path == *path
+                    && n.virtual_list
+                    && n.growth.is_some()
+                    // A list that is itself a direct child of a growth stack computes `child_in_row`
+                    // from its own `animate_layout` flag in `flatten`, which `Node` does not retain.
+                    && !(n.in_row == RowLayout::Free && n.parent.is_some_and(|p| tree.nodes[p].growth.is_some()))
+            }) {
                 return false;
             }
             let Some(&scroll_id) = tree.path_ids.get(&v.scroll_path) else { return false };
@@ -120,6 +128,7 @@ impl CommitState {
                     && !n.virtual_list
                     && n.growth.is_none()
                     && !(n.scroll.is_some() && n.scroll_axes.x())
+                    && !(n.in_row == RowLayout::Free && n.parent.is_some_and(|p| tree.nodes[p].growth.is_some()))
             }) {
                 return false;
             }

@@ -711,4 +711,42 @@ fn nested_virtual_rows_scroll_remounts_without_rebuilding_view_or_outer_row() {
         !rt.commit.virtuals.contains_key(&inner_path),
         "unmounting the outer row holding a nested virtual list must prune the nested list"
     );
+
+    // A nested virtual_rows returned directly as an outer growth-stack row (no wrapper) falls back
+    // to Rebuild so flatten preserves its animate_layout-derived child_in_row.
+    struct Direct;
+    fn direct_view(_: &Direct, _: &mut Cx<Direct>) -> El {
+        let outer = col()
+            .key("outer")
+            .w_full()
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                2,
+                40.0,
+                |_: &Direct, i| std::borrow::Cow::Owned(format!("o{i}")),
+                |_: &Direct, i| {
+                    if i == 0 {
+                        col().w_full().growth(GrowthSpec::default()).virtual_rows(
+                            20,
+                            24.0,
+                            |_: &Direct, j| std::borrow::Cow::Owned(format!("s{j}")),
+                            |_: &Direct, j| row().w_full().h(24.0).child(text(format!("S {j}"))),
+                        )
+                    } else {
+                        row().w_full().h(40.0).child(text("Tail"))
+                    }
+                },
+            );
+        col().size(400.0, 200.0).child(col().key("vp").w_full().h(200.0).scroll(ScrollSpec { stick_bottom: false }).child(outer))
+    }
+    let mut direct = Runtime::new(Direct, direct_view, (400.0, 200.0), Env::new(true, 1.0));
+    for _ in 0..10 {
+        direct.frame(1.0 / 60.0);
+    }
+    direct.commit.set_state_unchanged(true);
+    assert_eq!(
+        direct.commit_kind(&Tx::default()),
+        crate::runtime::relayout::CommitKind::Rebuild,
+        "direct-child nested virtual_rows in a growth stack must fall back to Rebuild"
+    );
 }
