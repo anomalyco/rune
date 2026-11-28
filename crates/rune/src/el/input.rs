@@ -126,6 +126,33 @@ impl Autofill {
     }
 }
 
+/// Snapshot of the app-owned [`TextEdit`] flags that focus sync inspects or writes,
+/// captured before view-side modifiers (`.single_line()`, `.secure()`, `.revealed()`,
+/// `.line_home_end()`, or inert virtual blurring) adjust `InputSpec::edit`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct InputModelFlags {
+    pub(crate) focused: bool,
+    pub(crate) composing: bool,
+    pub(crate) single_line: bool,
+    pub(crate) secure: bool,
+    pub(crate) revealed: bool,
+    pub(crate) line_home_end: bool,
+}
+
+impl InputModelFlags {
+    #[inline]
+    pub(crate) fn of(edit: &TextEdit) -> Self {
+        Self {
+            focused: edit.focused,
+            composing: edit.is_composing(),
+            single_line: edit.is_single_line(),
+            secure: edit.is_secure(),
+            revealed: edit.is_revealed(),
+            line_home_end: edit.line_home_end(),
+        }
+    }
+}
+
 /// A text field bound to a [`TextEdit`] in app state.
 #[derive(Clone)]
 pub struct InputSpec {
@@ -146,6 +173,7 @@ pub struct InputSpec {
     pub(crate) placeholder_inked: bool,
     pub(crate) caret_inked: bool,
     pub(crate) selection_inked: bool,
+    pub(crate) model_flags: InputModelFlags,
     pub(crate) revealed_override: Option<bool>,
     pub(crate) line_home_end_override: Option<bool>,
     pub(crate) decorations: Vec<Span>,
@@ -205,6 +233,7 @@ impl std::fmt::Debug for InputSpec {
 /// and Option+Return insert a line break; a document editor that wants plain Return to break
 /// paragraphs attaches `.on_submit(|s, _| s.field.insert("\n"))`.
 pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
+    let model_flags = InputModelFlags::of(edit);
     // An app may have assigned `edit.text` directly: clamp stale marks, blocks and caret to it.
     let mut edit = edit.clone();
     edit.set_single_line(false);
@@ -230,6 +259,7 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         placeholder_inked: false,
         caret_inked: false,
         selection_inked: false,
+        model_flags,
         revealed_override: None,
         line_home_end_override: None,
         decorations: Vec::new(),

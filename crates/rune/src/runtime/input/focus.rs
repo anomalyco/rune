@@ -59,19 +59,37 @@ pub(in crate::runtime) fn navigates(ev: &KeyEvent) -> bool {
         && matches!(ev.key, Key::Tab | Key::Up | Key::Down | Key::Left | Key::Right | Key::Home | Key::End | Key::PageUp | Key::PageDown)
 }
 
+/// Whether the app-owned `TextEdit` differs from what [`sync_input_focus`] would write for this
+/// field at focus state `focused`, checked against `input.model_flags` so an idle focused field
+/// does not mutably borrow (and dirty) a `Tracked<TextEdit>` on unrelated commits.
+fn input_needs_sync(input: &crate::el::InputSpec, focused: bool, sync_single_line: bool) -> bool {
+    let m = input.model_flags;
+    m.focused != focused
+        || input.edit.focused != focused
+        || (!focused && m.composing)
+        || (input.edit.is_secure() && !m.secure)
+        || input.revealed_override.is_some_and(|r| m.revealed != r)
+        || input.line_home_end_override.is_some_and(|l| m.line_home_end != l)
+        || (sync_single_line && m.single_line != input.single_line)
+}
+
 /// Pushes focus (and a secure flag) into an input's app-owned editor and mirrors it back.
 fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::States<'_>, focused: bool) -> bool {
     let Some(access) = &input.access else {
         input.edit.focused = focused;
+        input.model_flags.focused = focused;
         return false;
     };
     let edit = access(states);
     let mut changed = false;
-    edit.set_single_line(input.single_line);
     if input.edit.is_secure() && !edit.is_secure() {
         edit.set_secure(true);
         changed = true;
     }
+    if edit.is_single_line() != input.single_line {
+        changed = true;
+    }
+    edit.set_single_line(input.single_line);
     if let Some(revealed) = input.revealed_override
         && edit.is_revealed() != revealed
     {
@@ -90,6 +108,7 @@ fn sync_input_focus(input: &mut crate::el::InputSpec, states: crate::states::Sta
         edit.break_history_group();
         changed = true;
     }
+    input.model_flags = crate::el::InputModelFlags::of(edit);
     if edit.is_secure() {
         // Drop the previous copy whole so `TextEdit::drop` wipes its buffer instead of freeing
         // old bytes unwiped on growth or leaving them in spare capacity on shrink/clear.
@@ -518,14 +537,14 @@ impl RuntimeCore {
         let prev = self.kbd.focus.path();
         let next = path.as_deref();
         let needs_sync = |p: &str, input: &crate::el::InputSpec, focused: bool| {
-            prev == Some(p)
-                || next == Some(p)
-                || (sync_all
-                    && (input.edit.focused != focused
-                        || (!focused && input.edit.is_composing())
-                        || input.edit.is_secure()
-                        || input.revealed_override.is_some()
-                        || input.line_home_end_override.is_some()))
+            let endpoint = prev == Some(p) || next == Some(p);
+            if !sync_all && !endpoint {
+                return false;
+            }
+            if moved && !sync_all && endpoint {
+                return true;
+            }
+            input_needs_sync(input, focused, focused || input.edit.is_secure())
         };
         let mut reveal_caret = false;
         for n in &mut self.tree.nodes {
@@ -1129,3 +1148,7 @@ mod key_tests;
 #[cfg(test)]
 #[path = "focus_change_tests.rs"]
 mod change_tests;
+
+#[cfg(test)]
+#[path = "focus_tracked_tests.rs"]
+mod tracked_tests;
