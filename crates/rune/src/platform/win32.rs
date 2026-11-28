@@ -49,7 +49,7 @@ pub(crate) use frame::has_window_menu;
 pub(crate) use frame::request_inner_size;
 pub(crate) use frame::window_menu;
 pub(crate) use hide_now::hide_now;
-pub(crate) use placement::restore_frame;
+pub(crate) use placement::{apply_window_frame, restore_frame};
 pub(crate) use window_options::{
     apply_hwnd_styles, apply_window_styles, configure_window, set_exclude_from_capture,
     set_hwnd_exclude_from_capture,

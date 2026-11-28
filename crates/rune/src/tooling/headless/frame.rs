@@ -484,7 +484,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
 
 /// Takes the size handlers asked for a headless window, inside the limits the app set; its
 /// viewport moves there on the virtual clock from `start`. Centring has nothing to centre on.
-pub(in crate::tooling) fn take_window_frame(
+fn take_window_frame(
     rt: &mut RuntimeCore,
     anim: &mut Option<crate::window::frame::FrameAnim>,
     start: f64,
@@ -508,7 +508,7 @@ fn frame_cpu_ms(
 }
 
 /// Moves a headless window's viewport one frame along, before the frame lays out.
-pub(in crate::tooling) fn step_window_frame(
+fn step_window_frame(
     rt: &mut RuntimeCore,
     anim: &mut Option<crate::window::frame::FrameAnim>,
     now: f64,

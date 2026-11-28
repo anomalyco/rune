@@ -318,6 +318,56 @@ fn virtual_desktop_window_follows_fit_content_height_and_resize_window() {
 }
 
 #[test]
+fn bottom_anchored_fit_content_height_keeps_bottom_edge_fixed_across_spring_and_retarget() {
+    use crate::{App, AppSpec, El, ResizeAnchor, WindowOptions, WindowSpec, col, el};
+    fn view(rows: &usize, _: &mut crate::Cx<usize>) -> El {
+        col().key("root").w_full()
+            .children((0..*rows).map(|i| el().key(format!("row{i}")).size(100.0, 40.0)))
+            .child(el().key("query").size(100.0, 50.0))
+    }
+    let app = App::new(AppSpec::new("launcher", (400.0, 300.0), || 1usize, view))
+        .window_options(WindowOptions { position: Some((200, 700)), ..Default::default() })
+        .fit_content_height()
+        .resize_anchor(ResizeAnchor::Bottom);
+    let mut w = Window::new(WindowSpec::from_app("launcher", app), None, &Args::default(), true, true, 1.0);
+    let desktop = VirtualDesktop::from_script(None, 1.0).unwrap();
+    w.start(&desktop);
+    assert_eq!(w.frame(), [200.0, 700.0, 400.0, 90.0]);
+    let pinned_bottom = w.frame()[1] + w.frame()[3];
+    assert_eq!(pinned_bottom, 790.0);
+
+    w.advance(0.0);
+    // Grow from 1 row (90 pt) to 5 rows (250 pt) on a spring: every intermediate frame must keep bottom == 790.
+    w.rt_mut::<usize>().update(|rows, tx| { *rows = 5; tx.animated(); });
+    let mut saw_mid = false;
+    for step in 0..15 {
+        w.advance(1.0 / 60.0);
+        let f = w.frame();
+        if f[3] > 90.0 && f[3] < 250.0 { saw_mid = true; }
+        assert!(((f[1] + f[3]) - pinned_bottom).abs() < 1e-3, "step {step} drifted bottom: {f:?}");
+    }
+    assert!(saw_mid, "expected animated intermediate height before retarget");
+
+    // Retarget mid-flight to 2 rows (130 pt): bottom still stays pinned at 790 through settle.
+    w.rt_mut::<usize>().update(|rows, tx| { *rows = 2; tx.animated(); });
+    for step in 0..120 {
+        w.advance(1.0 / 60.0);
+        let f = w.frame();
+        assert!(((f[1] + f[3]) - pinned_bottom).abs() < 1e-3, "retarget step {step} drifted bottom: {f:?}");
+    }
+    assert_eq!(w.frame(), [200.0, 660.0, 400.0, 130.0]);
+
+    // Switching anchor dynamically with Tx::set_resize_anchor in the same turn as resize_window_instant applies immediately.
+    w.rt_mut::<usize>().update(|_, tx| {
+        tx.set_resize_anchor(ResizeAnchor::TopRight);
+        tx.resize_window_instant((300.0, 130.0));
+    });
+    w.advance(1.0 / 60.0);
+    w.advance(1.0 / 60.0);
+    assert_eq!(w.frame(), [300.0, 660.0, 300.0, 130.0], "TopRight kept right edge at 600 and top at 660");
+}
+
+#[test]
 fn virtual_desktop_reports_frames_to_on_frame_encoded() {
     if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = crate::tooling::headless_run::test_turn();

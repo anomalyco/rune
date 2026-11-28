@@ -57,6 +57,8 @@ pub(crate) struct HostState {
     pub(crate) window_color_scheme: Option<crate::ColorScheme>,
     /// Per-window system backdrop requested via `Tx::set_window_backdrop`, taken by the host.
     pub(crate) window_backdrop_request: Option<crate::WindowBackdrop>,
+    /// Per-window resize anchor requested via `Tx::set_resize_anchor`, taken by the host.
+    pub(crate) window_resize_anchor: Option<crate::ResizeAnchor>,
     /// macOS document path (`MacWindowOptions::represented_file`, `Tx::set_represented_file`).
     pub(crate) represented_file: Latched<Option<std::path::PathBuf>>,
     /// macOS document edited dot (`MacWindowOptions::document_edited`, `Tx::set_document_edited`).
@@ -184,6 +186,7 @@ impl HostState {
             window_title: Default::default(),
             window_color_scheme: None,
             window_backdrop_request: None,
+            window_resize_anchor: None,
             represented_file: Default::default(),
             document_edited: Default::default(),
             content_sizing: crate::ContentSizing::Fixed,

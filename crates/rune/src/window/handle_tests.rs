@@ -54,6 +54,24 @@ fn handle_queues_color_scheme_requests_in_order() {
 }
 
 #[test]
+fn handle_queues_resize_anchor_requests_in_order() {
+    use crate::ResizeAnchor;
+    let handle = WindowHandle::new("launcher");
+    handle.set_resize_anchor(ResizeAnchor::Bottom);
+    handle.set_resize_anchor(ResizeAnchor::BottomRight);
+    handle.set_resize_anchor(ResizeAnchor::TopLeft);
+    let taken = handle.take_headless();
+    assert!(matches!(
+        taken[..],
+        [
+            WakeEvent::ResizeAnchor(0, ResizeAnchor::Bottom),
+            WakeEvent::ResizeAnchor(0, ResizeAnchor::BottomRight),
+            WakeEvent::ResizeAnchor(0, ResizeAnchor::TopLeft),
+        ]
+    ));
+}
+
+#[test]
 fn with_raw_handle_and_with_raw_display_handle_return_closed_when_unbound() {
     let handle = WindowHandle::new("display");
     let mut window_called = false;

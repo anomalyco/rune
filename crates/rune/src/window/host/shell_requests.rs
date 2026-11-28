@@ -78,6 +78,14 @@ impl Host {
         }
     }
 
+    /// `Tx::set_resize_anchor`: applies a per-window resize anchor requested since the shell or
+    /// frame request last checked, retaining it on `Host` across native window recreation.
+    pub(in crate::window) fn apply_tx_resize_anchor(&mut self) {
+        if let Some(anchor) = self.app.rt_mut().host.window_resize_anchor.take() {
+            self.set_resize_anchor(anchor);
+        }
+    }
+
     /// `Tx::set_represented_file` and `Tx::set_document_edited`: applies macOS document state
     /// changes set since the shell last checked. Retained in `HostState` across native window
     /// recreation; no-op off macOS.

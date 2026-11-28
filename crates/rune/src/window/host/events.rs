@@ -31,6 +31,7 @@ impl Host {
         self.app.drain_startup(&self.shortcuts, &mut self.menus);
         self.apply_tx_color_scheme();
         self.apply_tx_window_backdrop();
+        self.apply_tx_resize_anchor();
         if let Some(scheme) = self.shared.take_color_scheme() {
             self.set_app_color_scheme(scheme);
         }
@@ -250,6 +251,7 @@ impl Host {
                     WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
                     WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
                     WakeEvent::ColorScheme(_, scheme) => self.set_color_scheme(scheme),
+                    WakeEvent::ResizeAnchor(_, anchor) => self.set_resize_anchor(anchor),
                     _ => {}
                 },
                 super::gpu_loss::LatchedWakeAction::Drop => {}
@@ -294,6 +296,7 @@ impl Host {
             WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
             WakeEvent::ColorScheme(_, scheme) => self.set_color_scheme(scheme),
             WakeEvent::WindowBackdrop(_, backdrop) => self.set_window_backdrop(backdrop),
+            WakeEvent::ResizeAnchor(_, anchor) => self.set_resize_anchor(anchor),
             WakeEvent::Frame(_, mut request) => {
                 let rt = self.app.rt_mut();
                 request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);

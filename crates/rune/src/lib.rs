@@ -531,6 +531,7 @@ pub use windows::ConfiguredWindowOptions;
 pub use windows::Display;
 pub use windows::MacColorSpace;
 pub use windows::MacWindowOptions;
+pub use windows::ResizeAnchor;
 pub use windows::ResizeEdge;
 pub use windows::RunOptions;
 pub use windows::WindowOptions;

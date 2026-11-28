@@ -476,7 +476,7 @@ impl Host {
         let target_format = if effective_srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
         let alpha = self.gpu.as_ref().and_then(|(gpu, _)| alpha_pass(gpu, transparent, &config, target_format));
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface, self.macos_window.color_space, wide_active);
+        crate::platform::macos::pin_contents(&surface, self.macos_window.color_space, wide_active, self.resize_anchor);
         #[cfg(target_os = "macos")]
         let present = self.win.as_ref()
             .and_then(|w| w.native.present_log.clone())
@@ -575,7 +575,8 @@ pub(in crate::window) fn classify_latched_wake_event(event: &crate::window::Wake
         | WakeEvent::Place(_, _)
         | WakeEvent::Level(_, _)
         | WakeEvent::ExcludeFromCapture(_, _)
-        | WakeEvent::ColorScheme(_, _) => LatchedWakeAction::NonGpuShell,
+        | WakeEvent::ColorScheme(_, _)
+        | WakeEvent::ResizeAnchor(_, _) => LatchedWakeAction::NonGpuShell,
         _ => LatchedWakeAction::Drop,
     }
 }
