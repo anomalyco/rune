@@ -10,6 +10,10 @@ pub(super) struct NativeWindow {
     pub(super) window: Mutex<Weak<Window>>,
     pub(super) number: AtomicU32,
     pub(super) ready: AtomicBool,
+    /// True when routed through `Route::Callback` (no `winit::window::Window` backs this handle).
+    pub(super) non_winit: AtomicBool,
+    /// Logical scale bits published by non-winit hosts while shown (0 = unset/closed).
+    pub(super) scale_bits: std::sync::atomic::AtomicU64,
     #[cfg(target_os = "windows")]
     pub(super) no_activate: AtomicBool,
     #[cfg(target_os = "windows")]
@@ -26,6 +30,9 @@ pub(super) enum Route {
     /// The host's event loop and slot.
     #[cfg(not(target_arch = "wasm32"))]
     Bound { proxy: EventLoopProxy<WakeEvent>, slot: usize },
+    /// Non-winit host callback (Android page stack and host-side tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    Callback { send: Arc<dyn Fn(WakeEvent) + Send + Sync>, slot: usize },
 }
 
 impl Default for Route {
@@ -51,13 +58,48 @@ impl WindowHandle {
         *route = Route::Bound { proxy, slot };
     }
 
+    /// Routes requests to a non-winit host callback (Android page stack and host-side tests),
+    /// draining requests queued before binding in order outside the route lock.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn bind_callback(&self, send: Arc<dyn Fn(WakeEvent) + Send + Sync>, slot: usize) {
+        self.native.non_winit.store(true, Ordering::Release);
+        let queued = {
+            let mut route = self.native.route.lock().unwrap();
+            let queued = match &mut *route {
+                Route::Unbound { queued } => std::mem::take(queued),
+                Route::Bound { .. } | Route::Callback { .. } => Vec::new(),
+            };
+            *route = Route::Callback { send: Arc::clone(&send), slot };
+            queued
+        };
+        for request in queued {
+            send(request(slot));
+        }
+    }
+
+    /// Publishes readiness for non-winit hosts (Android page stack).
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn set_ready(&self, ready: bool) {
+        self.native.ready.store(ready, Ordering::Release);
+    }
+
+    /// Publishes or clears the display scale for non-winit hosts (Android page stack).
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    pub(crate) fn set_non_winit_scale(&self, scale: Option<f64>) {
+        let bits = scale
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map_or(0, f64::to_bits);
+        self.native.scale_bits.store(bits, Ordering::Release);
+    }
+
     /// A headless run never binds a host; it takes the queued requests instead.
     #[cfg_attr(not(any(feature = "tooling", debug_assertions)), allow(dead_code))]
     pub(crate) fn take_headless(&self) -> Vec<WakeEvent> {
         let queued = match &mut *self.native.route.lock().unwrap() {
             Route::Unbound { queued } => std::mem::take(queued),
             #[cfg(not(target_arch = "wasm32"))]
-            Route::Bound { .. } => Vec::new(),
+            Route::Bound { .. } | Route::Callback { .. } => Vec::new(),
         };
         queued.into_iter().map(|request| request(0)).collect()
     }
@@ -68,16 +110,40 @@ impl WindowHandle {
     }
 
     pub(super) fn send(&self, request: impl FnOnce(usize) -> WakeEvent + Send + 'static) {
-        match &mut *self.native.route.lock().unwrap() {
-            #[cfg(not(target_arch = "wasm32"))]
-            Route::Bound { proxy, slot } => { proxy.send_event(request(*slot)).ok(); }
-            Route::Unbound { queued } => queued.push(Box::new(request)),
+        #[cfg(not(target_arch = "wasm32"))]
+        let callback = {
+            let mut route = self.native.route.lock().unwrap();
+            match &mut *route {
+                Route::Bound { proxy, slot } => {
+                    proxy.send_event(request(*slot)).ok();
+                    return;
+                }
+                Route::Callback { send, slot } => Some((Arc::clone(send), *slot)),
+                Route::Unbound { queued } => {
+                    queued.push(Box::new(request));
+                    return;
+                }
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((send, slot)) = callback {
+            send(request(slot));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut route = self.native.route.lock().unwrap();
+            if let Route::Unbound { queued } = &mut *route {
+                queued.push(Box::new(request));
+            }
         }
     }
 
     /// The first frame has completed for the current native lifetime. For a launcher
     /// this confirms GPU completion of an alpha-zero frame before reveal. False after destruction.
-    pub fn is_ready(&self) -> bool { self.window().is_ok() && self.native.ready.load(Ordering::Acquire) }
+    pub fn is_ready(&self) -> bool {
+        self.native.ready.load(Ordering::Acquire)
+            && (self.native.non_winit.load(Ordering::Acquire) || self.window().is_ok())
+    }
     pub fn key(&self) -> &str { &self.key }
     /// The window's frame counts: redraws, presents, failed drawable acquisitions, loop turns
     /// and pacing: current totals, and per-second rates updated once a second while it draws.
@@ -95,7 +161,11 @@ impl WindowHandle {
     /// is and how it is shown (on macOS the position is asked of the window server: about
     /// 1,700 µs in a first frame). None while it's closed. Call it on the UI thread.
     pub fn scale(&self) -> Option<f64> {
-        Some(self.window().ok()?.scale_factor())
+        if let Ok(window) = self.window() {
+            return Some(window.scale_factor());
+        }
+        let bits = self.native.scale_bits.load(Ordering::Acquire);
+        (bits != 0).then(|| f64::from_bits(bits))
     }
     /// Where the window is on the desktop and whether it's maximized, minimized or full screen,
     /// to save and reopen it there. None while it's closed, and on Wayland, which hides window

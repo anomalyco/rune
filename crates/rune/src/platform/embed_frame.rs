@@ -89,6 +89,9 @@ pub(crate) trait EmbedSurface {
     fn submit_and_present(&mut self, prepared: Self::Prepared) -> Instant;
     fn clock_and_rt_mut(&mut self) -> (&mut FrameClock, &mut RuntimeCore);
     fn with_driver<R>(&mut self, f: impl FnOnce(&mut FrameClock, &mut RuntimeCore, &mut dyn AppDriver) -> R) -> R;
+    /// Whether the embedding host drains `rt.shell_request` and `rt.host.user_close_request`
+    /// itself after the frame (Android page stack) instead of discarding them in `flush_requests`.
+    fn preserve_shell_requests(&self) -> bool { false }
 }
 
 struct EmbedFrameHost<'a, E: EmbedSurface> {
@@ -131,8 +134,9 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
         let t0 = crate::time::now();
         self.t0 = Some(t0);
         let compositing = self.surface.compositor_animating();
+        let preserve_shell = self.surface.preserve_shell_requests();
         let (animating, dt, update_ms) = self.surface.with_driver(|clock, rt, app| {
-            step_and_flush(clock, rt, app, t0, compositing)
+            step_and_flush_with(clock, rt, app, t0, compositing, preserve_shell)
         });
         StepInfo {
             runtime_animating: animating,
@@ -168,11 +172,14 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
         let t0 = self.t0.unwrap_or_else(crate::time::now);
         let retry_now = self.surface.surface_health_mut().step(EmbedSurfaceEvent::Missed(missed));
         let comp_animating = self.surface.compositor_animating();
+        let preserve_shell = self.surface.preserve_shell_requests();
         self.summary = if stepped {
             let (_, rt) = self.surface.clock_and_rt_mut();
             missed_after_step(rt, t0, comp_animating, retry_now)
         } else {
-            self.surface.with_driver(|_, rt, app| missed_step(rt, app, t0, comp_animating, retry_now))
+            self.surface.with_driver(|_, rt, app| {
+                missed_step_with(rt, app, t0, comp_animating, retry_now, preserve_shell)
+            })
         };
     }
 
@@ -224,7 +231,7 @@ pub(crate) fn run_embed_frame<E: EmbedSurface>(surface: &mut E) -> FrameSummary 
 /// pop-up menus (Android, iOS), queued pop-ups are delivered to the app's fallback hook instead of
 /// being cancelled. Leaves `rt.host.haptics` intact so the embedding host drains them via
 /// `LayerHost::take_haptics()`.
-pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
+pub(crate) fn flush_requests_with(rt: &mut RuntimeCore, app: &mut dyn AppDriver, preserve_shell: bool) {
     crate::clipboard::flush_memory(rt);
     if rt.popup_menu_fallback_active(app) {
         let _ = rt.deliver_popup_menu_fallback_from_host(app);
@@ -234,8 +241,10 @@ pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
     if !rt.host.file_dialogs {
         rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
     }
-    rt.shell_request = None;
-    rt.host.user_close_request = false;
+    if !preserve_shell {
+        rt.shell_request = None;
+        rt.host.user_close_request = false;
+    }
     rt.ignore_minimize("an embedded layer");
     rt.host.window_frame = None;
 }
@@ -243,6 +252,7 @@ pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
 /// Advances the runtime on `clock` for a frame whose drawable has already been acquired, passing
 /// `compositing` so a compositor-driven animation keeps real frame gaps instead of clamping to
 /// `RESUME_STEP`.
+#[cfg(test)]
 pub(crate) fn step_and_flush(
     clock: &mut FrameClock,
     rt: &mut RuntimeCore,
@@ -250,14 +260,26 @@ pub(crate) fn step_and_flush(
     t0: Instant,
     compositing: bool,
 ) -> (bool, f64, f64) {
+    step_and_flush_with(clock, rt, app, t0, compositing, false)
+}
+
+pub(crate) fn step_and_flush_with(
+    clock: &mut FrameClock,
+    rt: &mut RuntimeCore,
+    app: &mut dyn AppDriver,
+    t0: Instant,
+    compositing: bool,
+    preserve_shell: bool,
+) -> (bool, f64, f64) {
     let (animating, dt) = clock.advance_core(rt, app, t0, compositing);
     let update_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    flush_requests(rt, app);
+    flush_requests_with(rt, app, preserve_shell);
     (animating, dt, update_ms)
 }
 
 /// Runs due timers, `poll` and queued input when drawable acquisition failed before stepping,
 /// without advancing `FrameClock` (matching `window/host/draw.rs::missed_frame`).
+#[cfg(test)]
 pub(crate) fn missed_step(
     rt: &mut RuntimeCore,
     app: &mut dyn AppDriver,
@@ -265,8 +287,19 @@ pub(crate) fn missed_step(
     comp_animating: bool,
     retry_now: bool,
 ) -> FrameSummary {
+    missed_step_with(rt, app, t0, comp_animating, retry_now, false)
+}
+
+pub(crate) fn missed_step_with(
+    rt: &mut RuntimeCore,
+    app: &mut dyn AppDriver,
+    t0: Instant,
+    comp_animating: bool,
+    retry_now: bool,
+    preserve_shell: bool,
+) -> FrameSummary {
     rt.covered_wake(app);
-    flush_requests(rt, app);
+    flush_requests_with(rt, app, preserve_shell);
     missed_after_step(rt, t0, comp_animating, retry_now)
 }
 
