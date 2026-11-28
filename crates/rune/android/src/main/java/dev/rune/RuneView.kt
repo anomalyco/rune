@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
@@ -17,6 +18,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewConfiguration
 import android.view.WindowInsets
+import java.io.IOException
 
 /**
  * Native Android [SurfaceView] hosting one Rune [LayerHost], driven on demand by [Choreographer].
@@ -37,6 +39,17 @@ open class RuneView(
     private val wakeRunnable = Runnable { nativeWake() }
     private val timerWakeRunnable = Runnable { nativeWake() }
     private val clipboard: RuneClipboard
+
+    /**
+     * Optional launcher for Android Storage Access Framework document pickers
+     * (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`).
+     *
+     * [RuneActivity] wires this automatically. An embedding host with its own [Activity] sets
+     * this callback, starts `intent` for a result, and forwards the outcome back via
+     * [onDocumentPickActivityResult], [deliverDocumentPick], [deliverDocumentPickCancelled],
+     * or [deliverDocumentPickError].
+     */
+    var onDocumentPick: ((requestId: Long, intent: Intent) -> Unit)? = null
 
     init {
         System.loadLibrary(libName)
@@ -294,6 +307,131 @@ open class RuneView(
         return null
     }
 
+    /**
+     * Called by Rust (UI thread) when the app invokes `Tx::pick_file`, `Tx::pick_files`, or
+     * `Tx::pick_save_file`.
+     */
+    fun startDocumentPick(
+        requestId: Long,
+        isSave: Boolean,
+        multiple: Boolean,
+        fileName: String,
+        mimeType: String,
+        extraMimeTypes: Array<String>,
+    ) {
+        val intent = if (isSave) {
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mimeType.ifEmpty { "application/octet-stream" }
+                if (fileName.isNotEmpty()) {
+                    putExtra(Intent.EXTRA_TITLE, fileName)
+                }
+            }
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mimeType.ifEmpty { "*/*" }
+                if (extraMimeTypes.isNotEmpty()) {
+                    putExtra(Intent.EXTRA_MIME_TYPES, extraMimeTypes)
+                }
+                if (multiple) {
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+            }
+        }
+        val launcher = onDocumentPick
+        if (launcher == null) {
+            nativeFilePickError(requestId, "no Android document picker launcher is registered on RuneView")
+            return
+        }
+        try {
+            launcher(requestId, intent)
+        } catch (t: Throwable) {
+            nativeFilePickError(requestId, t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Opens a SAF `content://` URI with [mode] (`"r"` or `"wt"`) and returns a detached POSIX
+     * file descriptor owned by the caller. Called by Rust from worker threads via JNI.
+     */
+    fun openDocumentFd(uriString: String, mode: String): Int {
+        val uri = Uri.parse(uriString)
+        val pfd = context.applicationContext.contentResolver.openFileDescriptor(uri, mode)
+            ?: throw IOException("ContentResolver returned null descriptor for $uriString")
+        return pfd.detachFd()
+    }
+
+    /** Forwards a raw [Activity.onActivityResult] from a document picker back to Rust. */
+    fun onDocumentPickActivityResult(requestId: Long, resultCode: Int, data: Intent?) {
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            nativeFilePickCancelled(requestId)
+            return
+        }
+        val uris = ArrayList<Uri>()
+        val clip = data.clipData
+        if (clip != null && clip.itemCount > 0) {
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+        if (uris.isEmpty()) {
+            nativeFilePickCancelled(requestId)
+            return
+        }
+        deliverDocumentPick(requestId, uris)
+    }
+
+    /** Delivers one or more picked document [Uri]s back to Rust. */
+    fun deliverDocumentPick(requestId: Long, uris: List<Uri>) {
+        if (uris.isEmpty()) {
+            nativeFilePickCancelled(requestId)
+            return
+        }
+        val uriStrings = Array(uris.size) { i -> uris[i].toString() }
+        val names = Array(uris.size) { i -> queryDisplayName(uris[i]) }
+        nativeFilePickResult(requestId, uriStrings, names)
+    }
+
+    /** Delivers a user cancellation for [requestId] back to Rust. */
+    fun deliverDocumentPickCancelled(requestId: Long) {
+        nativeFilePickCancelled(requestId)
+    }
+
+    /** Delivers a launcher or picker error for [requestId] back to Rust. */
+    fun deliverDocumentPickError(requestId: Long, message: String) {
+        nativeFilePickError(requestId, message)
+    }
+
+    private fun queryDisplayName(uri: Uri): String {
+        try {
+            context.applicationContext.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && cursor.moveToFirst()) {
+                    val name = cursor.getString(idx)
+                    if (!name.isNullOrEmpty()) {
+                        return name
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // Fall back to URI segment when a provider refuses metadata queries.
+        }
+        return uri.lastPathSegment
+            ?.substringAfterLast('/')
+            ?.substringAfterLast(':')
+            ?.ifEmpty { null }
+            ?: "document"
+    }
+
     fun onResume() {
         syncLongPressTimeout()
         nativeResume()
@@ -350,6 +488,13 @@ open class RuneView(
     private external fun nativeLongPressTimeout(timeoutMs: Int)
     private external fun nativeWake()
     private external fun nativeDestroy()
+    private external fun nativeFilePickResult(
+        requestId: Long,
+        uris: Array<String>,
+        names: Array<String>,
+    )
+    private external fun nativeFilePickCancelled(requestId: Long)
+    private external fun nativeFilePickError(requestId: Long, message: String)
 
     private companion object {
         /** API 33+ MotionEvent.FLAG_CANCELED, safe to mask on API 26+. */

@@ -1,6 +1,8 @@
 package dev.rune
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
@@ -26,6 +28,7 @@ open class RuneActivity : Activity() {
 
     private var lastDark: Boolean = false
     private var backCallback: Any? = null
+    private var pendingPickRequestId: Long? = null
 
     /** Override to supply the Rust cdylib name without manifest meta-data. */
     protected open fun nativeLibraryName(): String {
@@ -59,6 +62,9 @@ open class RuneActivity : Activity() {
         configureEdgeToEdge()
         lastDark = isDark(resources.configuration)
         runeView = RuneView(this, nativeLibraryName())
+        runeView.onDocumentPick = { requestId, intent ->
+            launchDocumentPicker(requestId, intent)
+        }
         setContentView(runeView)
 
         if (Build.VERSION.SDK_INT >= 33) {
@@ -94,6 +100,41 @@ open class RuneActivity : Activity() {
         }
     }
 
+    /** Starts a Storage Access Framework picker intent on behalf of [runeView]. */
+    @Suppress("DEPRECATION")
+    protected open fun launchDocumentPicker(requestId: Long, intent: Intent) {
+        pendingPickRequestId = requestId
+        try {
+            startActivityForResult(intent, REQUEST_CODE_DOCUMENT_PICK)
+        } catch (e: ActivityNotFoundException) {
+            pendingPickRequestId = null
+            runeView.deliverDocumentPickError(
+                requestId,
+                e.message ?: "no Android document picker activity is available",
+            )
+        } catch (e: SecurityException) {
+            pendingPickRequestId = null
+            runeView.deliverDocumentPickError(
+                requestId,
+                e.message ?: "permission denied launching Android document picker",
+            )
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    @Deprecated("Deprecated in Android 11; used to keep dev.rune free of AndroidX dependencies.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQUEST_CODE_DOCUMENT_PICK) {
+            val requestId = pendingPickRequestId
+            pendingPickRequestId = null
+            if (requestId != null) {
+                runeView.onDocumentPickActivityResult(requestId, resultCode, data)
+                return
+            }
+        }
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     @Suppress("DEPRECATION")
     @Deprecated("Deprecated in Android 13; kept for API < 33 fallback.")
     override fun onBackPressed() {
@@ -116,5 +157,6 @@ open class RuneActivity : Activity() {
     companion object {
         const val META_LIB_NAME: String = "dev.rune.lib_name"
         const val DEFAULT_LIB_NAME: String = "rune_app"
+        private const val REQUEST_CODE_DOCUMENT_PICK: Int = 0x5255
     }
 }

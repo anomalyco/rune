@@ -108,7 +108,7 @@ pub(crate) struct HostState {
     #[cfg(test)]
     pub(crate) force_field_menu_fallback: bool,
     /// True when the embedding host presents file dialogs itself rather than refusing them.
-    #[cfg_attr(not(any(test, target_vendor = "apple")), allow(dead_code))]
+    #[cfg_attr(not(any(test, target_vendor = "apple", target_os = "android")), allow(dead_code))]
     pub(crate) file_dialogs: bool,
     /// The file dialog asked for (`Tx::open_file`, `Tx::pick_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
