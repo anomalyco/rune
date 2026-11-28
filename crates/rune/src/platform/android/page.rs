@@ -147,7 +147,7 @@ pub(super) trait AndroidPage {
     fn keep_running(&self) -> bool;
     fn start_visible(&self) -> bool;
     fn handle(&self) -> &WindowHandle;
-    fn connect_shared(&self, wake: Waker);
+    fn connect_shared(&mut self, wake: Waker);
     fn ensure_runtime(&mut self, env: StackEnv, wake: &Waker);
     fn sync_env(&mut self, env: StackEnv);
     fn set_color_scheme(&mut self, scheme: ColorScheme, system_dark: bool);
@@ -273,7 +273,7 @@ impl<S: 'static> AndroidPage for TypedPage<S> {
         &self.handle
     }
 
-    fn connect_shared(&self, wake: Waker) {
+    fn connect_shared(&mut self, wake: Waker) {
         #[cfg(target_os = "android")]
         self.clipboard.connect(wake.clone());
         self.shared.connect(wake);

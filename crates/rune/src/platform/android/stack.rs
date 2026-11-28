@@ -245,7 +245,7 @@ impl PageStack {
             eprintln!("rune: a window keyed {:?} is already open", spec.key());
             return false;
         }
-        let PageEntry(page) = spec.into_android_page();
+        let PageEntry(mut page) = spec.into_android_page();
         let slot = self.slots.len();
         let start_visible = force_root || page.start_visible();
         let queue = Arc::clone(&self.handle_events);
